@@ -589,7 +589,7 @@ BUILD_DIRS += utils/unlit
 BUILD_DIRS += utils/hp2ps
 
 ifneq "$(GhcUnregisterised)" "YES"
-BUILD_DIRS += driver/split
+BUILD_DIRS += driver/ghc-split
 endif
 
 ifneq "$(BINDIST)" "YES"
