@@ -27,8 +27,9 @@ import System.IO ( openFile, IOMode(..), hClose, openFile, Handle(..) )
 import Data.Monoid ( Monoid(..) )
 import Control.Monad ( when, forM_ )
 import Data.Word ( Word8 )
-import Regex ( Regex(..), regcomp, regIgnoreCase,  regExtended, regexec )
-
+import Regex ( Regex(..) )
+import ByteString ( regexec )
+import Utils ( matchTest, matchTestIO, makeRegex )
 import qualified Data.ByteString.Char8  as B
 
 -- | Target OSes as defined in aclocal.m4 under checkOS()
@@ -190,9 +191,6 @@ collectExports = case targetArchitecture of
                         _    -> const $ return []
                         
 -- * Regular expressions
-makeRegex :: String -> IO Regex
-makeRegex = flip regcomp (regExtended + regIgnoreCase)
-
 stg_split_marker :: IO Regex
 stg_split_marker = makeRegex "_?__stg_split_marker"
 
@@ -209,7 +207,7 @@ read_tmpi_up_to_marker = let m_regs = [ "_?__stg_split_marker"
                                       , "\\t\\.frame"
                                       , "^\\s+(save|retl?|restore|nop)"
                                       ]
-                         in map makeRegex m_regs
+                         in mapM makeRegex m_regs
 -- * End
           
 readTMPIUpToAMarker :: B.ByteString -> Int -> Handle -> IO B.ByteString
@@ -233,7 +231,8 @@ readTMPIUpToAMarker str count input
          
     where seek :: B.ByteString -> Handle -> IO B.ByteString
           seek str tmpi = do line <- B.hGetLine tmpi
-                             if line /= "" && not (stg_split_marker `matchTest` line)
+                             matched <- stg_split_marker `matchTestIO` line
+                             if line /= "" && not matched
                                 then seek (str `mappend` line) tmpi
                                 else return str
                                 
@@ -258,9 +257,9 @@ process_asm_block_iX86 str
   = do -- strip the marker
        return str
        
-    where str_marker_1 :: Regex
-          str_marker_1 = makeRegex ("s/(\\.text\\n\\t\\.align .(,0x90)?\\n)\\.globl\\s+.*_?__stg_split_marker.*\\n/$1/m" :: B.ByteString)
+    where str_marker_1 :: IO Regex
+          str_marker_1 = makeRegex "s/(\\.text\\n\\t\\.align .(,0x90)?\\n)\\.globl\\s+.*_?__stg_split_marker.*\\n/$1/m"
           
-          str_marker_2 :: Regex
-          str_marker_2 = makeRegex ("s/(\\t\\.align .(,0x90)?\\n)\\.globl\\s+.*_?__stg_split_marker.*\\n/$1/m" :: B.ByteString)
+          str_marker_2 :: IO Regex
+          str_marker_2 = makeRegex "s/(\\t\\.align .(,0x90)?\\n)\\.globl\\s+.*_?__stg_split_marker.*\\n/$1/m"
 \end{code}

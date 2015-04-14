@@ -30,6 +30,6 @@ executable ghc-split
                           cbits/regexec.c cbits/regfree.c
     Include-Dirs:         cbits
     
-  Other-Modules: Regex
+  Other-Modules: Regex, ByteString, Utils
   hs-source-dirs: src
 
