@@ -29,7 +29,7 @@ import Control.Monad ( when, forM_ )
 import Data.Word ( Word8 )
 import Regex ( Regex(..) )
 import ByteString ( regexec )
-import Utils ( matchTest, matchTestIO, makeRegex )
+import Utils ( matchTest, matchTestIO, matchTestAny, matchTestAnyIO, makeRegex )
 import qualified Data.ByteString.Char8  as B
 
 -- | Target OSes as defined in aclocal.m4 under checkOS()
@@ -69,14 +69,14 @@ data TargetArch
     
 -- | Target vendor as defined in aclocal.m4 under checkVendor()
 data TargetVendor
-  = Dec   -- ^ dec
-  | Unknown -- ^ unknown
-  | HP      -- ^ hp
-  | Apple   -- ^ apple
-  | Next    -- ^ next
-  | Sun     -- ^ sun
-  | SGI     -- ^ sgi
-  | IBM     -- ^ ibm
+  = Dec        -- ^ dec
+  | Unknown    -- ^ unknown
+  | HP         -- ^ hp
+  | Apple      -- ^ apple
+  | Next       -- ^ next
+  | Sun        -- ^ sun
+  | SGI        -- ^ sgi
+  | IBM        -- ^ ibm
   | MontaVista -- ^ montavista
   | PortBld    -- ^ portbld
     deriving (Show, Eq)
@@ -169,7 +169,7 @@ split_asm_file asm_file
                      (hClose)
                      (pipeline)
                   )
-                 (die $ "failed to open " ++ asm_file ++ " (to write)\n")             
+                 (die $ "failed to open " ++ asm_file ++ " (to read)\n")             
            
 die :: String -> IO a
 die msg = do name <- getProgName
@@ -179,6 +179,7 @@ die msg = do name <- getProgName
 pipeline :: Handle -> IO ()
 pipeline hwnd = do exports <- collectExports hwnd
                    s_stuff <- readTMPIUpToAMarker "" 0 hwnd
+                   print s_stuff
                    -- that first stuff is a prologue for all .s outputs
                    prologue_stuff <- process_asm_block s_stuff
                    -- $_ already has some of the next stuff in it...
@@ -226,7 +227,7 @@ readTMPIUpToAMarker str count input
        
        -- in case Perl doesn't convert line endings
        case targetOS of
-          MingW32 -> return $ B.filter (not . (/= '\r')) buff
+          MingW32 -> return $ B.filter (/= '\r') buff
           _       -> return buff
          
     where seek :: B.ByteString -> Handle -> IO B.ByteString
@@ -238,7 +239,8 @@ readTMPIUpToAMarker str count input
                                 
           chomp :: Handle -> IO B.ByteString
           chomp tmpi = do line <- B.hGetLine tmpi
-                          if line /= "" && undefined
+                          matched <- read_tmpi_up_to_marker `matchTestAnyIO` line
+                          if line /= "" && matched
                              then chomp tmpi
                              else return line
 
@@ -248,7 +250,7 @@ process_asm_block str
       (_      , Apple, Darwin) -> undefined
       (Sparc  , _    ,      _) -> undefined
       (X86    , _    ,      _) -> process_asm_block_iX86 str
-      (X86_64 , _    ,      _) -> undefined
+      (X86_64 , _    ,      _) -> process_asm_block_x86_64 str
       (PowerPC, _    ,  Linux) -> undefined
       _                        -> die $ "no process_asm_block for " ++ targetPlatformStr
       
@@ -262,4 +264,9 @@ process_asm_block_iX86 str
           
           str_marker_2 :: IO Regex
           str_marker_2 = makeRegex "s/(\\t\\.align .(,0x90)?\\n)\\.globl\\s+.*_?__stg_split_marker.*\\n/$1/m"
+          
+process_asm_block_x86_64 :: B.ByteString -> IO B.ByteString
+process_asm_block_x86_64 str 
+  = do return str
+  
 \end{code}
