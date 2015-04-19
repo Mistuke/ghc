@@ -28,8 +28,10 @@ import Data.Monoid ( Monoid(..) )
 import Control.Monad ( when, forM_ )
 import Data.Word ( Word8 )
 import Regex ( Regex(..) )
+import Regex as R ( regexec )
+import Foreign.C.String ( newCString )
 import ByteString ( regexec )
-import Utils ( matchTest, matchTestIO, matchTestAny, matchTestAnyIO, makeRegex )
+import Utils ( matchTest, matchTestIO, matchTestAny, matchTestAnyIO, makeRegex, matches, matchesIO )
 import qualified Data.ByteString.Char8  as B
 
 -- | Target OSes as defined in aclocal.m4 under checkOS()
@@ -159,6 +161,12 @@ main = do args     <- getArgs
               
           print tablesNextToCode
           print targetPlatform
+          reg <- makeRegex "(\\d+)"
+          res <- matches reg "12 dd 15 32d23"
+          print res
+          str <- newCString "12 dd 15 32d23"
+          res' <- R.regexec reg str 0
+          print res'
           
           split_asm_file ifile
               
