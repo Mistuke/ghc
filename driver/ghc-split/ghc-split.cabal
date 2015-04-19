@@ -20,9 +20,20 @@ executable ghc-split
     directory,
     bytestring,
     filepath,
-    ghc
-
+    ghc,
+    array,
+    containers
+    
+  C-Sources:            c-finalizer/myfree.c
+  Include-Dirs:         c-finalizer
+  
+  default-extensions: MultiParamTypeClasses, FunctionalDependencies, CPP,
+                      ForeignFunctionInterface, GeneralizedNewtypeDeriving,
+                      FlexibleContexts, TypeSynonymInstances,
+                      FlexibleInstances
+  
   main-is: Main.lhs
+  CPP-Options: "-DSPLIT_BASE=1"
   include-dirs: ../../mk
   if os(windows)
     CC-Options:           -DHAVE_REGEX_H
@@ -30,6 +41,17 @@ executable ghc-split
                           cbits/regexec.c cbits/regfree.c
     Include-Dirs:         cbits
     
-  Other-Modules: Regex, ByteString, Utils
+  Other-Modules:          Text.Regex.Base, 
+                          Text.Regex.Base.RegexLike,
+                          Text.Regex.Base.Context,
+                          Text.Regex.Base.Impl,
+                          
+                          Text.Regex.Posix,
+                          Text.Regex.Posix.Wrap,
+                          Text.Regex.Posix.String,
+                          Text.Regex.Posix.Sequence,
+                          Text.Regex.Posix.ByteString,
+                          Text.Regex.Posix.ByteString.Lazy
   hs-source-dirs: src
+  GHC-Options:            -Wall -O2
 

@@ -27,12 +27,11 @@ import System.IO ( openFile, IOMode(..), hClose, openFile, Handle(..) )
 import Data.Monoid ( Monoid(..) )
 import Control.Monad ( when, forM_ )
 import Data.Word ( Word8 )
-import Regex ( Regex(..) )
-import Regex as R ( regexec )
 import Foreign.C.String ( newCString )
-import ByteString ( regexec )
-import Utils ( matchTest, matchTestIO, matchTestAny, matchTestAnyIO, makeRegex, matches, matchesIO )
 import qualified Data.ByteString.Char8  as B
+
+import Text.Regex.Posix.ByteString ( Regex(), compile, execute, compExtended, compIgnoreCase, compNoSub, execBlank)
+import Text.Regex.Base.RegexLike( RegexLike(..), makeRegexOpts, matchTest, matchAllText )
 
 -- | Target OSes as defined in aclocal.m4 under checkOS()
 data TargetOS
@@ -161,12 +160,9 @@ main = do args     <- getArgs
               
           print tablesNextToCode
           print targetPlatform
-          reg <- makeRegex "(\\d+)"
-          res <- matches reg "12 dd 15 32d23"
+          let reg = mkRegex "([0123456789]+)"
+          let res = matchAllText reg ("12 dd 15 32d23" :: B.ByteString)
           print res
-          str <- newCString "12 dd 15 32d23"
-          res' <- R.regexec reg str 0
-          print res'
           
           split_asm_file ifile
               
@@ -200,10 +196,13 @@ collectExports = case targetArchitecture of
                         _    -> const $ return []
                         
 -- * Regular expressions
-stg_split_marker :: IO Regex
-stg_split_marker = makeRegex "_?__stg_split_marker"
+mkRegex :: B.ByteString -> Regex
+mkRegex bs = makeRegexOpts (compExtended + compIgnoreCase) execBlank bs
 
-read_tmpi_up_to_marker :: IO [Regex]
+stg_split_marker :: Regex
+stg_split_marker = mkRegex "_?__stg_split_marker"
+
+read_tmpi_up_to_marker :: [Regex]
 read_tmpi_up_to_marker = let m_regs = [ "_?__stg_split_marker"
                                       , "^L[^C].*:$"
                                       , "^\\.stab"
@@ -216,7 +215,7 @@ read_tmpi_up_to_marker = let m_regs = [ "_?__stg_split_marker"
                                       , "\\t\\.frame"
                                       , "^\\s+(save|retl?|restore|nop)"
                                       ]
-                         in mapM makeRegex m_regs
+                         in map mkRegex m_regs
 -- * End
           
 readTMPIUpToAMarker :: B.ByteString -> Int -> Handle -> IO B.ByteString
@@ -240,15 +239,13 @@ readTMPIUpToAMarker str count input
          
     where seek :: B.ByteString -> Handle -> IO B.ByteString
           seek str tmpi = do line <- B.hGetLine tmpi
-                             matched <- stg_split_marker `matchTestIO` line
-                             if line /= "" && not matched
+                             if line /= "" && not (stg_split_marker `matchTest` line)
                                 then seek (str `mappend` line) tmpi
                                 else return str
                                 
           chomp :: Handle -> IO B.ByteString
           chomp tmpi = do line <- B.hGetLine tmpi
-                          matched <- read_tmpi_up_to_marker `matchTestAnyIO` line
-                          if line /= "" && matched
+                          if line /= "" && (any (`matchTest` line) read_tmpi_up_to_marker)
                              then chomp tmpi
                              else return line
 
@@ -267,11 +264,11 @@ process_asm_block_iX86 str
   = do -- strip the marker
        return str
        
-    where str_marker_1 :: IO Regex
-          str_marker_1 = makeRegex "s/(\\.text\\n\\t\\.align .(,0x90)?\\n)\\.globl\\s+.*_?__stg_split_marker.*\\n/$1/m"
+    where str_marker_1 :: Regex
+          str_marker_1 = mkRegex "s/(\\.text\\n\\t\\.align .(,0x90)?\\n)\\.globl\\s+.*_?__stg_split_marker.*\\n/$1/m"
           
-          str_marker_2 :: IO Regex
-          str_marker_2 = makeRegex "s/(\\t\\.align .(,0x90)?\\n)\\.globl\\s+.*_?__stg_split_marker.*\\n/$1/m"
+          str_marker_2 :: Regex
+          str_marker_2 = mkRegex "s/(\\t\\.align .(,0x90)?\\n)\\.globl\\s+.*_?__stg_split_marker.*\\n/$1/m"
           
 process_asm_block_x86_64 :: B.ByteString -> IO B.ByteString
 process_asm_block_x86_64 str 
