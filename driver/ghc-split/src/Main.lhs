@@ -30,7 +30,7 @@ import Data.Word ( Word8 )
 import Foreign.C.String ( newCString )
 import qualified Data.ByteString.Char8  as B
 
-import Text.Regex.Posix.ByteString ( Regex(), compile, execute, compExtended, compIgnoreCase, compNoSub, execBlank)
+import Text.Regex.PCRE.ByteString ( Regex(), compile, execute, compExtended, compCaseless, execBlank)
 import Text.Regex.Base.RegexLike( RegexLike(..), makeRegexOpts, matchTest, matchAllText )
 
 -- | Target OSes as defined in aclocal.m4 under checkOS()
@@ -160,9 +160,6 @@ main = do args     <- getArgs
               
           print tablesNextToCode
           print targetPlatform
-          let reg = mkRegex "([0123456789]+)"
-          let res = matchAllText reg ("12 dd 15 32d23" :: B.ByteString)
-          print res
           
           split_asm_file ifile
               
@@ -197,7 +194,7 @@ collectExports = case targetArchitecture of
                         
 -- * Regular expressions
 mkRegex :: B.ByteString -> Regex
-mkRegex bs = makeRegexOpts (compExtended + compIgnoreCase) execBlank bs
+mkRegex bs = makeRegexOpts (compExtended + compCaseless) execBlank bs
 
 stg_split_marker :: Regex
 stg_split_marker = mkRegex "_?__stg_split_marker"
@@ -265,10 +262,10 @@ process_asm_block_iX86 str
        return str
        
     where str_marker_1 :: Regex
-          str_marker_1 = mkRegex "s/(\\.text\\n\\t\\.align .(,0x90)?\\n)\\.globl\\s+.*_?__stg_split_marker.*\\n/$1/m"
+          str_marker_1 = mkRegex "s/(\\.text\n\t\\.align .(,0x90)?\n)\\.globl\\s+.*_?__stg_split_marker.*\n/$1/m"
           
           str_marker_2 :: Regex
-          str_marker_2 = mkRegex "s/(\\t\\.align .(,0x90)?\\n)\\.globl\\s+.*_?__stg_split_marker.*\\n/$1/m"
+          str_marker_2 = mkRegex "s/(\t\\.align .(,0x90)?\n)\\.globl\\s+.*_?__stg_split_marker.*\n/$1/m"
           
 process_asm_block_x86_64 :: B.ByteString -> IO B.ByteString
 process_asm_block_x86_64 str 

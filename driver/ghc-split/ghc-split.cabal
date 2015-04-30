@@ -23,35 +23,33 @@ executable ghc-split
     ghc,
     array,
     containers
-    
-  C-Sources:            c-finalizer/myfree.c
-  Include-Dirs:         c-finalizer
   
   default-extensions: MultiParamTypeClasses, FunctionalDependencies, CPP,
                       ForeignFunctionInterface, GeneralizedNewtypeDeriving,
                       FlexibleContexts, TypeSynonymInstances,
-                      FlexibleInstances
+                      FlexibleInstances, ScopedTypeVariables
   
   main-is: Main.lhs
   CPP-Options: "-DSPLIT_BASE=1"
   include-dirs: ../../mk
-  if os(windows)
-    CC-Options:           -DHAVE_REGEX_H
-    C-Sources:            cbits/reallocf.c cbits/regcomp.c cbits/regerror.c
-                          cbits/regexec.c cbits/regfree.c
-    Include-Dirs:         cbits
+  CC-Options:   -DHAVE_PCRE_H -DHAVE_CONFIG_H -DPCRE_STATIC -DHAVE_INTTYPES_H -DHAVE_STDINT_H -DHAVE_STDLIB_H
+  Include-dirs: pcre
+  Includes: pcre.h config.h
+  C-sources:
+      pcre/pcre_byte_order.c pcre/pcre_compile.c pcre/pcre_config.c pcre/pcre_chartables.c pcre/pcre_dfa_exec.c pcre/pcre_exec.c pcre/pcre_fullinfo.c pcre/pcre_get.c pcre/pcre_globals.c pcre/pcre_jit_compile.c pcre/pcre_maketables.c pcre/pcre_newline.c pcre/pcre_ord2utf8.c pcre/pcre_refcount.c pcre/pcre_string_utils.c pcre/pcre_study.c pcre/pcre_tables.c pcre/pcre_ucd.c pcre/pcre_valid_utf8.c pcre/pcre_version.c pcre/pcre_xclass.c
+
     
   Other-Modules:          Text.Regex.Base, 
                           Text.Regex.Base.RegexLike,
                           Text.Regex.Base.Context,
                           Text.Regex.Base.Impl,
                           
-                          Text.Regex.Posix,
-                          Text.Regex.Posix.Wrap,
-                          Text.Regex.Posix.String,
-                          Text.Regex.Posix.Sequence,
-                          Text.Regex.Posix.ByteString,
-                          Text.Regex.Posix.ByteString.Lazy
+                          Text.Regex.PCRE
+                          Text.Regex.PCRE.Wrap
+                          Text.Regex.PCRE.String
+                          Text.Regex.PCRE.Sequence
+                          Text.Regex.PCRE.ByteString
+                          Text.Regex.PCRE.ByteString.Lazy
   hs-source-dirs: src
   GHC-Options:            -Wall -O2
 
