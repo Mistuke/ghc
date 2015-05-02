@@ -25,15 +25,16 @@ import System.Environment ( getArgs, getProgName )
 import System.Exit ( exitFailure )
 import System.IO ( openFile, IOMode(..), hClose, openFile, hIsEOF, Handle(..) )
 import Data.Monoid ( Monoid(..) )
-import Control.Monad ( when, forM_, unless )
+import Data.Function ( fix )
 import Data.Word ( Word8 )
+import Data.Maybe ( isNothing, fromJust )
+import Control.Monad ( when, forM_, unless )
 import qualified Data.Map as M
 import qualified Data.Array as A
 import Foreign.C.String ( newCString )
 import qualified Data.ByteString.Char8 as B
 import Control.Monad.Trans.State
 import Control.Monad.IO.Class ( liftIO )
-import Data.Function ( fix )
 
 import Text.Regex.PCRE.ByteString ( Regex(), compile, execute, compExtended, compCaseless, compMultiline, execBlank)
 import Text.Regex.Base.RegexLike( RegexLike(..), makeRegexOpts, matchTest, matchAllText, MatchText )
@@ -181,8 +182,8 @@ newSession asm_file tmp_prefix out_file hwnd
 dump_asm_splitting_info :: Bool
 dump_asm_splitting_info = True
 
-debug :: Show a => a -> SplitM ()
-debug = liftIO . when dump_asm_splitting_info . print
+debug :: String -> SplitM ()
+debug = liftIO . when dump_asm_splitting_info . putStrLn
 
 main :: IO ()   
 main = do args     <- getArgs
@@ -222,7 +223,7 @@ die msg = do name <- getProgName
 pipeline :: SplitM Int
 pipeline = do exports <- collectExports
               s_stuff <- readTMPIUpToAMarker
-              liftIO $ print s_stuff
+              
               -- that first stuff is a prologue for all .s outputs
               prologue_stuff <- process_asm_block s_stuff
               -- $_ already has some of the next stuff in it...
@@ -246,7 +247,7 @@ pipeline = do exports <- collectExports
               -- Add the GNU note the end of every piece if found
               lastPiece <- fmap ((M.! noOfSplitFiles) . pieces) get
               let matchGnu   = mkRegex' "(\n[ \t]*\\.section[ \t]+\\.note\\.GNU-stack,[^\n]*\n)"
-              let matchesGnu = flatRegResult $ matchGnu `matchAllText` lastPiece
+              let matchesGnu = flatAllResult $ matchGnu `matchAllText` lastPiece
               when (not $ null matchesGnu) $ addGnuNote noOfSplitFiles (matchesGnu !! 0)
               
               -- Write out the results
@@ -260,10 +261,12 @@ pipeline = do exports <- collectExports
   
         process_asm_blocks :: SplitM ()
         process_asm_blocks = do handle <- fmap fhwnd get
+                            
                                 isEOF  <- liftIO $ hIsEOF handle
                                 unless isEOF $ do incr_octr
-                                                  _ <- process_asm_block =<< readTMPIUpToAMarker
-                                                  return ()
+                                                  asm <- process_asm_block =<< readTMPIUpToAMarker
+                                                  modify (\s -> s { pieces = M.insert (octr s) asm (pieces s) })
+                                                  process_asm_blocks
                                            
         addGnuNote :: Int -> B.ByteString -> SplitM ()
         addGnuNote noFiles note = modify (\s -> s { pieces = foldr ($) (pieces s) $ map (M.adjust (`B.append` note)) [1..(noFiles - 1)] })
@@ -273,8 +276,8 @@ pipeline = do exports <- collectExports
            = do -- output to a file of its own
                 -- open a new output file...
                 session <- get
-                let ofname = (_prefix session) ++ "__" ++ show (octr session)
-                
+                let ofname = (_prefix session) ++ "__" ++ show idx
+                debug $ "writing " ++ ofname
                 liftIO $ onException 
                             (bracket
                                 (openFile ofname WriteMode)
@@ -332,6 +335,7 @@ readTMPIUpToAMarker
        let input = fhwnd session
            str   = buffer session
            count = octr session
+       
        str <- liftIO $ seek str input
   
        -- if not EOF, then creep forward until next "real" line
@@ -352,16 +356,22 @@ readTMPIUpToAMarker
           _       -> return str
          
     where seek :: B.ByteString -> Handle -> IO B.ByteString
-          seek str tmpi = do line <- B.hGetLine tmpi
-                             if line /= "" && not (stg_split_marker `matchTest` line)
-                                then seek (str `mappend` line) tmpi
-                                else return str
+          seek str tmpi = do eof <- hIsEOF tmpi
+                             if eof
+                                then return str
+                                else do line <- B.hGetLine tmpi
+                                        if not $ stg_split_marker `matchTest` line
+                                           then seek (str `mappend` line) tmpi
+                                           else return str
                                 
           chomp :: Handle -> IO B.ByteString
-          chomp tmpi = do line <- B.hGetLine tmpi -- check EOF instead
-                          if line /= "" && (any (`matchTest` line) read_tmpi_up_to_marker)
-                             then chomp tmpi
-                             else return line
+          chomp tmpi = do eof <- hIsEOF tmpi 
+                          if eof
+                             then return ""
+                             else do line <- B.hGetLine tmpi
+                                     if any (`matchTest` line) read_tmpi_up_to_marker
+                                        then chomp tmpi
+                                        else return line
 
 process_asm_block :: B.ByteString -> SplitM B.ByteString
 process_asm_block str 
@@ -388,8 +398,8 @@ process_asm_block_x86_64 :: B.ByteString -> SplitM B.ByteString
 process_asm_block_x86_64 str 
   = do str' <- while "((?:^|\\.)(LC\\d+):\n(\t\\.(ascii|string).*\n|\\s*\\.byte.*\n){1,100})" str process
        return str'
-    where process :: [B.ByteString] -> SplitM B.ByteString
-          process matches  
+    where process :: (B.ByteString, [B.ByteString], B.ByteString) -> SplitM B.ByteString
+          process (prefix, matches , postfix)
              = do session <- get
                   let label = matches !! 0
                       body  = matches !! 1
@@ -403,20 +413,23 @@ process_asm_block_x86_64 str
                   put $ session { local = cache' }
                   return ""
                       
-flatRegResult :: [MatchText a] -> [a]
-flatRegResult = map fst . concatMap A.elems
+flatRegResult :: (a, MatchText a, a) -> (a, [a], a)
+flatRegResult (l, m, r) = (l, map fst $ A.elems m, r)
+
+flatAllResult :: [MatchText a] -> [a]
+flatAllResult = map fst . concatMap A.elems
   
-while :: B.ByteString -> B.ByteString -> ([B.ByteString] -> SplitM B.ByteString) -> SplitM B.ByteString
+while :: B.ByteString -> B.ByteString -> ((B.ByteString, [B.ByteString], B.ByteString) -> SplitM B.ByteString) -> SplitM B.ByteString
 while reg str fn = while' (mkRegex' reg) str fn
-    where while' :: Regex -> B.ByteString -> ([B.ByteString] -> SplitM B.ByteString) -> SplitM B.ByteString
+    where while' :: Regex -> B.ByteString -> ((B.ByteString, [B.ByteString], B.ByteString) -> SplitM B.ByteString) -> SplitM B.ByteString
           while' reg str fn 
              = do session <- get
                   let mp  = local session
-                  let res = flatRegResult $ reg `matchAllText` str
+                  let res = reg `matchOnceText` str
                   liftIO $ print res
-                  if null res 
+                  if isNothing res 
                      then return str
-                     else do str' <- fn res
+                     else do str' <- fn $ (flatRegResult . fromJust) res
                              while' reg str' fn
   
 \end{code}
