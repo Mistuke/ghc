@@ -30,7 +30,7 @@ import Data.Word ( Word8 )
 import qualified Data.Map as M
 import qualified Data.Array as A
 import Foreign.C.String ( newCString )
-import qualified Data.ByteString.Char8  as B
+import qualified Data.ByteString.Char8 as B
 import Control.Monad.Trans.State
 import Control.Monad.IO.Class ( liftIO )
 import Data.Function ( fix )
@@ -90,7 +90,7 @@ data TargetVendor
 type LocalConstants = M.Map B.ByteString B.ByteString
 
 tablesNextToCode :: Bool
-tablesNextToCode = TABLES_NEXT_TO_CODE == 1
+tablesNextToCode = TABLES_NEXT_TO_CODE == (1 :: Int)
 
 targetPlatformStr :: String
 targetPlatformStr = TargetPlatform_NAME
@@ -99,7 +99,7 @@ targetPlatform :: (TargetArch, TargetVendor, TargetOS)
 targetPlatform = (targetArchitecture, targetVendor, targetOS)
 
 targetArchitecture :: TargetArch
-targetArchitecture = case TARGET_ARCH of
+targetArchitecture = case (TARGET_ARCH :: String) of
                        "i386"      -> X86
                        "i486"      -> X86
                        "x86_64"    -> X86_64
@@ -117,7 +117,7 @@ targetArchitecture = case TARGET_ARCH of
                        _           -> UnknownArch
                         
 targetOS :: TargetOS
-targetOS = case TARGET_OS of
+targetOS = case (TARGET_OS :: String) of
              "linux"         -> Linux
              "ios"           -> IOS
              "darwin"        -> Darwin
@@ -136,7 +136,7 @@ targetOS = case TARGET_OS of
 
              
 targetVendor :: TargetVendor
-targetVendor = case TARGET_VENDOR of
+targetVendor = case (TARGET_VENDOR :: String) of
                  "dec"        -> Dec
                  "hp"         -> HP
                  "apple"      -> Apple
@@ -154,6 +154,7 @@ data Sections = Sections { fhwnd  :: Handle
                          , local  :: LocalConstants
                          , pieces :: M.Map Int B.ByteString
                          , buffer :: B.ByteString
+                         , header :: B.ByteString
                          -- File paths
                          , _ifile  :: FilePath
                          , _prefix :: FilePath
@@ -170,6 +171,7 @@ newSession asm_file tmp_prefix out_file hwnd
                , local   = M.empty
                , pieces  = M.empty
                , buffer  = ""
+               , header  = ""
                
                , _ifile  = asm_file
                , _prefix = tmp_prefix
@@ -185,6 +187,9 @@ debug = liftIO . when dump_asm_splitting_info . print
 main :: IO ()   
 main = do args     <- getArgs
           progName <- getProgName
+          
+          when (length args < 3) $ die $ "Syntax: " ++ progName ++ " {input-file} {file-prefix} {output-file}"
+          
           let ifile      = args !! 0
               tmp_prefix = args !! 1
               output     = args !! 2
@@ -192,23 +197,29 @@ main = do args     <- getArgs
           print tablesNextToCode
           print targetPlatform
           
-          split_asm_file ifile tmp_prefix output
+          noOfSplitFiles <- split_asm_file ifile tmp_prefix output
+          onException (bracket
+                          (openFile output WriteMode)
+                          (hClose)
+                          (flip B.hPutStrLn (B.pack $ show noOfSplitFiles))
+                      )
+                      (die $ "failed to open `" ++ output ++ "' (to write)\n")  
               
-split_asm_file :: FilePath -> FilePath -> FilePath -> IO ()
+split_asm_file :: FilePath -> FilePath -> FilePath -> IO Int
 split_asm_file asm_file tmp_prefix out_file
    = onException (bracket
                      (openFile asm_file ReadMode)
                      (hClose)
                      (evalStateT pipeline . newSession asm_file tmp_prefix out_file)
                   )
-                 (die $ "failed to open " ++ asm_file ++ " (to read)\n")             
+                 (die $ "failed to open `" ++ asm_file ++ "' (to read)\n")             
            
 die :: String -> IO a
 die msg = do name <- getProgName
              putStrLn $ name ++ ": " ++ msg
              exitFailure 
              
-pipeline :: SplitM ()
+pipeline :: SplitM Int
 pipeline = do exports <- collectExports
               s_stuff <- readTMPIUpToAMarker
               liftIO $ print s_stuff
@@ -221,21 +232,58 @@ pipeline = do exports <- collectExports
               input_prefix <- fmap ((`B.append` ".c"      ) . B.pack . _prefix) get
               input_source <- fmap ((`B.append` "_root.hc") . B.pack . _ifile ) get
               let prologue_stuff' = replaceAll input_prefix input_source prologue_stuff
+              modify (\s -> s { header = prologue_stuff' })
               
               -- process all the remaining assembly blocks
               process_asm_blocks
               
-              return ()
-  where incr_octr = modify (\s -> s { octr = octr s + 1 })
+              -- make sure that we still have some output when the input file is empty
+              _octr <- fmap octr get
+              when (_octr == 0) $ modify (\s -> s { octr = 1, pieces = M.insert 1 "" (pieces s)})
+              
+              noOfSplitFiles <- fmap octr get
+              
+              -- Add the GNU note the end of every piece if found
+              lastPiece <- fmap ((M.! noOfSplitFiles) . pieces) get
+              let matchGnu   = mkRegex' "(\n[ \t]*\\.section[ \t]+\\.note\\.GNU-stack,[^\n]*\n)"
+              let matchesGnu = flatRegResult $ matchGnu `matchAllText` lastPiece
+              when (not $ null matchesGnu) $ addGnuNote noOfSplitFiles (matchesGnu !! 0)
+              
+              -- Write out the results
+              forM_ [1..noOfSplitFiles] writeSplitResultFile
+              
+              -- return the number of files written
+              return noOfSplitFiles
+              
+  where incr_octr :: SplitM ()
+        incr_octr = modify (\s -> s { octr = octr s + 1 })
+  
         process_asm_blocks :: SplitM ()
         process_asm_blocks = do handle <- fmap fhwnd get
                                 isEOF  <- liftIO $ hIsEOF handle
-                                if isEOF 
-                                   then return ()
-                                   else do incr_octr
-                                           _ <- process_asm_block =<< readTMPIUpToAMarker
-                                           return ()
+                                unless isEOF $ do incr_octr
+                                                  _ <- process_asm_block =<< readTMPIUpToAMarker
+                                                  return ()
                                            
+        addGnuNote :: Int -> B.ByteString -> SplitM ()
+        addGnuNote noFiles note = modify (\s -> s { pieces = foldr ($) (pieces s) $ map (M.adjust (`B.append` note)) [1..(noFiles - 1)] })
+                             
+        writeSplitResultFile :: Int -> SplitM ()
+        writeSplitResultFile idx 
+           = do -- output to a file of its own
+                -- open a new output file...
+                session <- get
+                let ofname = (_prefix session) ++ "__" ++ show (octr session)
+                
+                liftIO $ onException 
+                            (bracket
+                                (openFile ofname WriteMode)
+                                (hClose)
+                                (\handle -> do B.hPut handle (header session)
+                                               B.hPut handle ((pieces session) M.! (octr session))
+                                )
+                            ) 
+                            (die $ "Failed writing `" ++ ofname ++ "'\n") 
               
 replaceAll :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
 replaceAll key val str = replace str
