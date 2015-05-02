@@ -22,7 +22,8 @@ executable ghc-split
     filepath,
     ghc,
     array,
-    containers
+    containers,
+    transformers 
   
   default-extensions: MultiParamTypeClasses, FunctionalDependencies, CPP,
                       ForeignFunctionInterface, GeneralizedNewtypeDeriving,
