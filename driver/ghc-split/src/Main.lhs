@@ -27,7 +27,7 @@ import System.IO ( openFile, IOMode(..), hClose, openFile, hIsEOF, Handle(..) )
 import Data.Monoid ( Monoid(..) )
 import Data.Function ( fix )
 import Data.Word ( Word8 )
-import Data.Maybe ( isNothing, fromJust )
+import Data.Maybe ( isNothing, fromJust, maybe )
 import Control.Monad ( when, forM_, unless )
 import qualified Data.Map as M
 import qualified Data.Array as A
@@ -240,7 +240,7 @@ pipeline = do exports <- collectExports
               
               -- make sure that we still have some output when the input file is empty
               _octr <- fmap octr get
-              when (_octr == 0) $ modify (\s -> s { octr = 1, pieces = M.insert 1 "" (pieces s)})
+              when (_octr == 0) $ modify' (\s -> s { octr = 1, pieces = M.insert 1 "" (pieces s)})
               
               noOfSplitFiles <- fmap octr get
               
@@ -257,15 +257,14 @@ pipeline = do exports <- collectExports
               return noOfSplitFiles
               
   where incr_octr :: SplitM ()
-        incr_octr = modify (\s -> s { octr = octr s + 1 })
+        incr_octr = modify' (\s -> s { octr = octr s + 1 })
   
         process_asm_blocks :: SplitM ()
         process_asm_blocks = do handle <- fmap fhwnd get
-                            
                                 isEOF  <- liftIO $ hIsEOF handle
                                 unless isEOF $ do incr_octr
                                                   asm <- process_asm_block =<< readTMPIUpToAMarker
-                                                  modify (\s -> s { pieces = M.insert (octr s) asm (pieces s) })
+                                                  modify' (\s -> s { pieces = M.insert (octr s) asm (pieces s) })
                                                   process_asm_blocks
                                            
         addGnuNote :: Int -> B.ByteString -> SplitM ()
@@ -276,14 +275,14 @@ pipeline = do exports <- collectExports
            = do -- output to a file of its own
                 -- open a new output file...
                 session <- get
-                let ofname = (_prefix session) ++ "__" ++ show idx
+                let ofname = (_prefix session) ++ "__" ++ show idx ++ ".s"
                 debug $ "writing " ++ ofname
                 liftIO $ onException 
                             (bracket
                                 (openFile ofname WriteMode)
                                 (hClose)
                                 (\handle -> do B.hPut handle (header session)
-                                               B.hPut handle ((pieces session) M.! (octr session))
+                                               B.hPut handle ((pieces session) M.! idx)
                                 )
                             ) 
                             (die $ "Failed writing `" ++ ofname ++ "'\n") 
@@ -311,7 +310,7 @@ mkRegex' :: B.ByteString -> Regex
 mkRegex' bs = makeRegexOpts (compExtended + compCaseless + compMultiline) execBlank bs
 
 stg_split_marker :: Regex
-stg_split_marker = mkRegex "_?__stg_split_marker"
+stg_split_marker = mkRegex' "_?__stg_split_marker"
 
 read_tmpi_up_to_marker :: [Regex]
 read_tmpi_up_to_marker = let m_regs = [ "_?__stg_split_marker"
@@ -326,7 +325,7 @@ read_tmpi_up_to_marker = let m_regs = [ "_?__stg_split_marker"
                                       , "\t\\.frame"
                                       , "^\\s+(save|retl?|restore|nop)"
                                       ]
-                         in map mkRegex m_regs
+                         in map mkRegex' m_regs
 -- * End
           
 readTMPIUpToAMarker :: SplitM B.ByteString
@@ -336,7 +335,7 @@ readTMPIUpToAMarker
            str   = buffer session
            count = octr session
        
-       str <- liftIO $ seek str input
+       str' <- liftIO $ seek str input
   
        -- if not EOF, then creep forward until next "real" line
        -- (throwing everything away).
@@ -348,18 +347,15 @@ readTMPIUpToAMarker
        buff <- liftIO $ chomp input
        modify (\s -> s { buffer = buff })
        
-       debug $ "### BLOCK:" ++ show count ++ "\n" ++ show str
+       debug $ "### BLOCK:" ++ show count ++ "\n" ++ show str'
        
-       -- in case Perl doesn't convert line endings
-       case targetOS of
-          MingW32 -> return $ B.filter (/= '\r') str
-          _       -> return str
+       return str'
          
     where seek :: B.ByteString -> Handle -> IO B.ByteString
           seek str tmpi = do eof <- hIsEOF tmpi
                              if eof
                                 then return str
-                                else do line <- B.hGetLine tmpi
+                                else do line <- hGetLine tmpi
                                         if not $ stg_split_marker `matchTest` line
                                            then seek (str `mappend` line) tmpi
                                            else return str
@@ -368,7 +364,7 @@ readTMPIUpToAMarker
           chomp tmpi = do eof <- hIsEOF tmpi 
                           if eof
                              then return ""
-                             else do line <- B.hGetLine tmpi
+                             else do line <- hGetLine tmpi
                                      if any (`matchTest` line) read_tmpi_up_to_marker
                                         then chomp tmpi
                                         else return line
@@ -407,11 +403,24 @@ process_asm_block_x86_64 str
                       
                   when (label `M.member` cache) $ liftIO $ die $ "Local constant label " ++ show label ++ " already defined!\n"
                   
-                  let cache' = M.insert label body cache
+                  let (body', suffix') = expandBody (mkRegex "^((\t\\.(ascii|string).*\n|\\s*\\.byte.*\n){1,100})") body postfix 
                   
-                  liftIO $ print matches
+                  debug "--------------------------------"
+                  liftIO $ print postfix
+                  debug "--------------------------------"
+                  liftIO $ print suffix'
+                  debug "--------------------------------"
+                  
+                  let cache' = M.insert label body' cache
+                                    
                   put $ session { local = cache' }
-                  return ""
+                  return (prefix `B.append` suffix')
+                  
+          expandBody :: Regex -> B.ByteString -> B.ByteString -> (B.ByteString, B.ByteString)
+          expandBody reg body str = let res = reg `matchOnceText` str
+                                        fn = \res -> case flatRegResult res of
+                                                        (prefix, matches, suffix) -> (body `B.append` (matches !! 0), suffix)
+                                    in maybe (body, str) fn res
                       
 flatRegResult :: (a, MatchText a, a) -> (a, [a], a)
 flatRegResult (l, m, r) = (l, map fst $ A.elems m, r)
@@ -424,12 +433,12 @@ while reg str fn = while' (mkRegex' reg) str fn
     where while' :: Regex -> B.ByteString -> ((B.ByteString, [B.ByteString], B.ByteString) -> SplitM B.ByteString) -> SplitM B.ByteString
           while' reg str fn 
              = do session <- get
-                  let mp  = local session
                   let res = reg `matchOnceText` str
-                  liftIO $ print res
                   if isNothing res 
                      then return str
                      else do str' <- fn $ (flatRegResult . fromJust) res
                              while' reg str' fn
-  
+                            
+hGetLine :: Handle -> IO B.ByteString
+hGetLine = fmap (`B.append` "\n") . B.hGetLine
 \end{code}
