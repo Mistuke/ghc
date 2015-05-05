@@ -386,12 +386,38 @@ process_asm_block :: B.ByteString -> SplitM B.ByteString
 process_asm_block str 
   = case targetPlatform of
       (_      , Apple, Darwin) -> undefined
-      (Sparc  , _    ,      _) -> process_asm_block_sparc  str
-      (X86    , _    ,      _) -> process_asm_block_iX86   str
-      (X86_64 , _    ,      _) -> process_asm_block_x86_64 str
-      (PowerPC, _    ,  Linux) -> undefined
+      (Sparc  , _    ,      _) -> process_asm_block_sparc         str
+      (X86    , _    ,      _) -> process_asm_block_iX86          str
+      (X86_64 , _    ,      _) -> process_asm_block_x86_64        str
+      (PowerPC, _    ,  Linux) -> process_asm_block_powerpc_linux str
       _                        -> liftIO $ die $ "no process_asm_block for " ++ targetPlatformStr
       
+process_asm_block_powerpc_linux :: B.ByteString -> SplitM B.ByteString
+process_asm_block_powerpc_linux str
+  = do -- strip the marker
+       let str' = replace str "" $ (mkRegex' "__stg_split_marker.*\n") `matchOnceText` str
+       
+       -- remove/record any literal constants defined here
+       val <- while "^(\\s+.section\\s+\\.rodata\n\\s+\\.align.*\n(\\.LC\\d+):\n(\\s\\.(byte|short|long|quad|2byte|4byte|8byte|fill|space|ascii|string).*\n)+)" str' process
+        
+       newStr <- process_asm_locals val
+        
+       debug $ "### STRIPPED BLOCK (powerpc linux):\n" ++ show newStr
+       return newStr
+    
+    where process :: (B.ByteString, [B.ByteString], B.ByteString) -> B.ByteString -> SplitM B.ByteString
+          process (prefix, matches , postfix) _
+            = do session <- get
+                 let label = matches !! 1
+                     body  = matches !! 0
+                     cache = local session
+                     
+                 when (label `M.member` cache) $ liftIO $ die $ "Local constant label " ++ show label ++ " already defined!\n"
+                                  
+                 modify (\s -> s { local = M.insert label body cache })
+                 
+                 return (prefix `B.append` postfix)
+                        
 process_asm_block_sparc :: B.ByteString -> SplitM B.ByteString
 process_asm_block_sparc str
   = do -- strip the marker
@@ -422,7 +448,7 @@ process_asm_block_sparc str
                      
                  when (label `M.member` cache) $ liftIO $ die $ "Local constant label " ++ show label ++ " already defined!\n"
                                   
-                 let cache' = M.insert label body cache
+                 modify (\s -> s { local = M.insert label body cache })
                  
                  return $ replace strInput "" $ (mkRegex' "\t\\.align .\n\\.?LL?C\\d+:\n(\t\\.asci[iz].*\n)+") `matchOnceText` strInput
                   
