@@ -28,6 +28,7 @@ import Data.Monoid ( Monoid(..) )
 import Data.Function ( fix )
 import Data.Word ( Word8 )
 import Data.Maybe ( isNothing, fromJust, maybe )
+import Data.Foldable ( foldrM )
 import Control.Monad ( when, forM_, unless )
 import qualified Data.Map as M
 import qualified Data.Array as A
@@ -36,7 +37,7 @@ import qualified Data.ByteString.Char8 as B
 import Control.Monad.Trans.State
 import Control.Monad.IO.Class ( liftIO )
 
-import Text.Regex.PCRE.ByteString ( Regex(), compile, execute, compExtended, compCaseless, compMultiline, execBlank)
+import Text.Regex.PCRE.ByteString ( Regex(), compile, execute, compExtended, compCaseless, compMultiline, execBlank )
 import Text.Regex.Base.RegexLike( RegexLike(..), makeRegexOpts, matchTest, matchAllText, MatchText )
 
 -- | Target OSes as defined in aclocal.m4 under checkOS()
@@ -181,6 +182,9 @@ newSession asm_file tmp_prefix out_file hwnd
                  
 dump_asm_splitting_info :: Bool
 dump_asm_splitting_info = True
+
+optimiseC :: Bool
+optimiseC = False
 
 debug :: String -> SplitM ()
 debug = liftIO . when dump_asm_splitting_info . putStrLn
@@ -369,48 +373,104 @@ readTMPIUpToAMarker
                                         then chomp tmpi
                                         else return line
 
+extract :: (B.ByteString, MatchText B.ByteString, B.ByteString) -> (B.ByteString, B.ByteString, B.ByteString)
+extract (l, n, r) = (l, fst $ n A.! 0, r)
+          
+combine str m = let (l, v, r) = maybe ("", str, "") extract m
+                in B.concat [l,v,r]
+
+replace str v m = let (l, _, r) = maybe ("", str, "") extract m
+                  in B.concat [l,v,r]
+          
 process_asm_block :: B.ByteString -> SplitM B.ByteString
 process_asm_block str 
   = case targetPlatform of
       (_      , Apple, Darwin) -> undefined
-      (Sparc  , _    ,      _) -> undefined
-      (X86    , _    ,      _) -> process_asm_block_iX86 str
+      (Sparc  , _    ,      _) -> process_asm_block_sparc  str
+      (X86    , _    ,      _) -> process_asm_block_iX86   str
       (X86_64 , _    ,      _) -> process_asm_block_x86_64 str
       (PowerPC, _    ,  Linux) -> undefined
       _                        -> liftIO $ die $ "no process_asm_block for " ++ targetPlatformStr
       
+process_asm_block_sparc :: B.ByteString -> SplitM B.ByteString
+process_asm_block_sparc str
+  = do -- strip the marker
+       let str' = if optimiseC
+                     then replace str "" $ (mkRegex' "_?__stg_split_marker.*:\n") `matchOnceText` str
+                     else let res = combine str $ (mkRegex' "(\\.text\n\t\\.align .\n)\t\\.global\\s+.*_?__stg_split_marker.*\n\t\\.proc.*\n") `matchOnceText` str
+                          in combine res $ (mkRegex' "(\t\\.align .\n)\t\\.global\\s+.*_?__stg_split_marker.*\n\t\\.proc.*\n") `matchOnceText` res
+        
+       session <- get
+       -- make sure the .hc filename gets saved; not just ghc*.c (temp name)
+       let ifile = B.pack $ ".stabs \"" ++ _ifile session ++ "_root.hc\""
+           ren   = replace str' ifile $ (mkRegex' "^\\.stabs \"(ghc\\d+\\.c)\"") `matchOnceText` str' -- HACK HACK
+            
+       -- remove/record any literal constants defined here
+       val <- while "(\t\\.align .\n\\.?(L?LC\\d+):\n(\t\\.asci[iz].*\n)+)" ren process
+        
+       newStr <- process_asm_locals val
+        
+       debug $ "### STRIPPED BLOCK (sparc):\n" ++ show newStr
+       return newStr
+    
+    where process :: (B.ByteString, [B.ByteString], B.ByteString) -> B.ByteString -> SplitM B.ByteString
+          process (prefix, matches , postfix) strInput
+            = do session <- get
+                 let label = matches !! 1
+                     body  = matches !! 0
+                     cache = local session
+                     
+                 when (label `M.member` cache) $ liftIO $ die $ "Local constant label " ++ show label ++ " already defined!\n"
+                                  
+                 let cache' = M.insert label body cache
+                 
+                 return $ replace strInput "" $ (mkRegex' "\t\\.align .\n\\.?LL?C\\d+:\n(\t\\.asci[iz].*\n)+") `matchOnceText` strInput
+                  
+      
 process_asm_block_iX86 :: B.ByteString -> SplitM B.ByteString
 process_asm_block_iX86 str 
   = do -- strip the marker
-       return str
+       let (l , res , r ) = maybe ("", str, "") extract $ str_marker_1 `matchOnceText` str
+       let (l', res', r') = maybe ("", res, "") extract $ str_marker_2 `matchOnceText` (B.concat [l, res, r])
+       
+       -- it seems prudent to stick on one of these:
+       let str' = ".text\n\t.align 4\n" `B.append` (B.concat [l', res', r'])
+       newStr <- process_asm_block_x86_XX str'
+       
+       debug $ "### STRIPPED BLOCK (x86_64):\n" ++ show newStr
+       
+       return newStr
        
     where str_marker_1 :: Regex
-          str_marker_1 = mkRegex "s/(\\.text\n\t\\.align .(,0x90)?\n)\\.globl\\s+.*_?__stg_split_marker.*\n/$1/m"
+          str_marker_1 = mkRegex "(\\.text\n\t\\.align .(,0x90)?\n)\\.globl\\s+.*_?__stg_split_marker.*\n"
           
           str_marker_2 :: Regex
-          str_marker_2 = mkRegex "s/(\t\\.align .(,0x90)?\n)\\.globl\\s+.*_?__stg_split_marker.*\n/$1/m"
+          str_marker_2 = mkRegex "(\t\\.align .(,0x90)?\n)\\.globl\\s+.*_?__stg_split_marker.*\n"
           
 process_asm_block_x86_64 :: B.ByteString -> SplitM B.ByteString
 process_asm_block_x86_64 str 
+  = do newStr <- process_asm_block_x86_XX str
+       
+       debug $ "### STRIPPED BLOCK (x86_64):\n" ++ show newStr
+       
+       return newStr
+                                    
+process_asm_block_x86_XX :: B.ByteString -> SplitM B.ByteString
+process_asm_block_x86_XX str
   = do str' <- while "((?:^|\\.)(LC\\d+):\n(\t\\.(ascii|string).*\n|\\s*\\.byte.*\n){1,100})" str process
-       return str'
-    where process :: (B.ByteString, [B.ByteString], B.ByteString) -> SplitM B.ByteString
-          process (prefix, matches , postfix)
+       process_asm_locals str'
+       
+    where process :: (B.ByteString, [B.ByteString], B.ByteString) -> B.ByteString -> SplitM B.ByteString
+          process (prefix, matches , postfix) _
              = do session <- get
-                  let label = matches !! 0
-                      body  = matches !! 1
+                  let label = matches !! 1
+                      body  = matches !! 0
                       cache = local session
                       
                   when (label `M.member` cache) $ liftIO $ die $ "Local constant label " ++ show label ++ " already defined!\n"
                   
                   let (body', suffix') = expandBody (mkRegex "^((\t\\.(ascii|string).*\n|\\s*\\.byte.*\n){1,100})") body postfix 
-                  
-                  debug "--------------------------------"
-                  liftIO $ print postfix
-                  debug "--------------------------------"
-                  liftIO $ print suffix'
-                  debug "--------------------------------"
-                  
+                                   
                   let cache' = M.insert label body' cache
                                     
                   put $ session { local = cache' }
@@ -421,22 +481,32 @@ process_asm_block_x86_64 str
                                         fn = \res -> case flatRegResult res of
                                                         (prefix, matches, suffix) -> (body `B.append` (matches !! 0), suffix)
                                     in maybe (body, str) fn res
-                      
+
+process_asm_locals :: B.ByteString -> SplitM B.ByteString
+process_asm_locals str 
+  = do -- inject definitions for any local constants now used herein
+       locals <- fmap local get 
+       let keys     = M.keys locals
+       let adjLocal = \k val -> if (mkRegex' $ B.concat ["\\b", k, "\\b"]) `matchTest` val
+                                   then (locals M.! k) `B.append` val
+                                   else val
+       return $ foldr ($) str $ map adjLocal keys
+                                    
 flatRegResult :: (a, MatchText a, a) -> (a, [a], a)
 flatRegResult (l, m, r) = (l, map fst $ A.elems m, r)
 
 flatAllResult :: [MatchText a] -> [a]
 flatAllResult = map fst . concatMap A.elems
   
-while :: B.ByteString -> B.ByteString -> ((B.ByteString, [B.ByteString], B.ByteString) -> SplitM B.ByteString) -> SplitM B.ByteString
+while :: B.ByteString -> B.ByteString -> ((B.ByteString, [B.ByteString], B.ByteString) -> B.ByteString -> SplitM B.ByteString) -> SplitM B.ByteString
 while reg str fn = while' (mkRegex' reg) str fn
-    where while' :: Regex -> B.ByteString -> ((B.ByteString, [B.ByteString], B.ByteString) -> SplitM B.ByteString) -> SplitM B.ByteString
+    where while' :: Regex -> B.ByteString -> ((B.ByteString, [B.ByteString], B.ByteString) -> B.ByteString -> SplitM B.ByteString) -> SplitM B.ByteString
           while' reg str fn 
              = do session <- get
                   let res = reg `matchOnceText` str
                   if isNothing res 
                      then return str
-                     else do str' <- fn $ (flatRegResult . fromJust) res
+                     else do str' <- fn ((flatRegResult . fromJust) res) str
                              while' reg str' fn
                             
 hGetLine :: Handle -> IO B.ByteString
