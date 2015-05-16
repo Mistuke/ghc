@@ -23,7 +23,7 @@ import Control.Exception ( onException, bracket )
 
 import System.Environment ( getArgs, getProgName )
 import System.Exit ( exitFailure )
-import System.IO ( openFile, IOMode(..), hClose, openFile, hIsEOF, Handle(..) )
+import System.IO ( openFile, IOMode(..), hClose, openFile, hIsEOF, hSeek, SeekMode(..), Handle() )
 import Data.Monoid ( Monoid(..) )
 import Data.Function ( fix )
 import Data.Word ( Word8 )
@@ -90,6 +90,7 @@ data TargetVendor
     deriving (Show, Eq)
     
 type LocalConstants = M.Map B.ByteString B.ByteString
+type LocalExports   = M.Map B.ByteString B.ByteString
 
 tablesNextToCode :: Bool
 tablesNextToCode = TABLES_NEXT_TO_CODE == (1 :: Int)
@@ -150,34 +151,38 @@ targetVendor = case (TARGET_VENDOR :: String) of
                  "portbld"    -> PortBld
                  _            -> Unknown
                  
-data Sections = Sections { fhwnd  :: Handle
-                         , output :: [B.ByteString]
-                         , octr   :: Int
-                         , local  :: LocalConstants
-                         , pieces :: M.Map Int B.ByteString
-                         , buffer :: B.ByteString
-                         , header :: B.ByteString
+data Sections = Sections { fhwnd             :: Handle
+                         , output            :: [B.ByteString]
+                         , octr              :: Int
+                         , local             :: LocalConstants
+                         , dyLdChunks        :: LocalExports
+                         , dyLdChunksDefined :: LocalExports
+                         , pieces            :: M.Map Int B.ByteString
+                         , buffer            :: B.ByteString
+                         , header            :: B.ByteString
                          -- File paths
-                         , _ifile  :: FilePath
-                         , _prefix :: FilePath
-                         , _ofile  :: FilePath
+                         , _ifile            :: FilePath
+                         , _prefix           :: FilePath
+                         , _ofile            :: FilePath
                          }
                            
 type SplitM a = StateT Sections IO a
 
 newSession :: FilePath -> FilePath -> FilePath -> Handle -> Sections
 newSession asm_file tmp_prefix out_file hwnd 
-    = Sections { fhwnd   = hwnd
-               , output  = []
-               , octr    = 0
-               , local   = M.empty
-               , pieces  = M.empty
-               , buffer  = ""
-               , header  = ""
+    = Sections { fhwnd             = hwnd
+               , output            = []
+               , octr              = 0
+               , local             = M.empty
+               , dyLdChunksDefined = M.empty
+               , dyLdChunks        = M.empty
+               , pieces            = M.empty
+               , buffer            = ""
+               , header            = ""
                
-               , _ifile  = asm_file
-               , _prefix = tmp_prefix
-               , _ofile  = out_file
+               , _ifile            = asm_file
+               , _prefix           = tmp_prefix
+               , _ofile            = out_file
                }
                  
 dump_asm_splitting_info :: Bool
@@ -199,7 +204,6 @@ main = do args     <- getArgs
               tmp_prefix = args !! 1
               output     = args !! 2
               
-          print tablesNextToCode
           print targetPlatform
           
           noOfSplitFiles <- split_asm_file ifile tmp_prefix output
@@ -225,7 +229,7 @@ die msg = do name <- getProgName
              exitFailure 
              
 pipeline :: SplitM Int
-pipeline = do exports <- collectExports
+pipeline = do collectExports
               s_stuff <- readTMPIUpToAMarker
               
               -- that first stuff is a prologue for all .s outputs
@@ -300,11 +304,105 @@ replaceAll key val str = replace str
                           ("" ,    _) -> input
                           (pre, body) -> pre `B.append` val `B.append` (replace $ B.drop val_len body)
              
-collectExports :: SplitM [B.ByteString]
-collectExports = case targetArchitecture of
-                        Hppa -> return []
-                        Mips -> return []
-                        _    -> return []
+collectExports :: SplitM ()
+collectExports = case targetPlatform of
+                   (_   , Apple, Darwin) -> collectDyldStuff_darwin
+                   (_   , _    , _     ) -> return ()
+    
+data DyLdStuff = DarwinDyLd 
+               { drwn_cur_section   :: B.ByteString
+               , drwn_section       :: B.ByteString
+               , drwn_label         :: B.ByteString
+               , drwn_chunk         :: B.ByteString
+               , drwn_chunk_label   :: B.ByteString
+               , drwn_alignment     :: B.ByteString
+               , drwn_cur_alignment :: B.ByteString
+               }
+               
+collectDyldStuff_darwin :: SplitM ()
+collectDyldStuff_darwin 
+  = do -- make sure the global tables are empty
+       modify (\s -> s { dyLdChunksDefined = M.empty, dyLdChunks = M.empty })
+       
+       hwnd <- fmap fhwnd get
+       isEOF <- liftIO $ hIsEOF hwnd
+       let ld = DarwinDyLd { drwn_cur_section   = ""
+                           , drwn_section       = ""
+                           , drwn_label         = ""
+                           , drwn_chunk         = ""
+                           , drwn_chunk_label   = ""
+                           , drwn_alignment     = ""
+                           , drwn_cur_alignment = ""
+                           }
+                           
+       _ <- collect isEOF ld
+       
+       liftIO $ hSeek hwnd AbsoluteSeek 0
+       
+    where collect :: Bool -> DyLdStuff -> SplitM DyLdStuff
+          collect True  ld = return ld
+          collect False ld = do handle <- fmap fhwnd get
+                                line  <- liftIO $ hGetLine handle
+                                
+                                ld' <- if case1 `matchTest` line && case2 `matchTest` line
+                                          then match1and2 line ld
+                                          else if case3 `matchTest` line
+                                                  then match3 line ld
+                                                  else if case4 `matchTest` line
+                                                          then match4 line ld
+                                                          else if case5 `matchTest` line
+                                                                  then match5 line ld
+                                                                  else return $ ld { drwn_chunk = (drwn_chunk ld) `B.append` line }
+                                   
+                                isEOF <- liftIO $ hIsEOF   handle
+                                collect isEOF ld'
+                             
+          case1 :: Regex
+          case1 = mkRegex' "^L(_.+)\\$.+:"
+
+          case2 :: Regex
+          case2 = mkRegex' "^L(.*)\\$stub_binder:"
+          
+          match1and2 :: B.ByteString -> DyLdStuff -> SplitM DyLdStuff
+          match1and2 line dy = do modify (\s -> s { dyLdChunksDefined = M.adjust (`B.append` (drwn_section dy `B.append` drwn_alignment dy `B.append` drwn_chunk_label dy `B.append` drwn_chunk dy)) (drwn_label dy) (dyLdChunksDefined s) })
+                                  let section = replaceM line ".non_lazy_symbol_pointer" $ (mkRegex' "\\.data") `matchOnceText` line
+                                  let dy' = maybe dy (\s -> dy { drwn_chunk = "\t.indirect_symbol $label\n\t.long 0\n", drwn_section = s }) section
+                                  modify (\s -> s { dyLdChunks = M.adjust (`B.append` (drwn_section dy' `B.append` drwn_alignment dy' `B.append` drwn_chunk_label dy' `B.append` drwn_chunk dy')) (drwn_label dy') (dyLdChunks s) })
+                                  debug $ "### dyld chunk: " ++ (show $ B.concat [drwn_label dy', "\n", drwn_section dy', drwn_alignment dy', drwn_chunk dy'])
+                                
+                                  let (_, match, _) = maybe ("", line, "") extract $ case2 `matchOnceText` line
+                                  let newDy = dy' { drwn_chunk       = ""
+                                                  , drwn_chunk_label = line
+                                                  , drwn_label       = match
+                                                  , drwn_section     = drwn_cur_section dy'
+                                                  , drwn_alignment   = drwn_cur_alignment dy'
+                                                  }
+                                  debug $ "### label:" ++ show (drwn_label newDy)
+                                  return newDy
+          case3 :: Regex
+          case3 = mkRegex' "^\\s*\\.(symbol_stub|picsymbol_stub|lazy_symbol_pointer|non_lazy_symbol_pointer|data|section __IMPORT,.*|section __DATA, __la_sym_ptr(2|3),lazy_symbol_pointers)"
+          
+          match3 :: B.ByteString -> DyLdStuff -> SplitM DyLdStuff
+          match3 line dy = do let dy' = dy { drwn_cur_section = line, drwn_cur_alignment = "" }
+                              debug $ "section: " ++ show (drwn_cur_section dy')
+                              return dy'
+          
+          case4 :: Regex
+          case4 = mkRegex' "^\\s*\\.section\\s+__TEXT,__symbol_stub1,symbol_stubs,pure_instructions,\\d+"
+                    
+          match4 :: B.ByteString -> DyLdStuff -> SplitM DyLdStuff
+          match4 line dy = do -- always make sure we align things
+                              let dy' = dy { drwn_cur_section = line, drwn_cur_alignment = "\t.align 2" }
+                              debug $ "section: " ++ show (drwn_cur_section dy')
+                              return dy'
+                              
+          case5 :: Regex
+          case5 = mkRegex' "^\\s*\\.align.*"
+          
+          match5 :: B.ByteString -> DyLdStuff -> SplitM DyLdStuff
+          match5 line dy = do let dy' = dy { drwn_cur_alignment = line }
+                              debug $ "alignment: " ++ show (drwn_cur_alignment dy')
+                              return dy'
                         
 -- * Regular expressions
 mkRegex :: B.ByteString -> Regex
@@ -381,17 +479,25 @@ combine str m = let (l, v, r) = maybe ("", str, "") extract m
 
 replace str v m = let (l, _, r) = maybe ("", str, "") extract m
                   in B.concat [l,v,r]
+                  
+replaceM str v m = fmap ((\(l, _, r) -> B.concat [l,v,r]) . extract) m
           
 process_asm_block :: B.ByteString -> SplitM B.ByteString
 process_asm_block str 
   = case targetPlatform of
-      (_      , Apple, Darwin) -> undefined
-      (Sparc  , _    ,      _) -> process_asm_block_sparc         str
-      (X86    , _    ,      _) -> process_asm_block_iX86          str
-      (X86_64 , _    ,      _) -> process_asm_block_x86_64        str
+      (_      , Apple, Darwin) -> process_asm_block_darwin        str
+      (Sparc  , _    ,  _    ) -> process_asm_block_sparc         str
+      (X86    , _    ,  _    ) -> process_asm_block_iX86          str
+      (X86_64 , _    ,  _    ) -> process_asm_block_x86_64        str
       (PowerPC, _    ,  Linux) -> process_asm_block_powerpc_linux str
       _                        -> liftIO $ die $ "no process_asm_block for " ++ targetPlatformStr
       
+-- The logic for both Darwin/PowerPC and Darwin/x86 ends up being the same.
+process_asm_block_darwin :: B.ByteString -> SplitM B.ByteString
+process_asm_block_darwin str
+  = do -- cannot define this until the collect functions are written.
+       return str
+
 process_asm_block_powerpc_linux :: B.ByteString -> SplitM B.ByteString
 process_asm_block_powerpc_linux str
   = do -- strip the marker
