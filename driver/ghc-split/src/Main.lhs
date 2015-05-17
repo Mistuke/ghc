@@ -495,8 +495,43 @@ process_asm_block str
 -- The logic for both Darwin/PowerPC and Darwin/x86 ends up being the same.
 process_asm_block_darwin :: B.ByteString -> SplitM B.ByteString
 process_asm_block_darwin str
-  = do -- cannot define this until the collect functions are written.
-       return str
+  = do -- strip the marker
+       let str' = replace str "" $ (mkRegex' "___stg_split_marker.*\n") `matchOnceText` str
+       let str'' = replace str' "" $ (mkRegex' "L_.*\\$.*:\n(.|\n)*") `matchOnceText` str'
+       
+       -- remove/record any literal constants defined here
+       val <- while "^(\\s+.section\\s+\\.rodata\n\\s+\\.align.*\n(\\.LC\\d+):\n(\\s\\.(byte|short|long|quad|2byte|4byte|8byte|fill|space|ascii|string).*\n)+)" str' process
+              
+       newStr <- process_asm_locals "\\b" "(\\b|\\[)" val
+       
+       chunks  <- fmap dyLdChunks get
+       defined <- fmap dyLdChunksDefined get
+       let keys     = M.keys chunks
+       let adjLocal = \k val -> if (mkRegex' $ B.concat ["\\bL", k, "\\$"]) `matchTest` val 
+                                   then if (mkRegex' $ B.concat ["^", k, ":$"]) `matchTest` val
+                                           then (chunks  M.! k) `B.append` val
+                                           else (defined M.! k) `B.append` val
+                                    else val
+                                    
+       let dyld_stuff = foldr ($) newStr $ map adjLocal keys
+       
+       let newStr' = "\n" `B.append` dyld_stuff
+       
+       debug $ "### STRIPPED BLOCK (darwin):\n" ++ show newStr'
+       return newStr'
+       
+    where process :: (B.ByteString, [B.ByteString], B.ByteString) -> B.ByteString -> SplitM B.ByteString
+          process (prefix, matches , postfix) _
+            = do session <- get
+                 let label = matches !! 1
+                     body  = matches !! 0
+                     cache = local session
+                     
+                 when (label `M.member` cache) $ liftIO $ die $ "Local constant label " ++ show label ++ " already defined!\n"
+                                  
+                 modify (\s -> s { local = M.insert label body cache })
+                 
+                 return (prefix `B.append` postfix)
 
 process_asm_block_powerpc_linux :: B.ByteString -> SplitM B.ByteString
 process_asm_block_powerpc_linux str
@@ -506,7 +541,7 @@ process_asm_block_powerpc_linux str
        -- remove/record any literal constants defined here
        val <- while "^(\\s+.section\\s+\\.rodata\n\\s+\\.align.*\n(\\.LC\\d+):\n(\\s\\.(byte|short|long|quad|2byte|4byte|8byte|fill|space|ascii|string).*\n)+)" str' process
         
-       newStr <- process_asm_locals val
+       newStr <- process_asm_locals "[\\s,]" "\\b" val
         
        debug $ "### STRIPPED BLOCK (powerpc linux):\n" ++ show newStr
        return newStr
@@ -540,7 +575,7 @@ process_asm_block_sparc str
        -- remove/record any literal constants defined here
        val <- while "(\t\\.align .\n\\.?(L?LC\\d+):\n(\t\\.asci[iz].*\n)+)" ren process
         
-       newStr <- process_asm_locals val
+       newStr <- process_asm_locals "\\b" "\\b" val
         
        debug $ "### STRIPPED BLOCK (sparc):\n" ++ show newStr
        return newStr
@@ -590,7 +625,7 @@ process_asm_block_x86_64 str
 process_asm_block_x86_XX :: B.ByteString -> SplitM B.ByteString
 process_asm_block_x86_XX str
   = do str' <- while "((?:^|\\.)(LC\\d+):\n(\t\\.(ascii|string).*\n|\\s*\\.byte.*\n){1,100})" str process
-       process_asm_locals str'
+       process_asm_locals "\\b" "\\b" str'
        
     where process :: (B.ByteString, [B.ByteString], B.ByteString) -> B.ByteString -> SplitM B.ByteString
           process (prefix, matches , postfix) _
@@ -614,12 +649,12 @@ process_asm_block_x86_XX str
                                                         (prefix, matches, suffix) -> (body `B.append` (matches !! 0), suffix)
                                     in maybe (body, str) fn res
 
-process_asm_locals :: B.ByteString -> SplitM B.ByteString
-process_asm_locals str 
+process_asm_locals :: B.ByteString -> B.ByteString -> B.ByteString -> SplitM B.ByteString
+process_asm_locals l r str 
   = do -- inject definitions for any local constants now used herein
        locals <- fmap local get 
        let keys     = M.keys locals
-       let adjLocal = \k val -> if (mkRegex' $ B.concat ["\\b", k, "\\b"]) `matchTest` val
+       let adjLocal = \k val -> if (mkRegex' $ B.concat [l, k, r]) `matchTest` val
                                    then (locals M.! k) `B.append` val
                                    else val
        return $ foldr ($) str $ map adjLocal keys
