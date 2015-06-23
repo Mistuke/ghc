@@ -36,6 +36,7 @@ import Foreign.C.String ( newCString )
 import qualified Data.ByteString.Char8 as B
 import Control.Monad.Trans.State
 import Control.Monad.IO.Class ( liftIO )
+import qualified Debug.Trace as D
 
 import Text.Regex.PCRE.ByteString ( Regex(), compile, execute, compExtended, compCaseless, compMultiline, execBlank )
 import Text.Regex.Base.RegexLike( RegexLike(..), makeRegexOpts, matchTest, matchAllText, MatchText )
@@ -477,20 +478,21 @@ extract (l, n, r) = (l, fst $ n A.! 0, r)
 combine str m = let (l, v, r) = maybe ("", str, "") extract m
                 in B.concat [l,v,r]
 
-replace str v m = let (l, _, r) = maybe ("", str, "") extract m
-                  in B.concat [l,v,r]
+replace str v m = let (l, a, r) = maybe ("", str, "") (sub . extract) m
+                  in B.concat  [l,a,r]
+    where sub (a, _, b) = (a, v, b)
                   
 replaceM str v m = fmap ((\(l, _, r) -> B.concat [l,v,r]) . extract) m
           
 process_asm_block :: B.ByteString -> SplitM B.ByteString
-process_asm_block str 
-  = case targetPlatform of
+process_asm_block str = process_asm_block_sparc str
+{-  = case targetPlatform of
       (_      , Apple, Darwin) -> process_asm_block_darwin        str
       (Sparc  , _    ,  _    ) -> process_asm_block_sparc         str
       (X86    , _    ,  _    ) -> process_asm_block_iX86          str
       (X86_64 , _    ,  _    ) -> process_asm_block_x86_64        str
       (PowerPC, _    ,  Linux) -> process_asm_block_powerpc_linux str
-      _                        -> liftIO $ die $ "no process_asm_block for " ++ targetPlatformStr
+      _                        -> liftIO $ die $ "no process_asm_block for " ++ targetPlatformStr -}
       
 -- The logic for both Darwin/PowerPC and Darwin/x86 ends up being the same.
 process_asm_block_darwin :: B.ByteString -> SplitM B.ByteString
@@ -566,11 +568,15 @@ process_asm_block_sparc str
                      then replace str "" $ (mkRegex' "_?__stg_split_marker.*:\n") `matchOnceText` str
                      else let res = combine str $ (mkRegex' "(\\.text\n\t\\.align .\n)\t\\.global\\s+.*_?__stg_split_marker.*\n\t\\.proc.*\n") `matchOnceText` str
                           in combine res $ (mkRegex' "(\t\\.align .\n)\t\\.global\\s+.*_?__stg_split_marker.*\n\t\\.proc.*\n") `matchOnceText` res
-        
+              
        session <- get
        -- make sure the .hc filename gets saved; not just ghc*.c (temp name)
        let ifile = B.pack $ ".stabs \"" ++ _ifile session ++ "_root.hc\""
            ren   = replace str' ifile $ (mkRegex' "^\\.stabs \"(ghc\\d+\\.c)\"") `matchOnceText` str' -- HACK HACK
+            
+       debug "---"
+       debug $ show ren
+       debug "---"
             
        -- remove/record any literal constants defined here
        val <- while "(\t\\.align .\n\\.?(L?LC\\d+):\n(\t\\.asci[iz].*\n)+)" ren process

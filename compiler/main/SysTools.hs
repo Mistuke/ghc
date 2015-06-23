@@ -275,15 +275,7 @@ initSysTools mbMinusB
 
        touch_path <- getSetting "touch command"
 
-       let -- On Win32 we don't want to rely on #!/bin/perl, so we prepend
-           -- a call to Perl to get the invocation of split.
-           -- On Unix, scripts are invoked using the '#!' method.  Binary
-           -- installations of GHC on Unix place the correct line on the
-           -- front of the script at installation time, so we don't want
-           -- to wire-in our knowledge of $(PERL) on the host system here.
-           (split_prog,  split_args)
-             | isWindowsHost = (perl_path,    [Option split_script])
-             | otherwise     = (split_script, [])
+       let (split_prog,  split_args) = (split_script, [])
        mkdll_prog <- getSetting "dllwrap command"
        let mkdll_args = []
 
