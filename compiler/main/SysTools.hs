@@ -255,7 +255,6 @@ initSysTools mbMinusB
        ldSupportsBuildId       <- getBooleanSetting "ld supports build-id"
        ldSupportsFilelist      <- getBooleanSetting "ld supports filelist"
        ldIsGnuLd               <- getBooleanSetting "ld is GNU ld"
-       perl_path <- getSetting "perl command"
 
        let pkgconfig_path = installed "package.conf.d"
            ghc_usage_msg_path  = installed "ghc-usage.txt"
