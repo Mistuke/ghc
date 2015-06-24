@@ -11,11 +11,12 @@
 # -----------------------------------------------------------------------------
 
 driver/ghc-split_USES_CABAL = YES
+driver/ghc-split_TOPDIR = YES
 driver/ghc-split_PACKAGE = ghc-split
-driver/ghc-split_dist-install_INSTALL = YES
-driver/ghc-split_dist-install_PROGNAME = ghc-split
-driver/ghc-split_dist-install_INSTALL_INPLACE = YES
-driver/ghc-split_dist-install_WANT_BINDIST_WRAPPER = YES
+driver/ghc-split_dist_PROGNAME = ghc-split
+driver/ghc-split_dist_INSTALL = YES
+driver/ghc-split_dist_INSTALL_INPLACE = YES
+driver/ghc-split_dist_WANT_BINDIST_WRAPPER = YES
 
-$(eval $(call build-prog,driver/ghc-split,dist-install,0))
-$(eval $(call bindist,driver/ghc-split,ghc.mk))    
+$(eval $(call build-prog,driver/ghc-split,dist,0))
+$(eval $(call bindist,driver/ghc-split,ghc.mk))

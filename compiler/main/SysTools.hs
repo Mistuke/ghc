@@ -264,7 +264,7 @@ initSysTools mbMinusB
              -- architecture-specific stuff is done when building Config.hs
            unlit_path = installed cGHC_UNLIT_PGM
 
-             -- split is a Perl script
+             -- ghc-split is a Haskell executable script
            split_script  = installed cGHC_SPLIT_PGM
 
        windres_path <- getSetting "windres command"
