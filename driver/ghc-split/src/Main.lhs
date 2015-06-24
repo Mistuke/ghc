@@ -485,14 +485,14 @@ replace str v m = let (l, a, r) = maybe ("", str, "") (sub . extract) m
 replaceM str v m = fmap ((\(l, _, r) -> B.concat [l,v,r]) . extract) m
           
 process_asm_block :: B.ByteString -> SplitM B.ByteString
-process_asm_block str = process_asm_block_sparc str
-{-  = case targetPlatform of
+process_asm_block str
+   = case targetPlatform of
       (_      , Apple, Darwin) -> process_asm_block_darwin        str
       (Sparc  , _    ,  _    ) -> process_asm_block_sparc         str
       (X86    , _    ,  _    ) -> process_asm_block_iX86          str
       (X86_64 , _    ,  _    ) -> process_asm_block_x86_64        str
       (PowerPC, _    ,  Linux) -> process_asm_block_powerpc_linux str
-      _                        -> liftIO $ die $ "no process_asm_block for " ++ targetPlatformStr -}
+      _                        -> liftIO $ die $ "no process_asm_block for " ++ targetPlatformStr
       
 -- The logic for both Darwin/PowerPC and Darwin/x86 ends up being the same.
 process_asm_block_darwin :: B.ByteString -> SplitM B.ByteString

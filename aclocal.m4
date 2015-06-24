@@ -461,7 +461,6 @@ AC_DEFUN([FP_SETTINGS],
         SettingsHaskellCPPFlags="$HaskellCPPArgs"
         SettingsLdCommand="\$topdir/../${mingw_bin_prefix}ld.exe"
         SettingsArCommand="\$topdir/../${mingw_bin_prefix}ar.exe"
-        SettingsPerlCommand='$topdir/../perl/perl.exe'
         SettingsDllWrapCommand="\$topdir/../${mingw_bin_prefix}dllwrap.exe"
         SettingsWindresCommand="\$topdir/../${mingw_bin_prefix}windres.exe"
         SettingsTouchCommand='$topdir/touchy.exe'
