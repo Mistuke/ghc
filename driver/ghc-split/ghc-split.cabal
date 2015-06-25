@@ -45,12 +45,21 @@ executable ghc-split
                           Text.Regex.Base.Context,
                           Text.Regex.Base.Impl,
                           
-                          Text.Regex.PCRE
-                          Text.Regex.PCRE.Wrap
-                          Text.Regex.PCRE.String
-                          Text.Regex.PCRE.Sequence
-                          Text.Regex.PCRE.ByteString
-                          Text.Regex.PCRE.ByteString.Lazy
+                          Text.Regex.PCRE,
+                          Text.Regex.PCRE.Wrap,
+                          Text.Regex.PCRE.String,
+                          Text.Regex.PCRE.Sequence,
+                          Text.Regex.PCRE.ByteString,
+                          Text.Regex.PCRE.ByteString.Lazy,
+                          
+                          Data,
+                          Utils,
+                          Session,
+                          
+                          Darwin,
+                          PowerPC,
+                          Sparc,
+                          X86_X86_64
   hs-source-dirs: src
   GHC-Options:            -Wall -O2
 

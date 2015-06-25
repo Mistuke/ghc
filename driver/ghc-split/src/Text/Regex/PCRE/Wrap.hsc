@@ -214,7 +214,7 @@ getNumSubs' :: Ptr PCRE -> IO CInt
 getNumSubs' pcre_ptr =
   alloca $ \st -> do -- (st :: Ptr CInt)
     when (st == nullPtr) (fail "Text.Regex.PCRE.Wrap.getNumSubs' could not allocate a CInt!!!")
-    c_pcre_fullinfo pcre_ptr nullPtr pcreInfoCapturecount st
+    _ <- c_pcre_fullinfo pcre_ptr nullPtr pcreInfoCapturecount st
     peek st
 
 wrapTest startOffset (Regex pcre_fptr _ flags) (cstr,len) = do
@@ -337,7 +337,7 @@ getVersion = unsafePerformIO $ do
 configUTF8 = unsafePerformIO $
   alloca $ \ptrVal -> do -- (ptrVal :: Ptr CInt)
     when (ptrVal == nullPtr) (fail "Text.Regex.PCRE.Wrap.configUTF8 could not alloca CInt!!!")
-    c_pcre_config pcreConfigUtf8 ptrVal
+    _ <- c_pcre_config pcreConfigUtf8 ptrVal
     val <- peek ptrVal
     case val of
       (1 :: CInt) -> return True
