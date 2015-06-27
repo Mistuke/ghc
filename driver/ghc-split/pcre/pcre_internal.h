@@ -384,7 +384,7 @@ neither (there some non-Unix environments where this is the case). */
 #ifdef HAVE_BCOPY
 #define memmove(a, b, c) bcopy(b, a, c)
 #else  /* HAVE_BCOPY */
-static void *
+inline static void *
 pcre_memmove(void *d, const void *s, size_t n)
 {
 size_t i;

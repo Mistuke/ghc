@@ -6508,7 +6508,7 @@ for (;; ptr++)
       {
       int i, set, unset, namelen;
       int *optset;
-      const pcre_uchar *name;
+      const pcre_uchar *name = NULL;
       pcre_uchar *slot;
 
       switch (*(++ptr))
