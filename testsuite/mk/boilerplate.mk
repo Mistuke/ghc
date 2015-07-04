@@ -131,6 +131,10 @@ ifeq "$(HPC)" ""
 HPC := $(call find_tool,hpc)
 endif
 
+ifeq "$(GHC_SPLIT)" ""
+GHC_SPLIT := $(call find_tool,ghc-split)
+endif
+
 $(eval $(call canonicaliseExecutable,TEST_HC))
 ifeq "$(shell test -x '$(TEST_HC)' && echo exists)" ""
 $(error Cannot find ghc: $(TEST_HC))
@@ -160,6 +164,11 @@ endif
 $(eval $(call canonicaliseExecutable,HPC))
 ifeq "$(shell test -x '$(HPC)' && echo exists)" ""
 $(error Cannot find hpc: $(HPC))
+endif
+
+$(eval $(call canonicaliseExecutable,GHC_SPLIT))
+ifeq "$(shell test -x '$(GHC_SPLIT)' && echo exists)" ""
+$(error Cannot find ghc-splitt: $(GHC_SPLIT))
 endif
 
 # Be careful when using this. On Windows it ends up looking like
