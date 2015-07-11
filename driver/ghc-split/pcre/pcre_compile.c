@@ -4464,6 +4464,7 @@ for (;; ptr++)
   /* Get next character in the pattern */
 
   c = *ptr;
+  recno = 0;
 
   /* If we are at the end of a nested substitution, revert to the outer level
   string. Nesting only happens one level deep. */
@@ -6507,6 +6508,7 @@ for (;; ptr++)
     else if (*ptr == CHAR_QUESTION_MARK)
       {
       int i, set, unset, namelen;
+      namelen = 0;
       int *optset;
       const pcre_uchar *name = NULL;
       pcre_uchar *slot;

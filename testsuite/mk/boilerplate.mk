@@ -168,7 +168,7 @@ endif
 
 $(eval $(call canonicaliseExecutable,GHC_SPLIT))
 ifeq "$(shell test -x '$(GHC_SPLIT)' && echo exists)" ""
-$(error Cannot find ghc-splitt: $(GHC_SPLIT))
+$(error Cannot find ghc-split: $(GHC_SPLIT))
 endif
 
 # Be careful when using this. On Windows it ends up looking like

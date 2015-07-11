@@ -649,7 +649,7 @@ int length;
 int max;
 int min;
 unsigned int number;
-int offset;
+int offset = 0;
 unsigned int op;
 pcre_int32 save_capture_last;
 int save_offset1, save_offset2, save_offset3;
