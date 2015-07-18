@@ -219,6 +219,7 @@ quote_path = $(if $1,"$1")
 RUNTEST_OPTS +=  \
 	--config 'compiler=$(call quote_path,$(TEST_HC))' \
 	--config 'ghc_pkg=$(call quote_path,$(GHC_PKG))' \
+	--config 'ghc_split=$(call quote_path,$(GHC_SPLIT))' \
 	--config 'haddock=$(call quote_path,$(HADDOCK))' \
 	--config 'hp2ps=$(call quote_path,$(HP2PS_ABS))' \
 	--config 'hpc=$(call quote_path,$(HPC))' \
