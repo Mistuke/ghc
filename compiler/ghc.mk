@@ -48,92 +48,47 @@ endif
 compiler/stage%/build/Config.hs : mk/config.mk mk/project.mk | $$(dir $$@)/.
 	$(call removeFiles,$@)
 	@echo 'Creating $@ ... '
-<<<<<<< HEAD
-	@echo '{-# LANGUAGE CPP #-}'                                        >> $@
-	@echo 'module Config where'                                         >> $@
-	@echo                                                               >> $@
-	@echo '#include "ghc_boot_platform.h"'                              >> $@
-	@echo                                                               >> $@
-	@echo 'data IntegerLibrary = IntegerGMP'                            >> $@
-	@echo '                    | IntegerSimple'                         >> $@
-	@echo '                    deriving Eq'                             >> $@
-	@echo                                                               >> $@
-	@echo 'cBuildPlatformString :: String'                              >> $@
-	@echo 'cBuildPlatformString = BuildPlatform_NAME'                   >> $@
-	@echo 'cHostPlatformString :: String'                               >> $@
-	@echo 'cHostPlatformString = HostPlatform_NAME'                     >> $@
-	@echo 'cTargetPlatformString :: String'                             >> $@
-	@echo 'cTargetPlatformString = TargetPlatform_NAME'                 >> $@
-	@echo                                                               >> $@
-	@echo 'cProjectName          :: String'                             >> $@
-	@echo 'cProjectName          = "$(ProjectName)"'                    >> $@
-	@echo 'cProjectGitCommitId   :: String'				    >> $@
-	@echo 'cProjectGitCommitId   = "$(ProjectGitCommitId)"'		    >> $@
-	@echo 'cProjectVersion       :: String'                             >> $@
-	@echo 'cProjectVersion       = "$(ProjectVersion)"'                 >> $@
-	@echo 'cProjectVersionInt    :: String'                             >> $@
-	@echo 'cProjectVersionInt    = "$(ProjectVersionInt)"'              >> $@
-	@echo 'cProjectPatchLevel    :: String'                             >> $@
-	@echo 'cProjectPatchLevel    = "$(ProjectPatchLevel)"'              >> $@
-	@echo 'cProjectPatchLevel1   :: String'                             >> $@
-	@echo 'cProjectPatchLevel1   = "$(ProjectPatchLevel1)"'             >> $@
-	@echo 'cProjectPatchLevel2   :: String'                             >> $@
-	@echo 'cProjectPatchLevel2   = "$(ProjectPatchLevel2)"'             >> $@
-	@echo 'cBooterVersion        :: String'                             >> $@
-	@echo 'cBooterVersion        = "$(GhcVersion)"'                     >> $@
-	@echo 'cStage                :: String'                             >> $@
-	@echo 'cStage                = show (STAGE :: Int)'                 >> $@
-	@echo 'cIntegerLibrary       :: String'                             >> $@
-	@echo 'cIntegerLibrary       = "$(INTEGER_LIBRARY)"'                >> $@
-	@echo 'cIntegerLibraryType   :: IntegerLibrary'                     >> $@
+	@echo '{-# LANGUAGE CPP #-}'                                            >> $@
+	@echo 'module Config where'                                             >> $@
+	@echo                                                                   >> $@
+	@echo '#include "ghc_boot_platform.h"'                                  >> $@
+	@echo                                                                   >> $@
+	@echo 'data IntegerLibrary = IntegerGMP'                                >> $@
+	@echo '                    | IntegerSimple'                             >> $@
+	@echo '                    deriving Eq'                                 >> $@
+	@echo                                                                   >> $@
+	@echo 'cBuildPlatformString :: String'                                  >> $@
+	@echo 'cBuildPlatformString = BuildPlatform_NAME'                       >> $@
+	@echo 'cHostPlatformString :: String'                                   >> $@
+	@echo 'cHostPlatformString = HostPlatform_NAME'                         >> $@
+	@echo 'cTargetPlatformString :: String'                                 >> $@
+	@echo 'cTargetPlatformString = TargetPlatform_NAME'                     >> $@
+	@echo                                                                   >> $@
+	@echo 'cProjectName          :: String'                                 >> $@
+	@echo 'cProjectName          = "$(ProjectName)"'                        >> $@
+	@echo 'cProjectGitCommitId   :: String'				                    >> $@
+	@echo 'cProjectGitCommitId   = "$(ProjectGitCommitId)"'		            >> $@
+	@echo 'cProjectVersion       :: String'                                 >> $@
+	@echo 'cProjectVersion       = "$(ProjectVersion)"'                     >> $@
+	@echo 'cProjectVersionInt    :: String'                                 >> $@
+	@echo 'cProjectVersionInt    = "$(ProjectVersionInt)"'                  >> $@
+	@echo 'cProjectPatchLevel    :: String'                                 >> $@
+	@echo 'cProjectPatchLevel    = "$(ProjectPatchLevel)"'                  >> $@
+	@echo 'cProjectPatchLevel1   :: String'                                 >> $@
+	@echo 'cProjectPatchLevel1   = "$(ProjectPatchLevel1)"'                 >> $@
+	@echo 'cProjectPatchLevel2   :: String'                                 >> $@
+	@echo 'cProjectPatchLevel2   = "$(ProjectPatchLevel2)"'                 >> $@
+	@echo 'cBooterVersion        :: String'                                 >> $@
+	@echo 'cBooterVersion        = "$(GhcVersion)"'                         >> $@
+	@echo 'cStage                :: String'                                 >> $@
+	@echo 'cStage                = show (STAGE :: Int)'                     >> $@
+	@echo 'cIntegerLibrary       :: String'                                 >> $@
+	@echo 'cIntegerLibrary       = "$(INTEGER_LIBRARY)"'                    >> $@
+	@echo 'cIntegerLibraryType   :: IntegerLibrary'                         >> $@
 ifeq "$(INTEGER_LIBRARY)" "integer-gmp"
-	@echo 'cIntegerLibraryType   = IntegerGMP'                          >> $@
-=======
-	@echo '{-# LANGUAGE CPP #-}'                                           >> $@
-	@echo 'module Config where'                                            >> $@
-	@echo                                                                  >> $@
-	@echo '#include "ghc_boot_platform.h"'                                 >> $@
-	@echo                                                                  >> $@
-	@echo 'data IntegerLibrary = IntegerGMP'                               >> $@
-	@echo '                    | IntegerGMP2'                              >> $@
-	@echo '                    | IntegerSimple'                            >> $@
-	@echo '                    deriving Eq'                                >> $@
-	@echo                                                                  >> $@
-	@echo 'cBuildPlatformString :: String'                                 >> $@
-	@echo 'cBuildPlatformString = BuildPlatform_NAME'                      >> $@
-	@echo 'cHostPlatformString :: String'                                  >> $@
-	@echo 'cHostPlatformString = HostPlatform_NAME'                        >> $@
-	@echo 'cTargetPlatformString :: String'                                >> $@
-	@echo 'cTargetPlatformString = TargetPlatform_NAME'                    >> $@
-	@echo                                                                  >> $@
-	@echo 'cProjectName          :: String'                                >> $@
-	@echo 'cProjectName          = "$(ProjectName)"'                       >> $@
-	@echo 'cProjectGitCommitId   :: String'				                   >> $@
-	@echo 'cProjectGitCommitId   = "$(ProjectGitCommitId)"'		           >> $@
-	@echo 'cProjectVersion       :: String'                                >> $@
-	@echo 'cProjectVersion       = "$(ProjectVersion)"'                    >> $@
-	@echo 'cProjectVersionInt    :: String'                                >> $@
-	@echo 'cProjectVersionInt    = "$(ProjectVersionInt)"'                 >> $@
-	@echo 'cProjectPatchLevel    :: String'                                >> $@
-	@echo 'cProjectPatchLevel    = "$(ProjectPatchLevel)"'                 >> $@
-	@echo 'cProjectPatchLevel1   :: String'                                >> $@
-	@echo 'cProjectPatchLevel1   = "$(ProjectPatchLevel1)"'                >> $@
-	@echo 'cProjectPatchLevel2   :: String'                                >> $@
-	@echo 'cProjectPatchLevel2   = "$(ProjectPatchLevel2)"'                >> $@
-	@echo 'cBooterVersion        :: String'                                >> $@
-	@echo 'cBooterVersion        = "$(GhcVersion)"'                        >> $@
-	@echo 'cStage                :: String'                                >> $@
-	@echo 'cStage                = show (STAGE :: Int)'                    >> $@
-	@echo 'cIntegerLibrary       :: String'                                >> $@
-	@echo 'cIntegerLibrary       = "$(INTEGER_LIBRARY)"'                   >> $@
-	@echo 'cIntegerLibraryType   :: IntegerLibrary'                        >> $@
-ifeq "$(INTEGER_LIBRARY)" "integer-gmp"
-	@echo 'cIntegerLibraryType   = IntegerGMP'                             >> $@
-else ifeq "$(INTEGER_LIBRARY)" "integer-gmp2"
-	@echo 'cIntegerLibraryType   = IntegerGMP2'                            >> $@
->>>>>>> Split: wired ghc-split in but full path is wrong
+	@echo 'cIntegerLibraryType   = IntegerGMP'                              >> $@
 else ifeq "$(INTEGER_LIBRARY)" "integer-simple"
-	@echo 'cIntegerLibraryType   = IntegerSimple'                          >> $@
+	@echo 'cIntegerLibraryType   = IntegerSimple'                           >> $@
 else ifneq "$(CLEANING)" "YES"
 $(error Unknown integer library)
 endif

@@ -120,7 +120,7 @@ newSession asm_file tmp_prefix out_file hwnd
       
 -- | Indicates whether debug information should be printed      
 dump_asm_splitting_info :: Bool
-dump_asm_splitting_info = True
+dump_asm_splitting_info = False
 
 optimiseC :: Bool
 optimiseC = False

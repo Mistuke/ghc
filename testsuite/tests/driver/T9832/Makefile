@@ -13,7 +13,7 @@ clean:
 	rm -rf *_split
 
 T9832: clean
-	'$(TEST_HC)' $(TEST_HC_OPTS_NO_RECOMP) -split-obj --make -v0 T9832hs
+	'$(TEST_HC)' $(TEST_HC_OPTS_NO_RECOMP) -split-objs --make -v0 T9832.hs
 	
 # T9832a: clean
 # 	cd PowerPC
