@@ -511,6 +511,9 @@ utils/compare_sizes/dist-install/package-data.mk: compiler/stage2/package-data.m
 utils/runghc/dist-install/package-data.mk: compiler/stage2/package-data.mk
 utils/mkUserGuidePart/dist/package-data.mk: compiler/stage2/package-data.mk
 
+# add driver utilities
+driver/ghc-split/dist/package-data.mk: compiler/stage2/package-data.mk
+
 # add the final package.conf dependency: ghc-prim depends on RTS
 libraries/ghc-prim/dist-install/package-data.mk : rts/dist/package.conf.inplace
 endif
