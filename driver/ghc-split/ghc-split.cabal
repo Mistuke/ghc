@@ -8,8 +8,12 @@ stability:            experimental
 synopsis:             Assembly file splitter
 description:          Assembly file splitter
 category:             Development
-Extra-Source-Files:     cbits/engine.c cbits/cclass.h cbits/cname.h
-                        cbits/regex2.h cbits/regex.h cbits/utils.h
+Extra-Source-Files:   cbits/engine.c 
+                      cbits/cclass.h 
+                      cbits/cname.h
+                      cbits/regex2.h 
+                      cbits/regex.h 
+                      cbits/utils.h
                         
 executable ghc-split
   default-language: Haskell2010
@@ -25,10 +29,15 @@ executable ghc-split
     containers,
     transformers 
   
-  default-extensions: MultiParamTypeClasses, FunctionalDependencies, CPP,
-                      ForeignFunctionInterface, GeneralizedNewtypeDeriving,
-                      FlexibleContexts, TypeSynonymInstances,
-                      FlexibleInstances, ScopedTypeVariables
+  default-extensions: MultiParamTypeClasses     , 
+                      FunctionalDependencies    , 
+                      CPP                       ,
+                      ForeignFunctionInterface  , 
+                      GeneralizedNewtypeDeriving,
+                      FlexibleContexts          , 
+                      TypeSynonymInstances      ,
+                      FlexibleInstances         , 
+                      ScopedTypeVariables
   
   main-is: Main.lhs
   CPP-Options: "-DSPLIT_BASE=1"
@@ -37,7 +46,27 @@ executable ghc-split
   Include-dirs: pcre
   Includes: pcre.h config.h
   C-sources:
-      pcre/pcre_byte_order.c pcre/pcre_compile.c pcre/pcre_config.c pcre/pcre_chartables.c pcre/pcre_dfa_exec.c pcre/pcre_exec.c pcre/pcre_fullinfo.c pcre/pcre_get.c pcre/pcre_globals.c pcre/pcre_jit_compile.c pcre/pcre_maketables.c pcre/pcre_newline.c pcre/pcre_ord2utf8.c pcre/pcre_refcount.c pcre/pcre_string_utils.c pcre/pcre_study.c pcre/pcre_tables.c pcre/pcre_ucd.c pcre/pcre_valid_utf8.c pcre/pcre_version.c pcre/pcre_xclass.c
+      pcre/pcre_byte_order.c 
+      pcre/pcre_compile.c 
+      pcre/pcre_config.c 
+      pcre/pcre_chartables.c 
+      pcre/pcre_dfa_exec.c 
+      pcre/pcre_exec.c 
+      pcre/pcre_fullinfo.c 
+      pcre/pcre_get.c 
+      pcre/pcre_globals.c 
+      pcre/pcre_jit_compile.c 
+      pcre/pcre_maketables.c 
+      pcre/pcre_newline.c 
+      pcre/pcre_ord2utf8.c 
+      pcre/pcre_refcount.c 
+      pcre/pcre_string_utils.c 
+      pcre/pcre_study.c 
+      pcre/pcre_tables.c 
+      pcre/pcre_ucd.c 
+      pcre/pcre_valid_utf8.c 
+      pcre/pcre_version.c 
+      pcre/pcre_xclass.c
 
     
   Other-Modules:          Text.Regex.Base, 
