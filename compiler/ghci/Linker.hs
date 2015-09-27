@@ -631,30 +631,37 @@ getLinkDeps hsc_env hpt pls replace_osuf span mods
 
     get_linkable osuf mod_name      -- A home-package module
         | Just mod_info <- lookupUFM hpt mod_name
-        = adjust_linkable (Maybes.expectJust "getLinkDeps" (hm_linkable mod_info))
+        = adjust_linkable (hm_iface mod_info)
+            (Maybes.expectJust "getLinkDeps" (hm_linkable mod_info))
         | otherwise
         = do    -- It's not in the HPT because we are in one shot mode,
                 -- so use the Finder to get a ModLocation...
+                -- ezyang: I don't actually know how to trigger this codepath,
+                -- seeing as this is GHCi logic. Template Haskell, maybe?
              mb_stuff <- findHomeModule hsc_env mod_name
              case mb_stuff of
-                  Found loc mod -> found loc mod
+                  FoundExact loc mod -> found loc mod
                   _ -> no_obj mod_name
         where
             found loc mod = do {
                 -- ...and then find the linkable for it
                mb_lnk <- findObjectLinkableMaybe mod loc ;
+               iface <- initIfaceCheck hsc_env $
+                            loadUserInterface False (text "getLinkDeps2") mod ;
                case mb_lnk of {
                   Nothing  -> no_obj mod ;
-                  Just lnk -> adjust_linkable lnk
+                  Just lnk -> adjust_linkable iface lnk
               }}
 
-            adjust_linkable lnk
+            adjust_linkable iface lnk
+                -- Signatures have no linkables! Don't return one.
+                | mi_hsc_src iface == HsigFile = return Nothing
                 | Just new_osuf <- replace_osuf = do
                         new_uls <- mapM (adjust_ul new_osuf)
                                         (linkableUnlinked lnk)
-                        return lnk{ linkableUnlinked=new_uls }
+                        return (Just lnk{ linkableUnlinked=new_uls })
                 | otherwise =
-                        return lnk
+                        return (Just lnk)
 
             adjust_ul new_osuf (DotO file) = do
                 MASSERT(osuf `isSuffixOf` file)
@@ -1136,6 +1143,11 @@ linkPackage dflags pkg
             dlls       = [ dll  | DLL dll        <- classifieds ]
             objs       = [ obj  | Object obj     <- classifieds ]
             archs      = [ arch | Archive arch   <- classifieds ]
+            
+        -- Add directories to library search paths
+        let dll_paths  = map takeDirectory known_dlls
+            all_paths  = nub $ map normalise $ dll_paths ++ dirs
+        pathCache <- mapM addLibrarySearchPath all_paths
 
         maybePutStr dflags
             ("Loading package " ++ sourcePackageIdString pkg ++ " ... ")
@@ -1144,6 +1156,9 @@ linkPackage dflags pkg
         when (packageName pkg `notElem` partOfGHCi) $ do
             loadFrameworks platform pkg
             mapM_ load_dyn (known_dlls ++ map (mkSOName platform) dlls)
+            
+        -- DLLs are loaded, reset the search paths
+        _ <- mapM removeLibrarySearchPath pathCache
 
         -- After loading all the DLLs, we can load the static objects.
         -- Ordering isn't important here, because we do one final link

@@ -1111,10 +1111,12 @@ typedef struct _RtsSymbolVal {
       SymI_HasProto(stg_yield_to_interpreter)                           \
       SymI_HasProto(stg_block_noregs)                                   \
       SymI_HasProto(stg_block_takemvar)                                 \
-      SymI_HasProto(stg_block_readmvar)                           \
+      SymI_HasProto(stg_block_readmvar)                                 \
       SymI_HasProto(stg_block_putmvar)                                  \
       MAIN_CAP_SYM                                                      \
       SymI_HasProto(addDLL)                                             \
+      SymI_HasProto(addLibrarySearchPath)                               \
+      SymI_HasProto(removeLibrarySearchPath)                            \
       SymI_HasProto(__int_encodeDouble)                                 \
       SymI_HasProto(__word_encodeDouble)                                \
       SymI_HasProto(__int_encodeFloat)                                  \
@@ -2030,7 +2032,7 @@ addDLL( pathchar *dll_name )
    OpenedDLL* o_dll;
    HINSTANCE  instance;
 
-   /* debugBelch("\naddDLL; dll_name = `%s'\n", dll_name); */
+   IF_DEBUG(linker, debugBelch("\naddDLL; dll_name = `%" PATH_FMT "'\n", dll_name));
 
    /* See if we've already got it, and ignore if so. */
    for (o_dll = opened_dlls; o_dll != NULL; o_dll = o_dll->next) {
@@ -2048,20 +2050,24 @@ addDLL( pathchar *dll_name )
         point character (.) to indicate that the module name has no
         extension. */
 
+   DWORD flags;
+   // flags = LOAD_LIBRARY_SEARCH_USER_DIRS | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+   flags = LOAD_LIBRARY_AS_IMAGE_RESOURCE;
+
    size_t bufsize = pathlen(dll_name) + 10;
    buf = stgMallocBytes(bufsize * sizeof(wchar_t), "addDLL");
    snwprintf(buf, bufsize, L"%s.DLL", dll_name);
-   instance = LoadLibraryW(buf);
+   instance = LoadLibraryExW(buf, NULL, flags);
    if (instance == NULL) {
        if (GetLastError() != ERROR_MOD_NOT_FOUND) goto error;
        // KAA: allow loading of drivers (like winspool.drv)
        snwprintf(buf, bufsize, L"%s.DRV", dll_name);
-       instance = LoadLibraryW(buf);
+       instance = LoadLibraryExW(buf, NULL, flags);
        if (instance == NULL) {
            if (GetLastError() != ERROR_MOD_NOT_FOUND) goto error;
            // #1883: allow loading of unix-style libfoo.dll DLLs
            snwprintf(buf, bufsize, L"lib%s.DLL", dll_name);
-           instance = LoadLibraryW(buf);
+           instance = LoadLibraryExW(buf, NULL, flags);
            if (instance == NULL) {
                goto error;
            }
@@ -2075,7 +2081,7 @@ addDLL( pathchar *dll_name )
 
 error:
    stgFree(buf);
-   sysErrorBelch("%" PATH_FMT, dll_name);
+   sysErrorBelch("addDLL: %" PATH_FMT, dll_name);
 
    /* LoadLibrary failed; return a ptr to the error msg. */
    return "addDLL: could not load DLL";
@@ -2083,6 +2089,52 @@ error:
 #  else
    barf("addDLL: not implemented on this platform");
 #  endif
+}
+
+/* -----------------------------------------------------------------------------
+* appends a directory to the process DLL Load path so LoadLibrary can find it
+*
+* Returns: 0 on failure, nozero on success
+*/
+HsPtr addLibrarySearchPath(pathchar* dll_path)
+{
+    debugBelch("\naddLibrarySearchPath: dll_path = `%" PATH_FMT "'\n", dll_path);
+
+#if defined(_OBJFORMAT_PEi386)
+    HsPtr result = AddDllDirectory(dll_path);
+
+    if (0 == result) {
+        sysErrorBelch("addLibrarySearchPath: %" PATH_FMT " (Win32 error %lu)", dll_path, GetLastError());
+        return 0;
+    }
+
+    return result;
+#else
+    return 0;
+#endif
+}
+
+/* -----------------------------------------------------------------------------
+* removes a directory from the process DLL Load path
+*
+* Returns: 0 on failure, nozero on success
+*/
+HsBool removeLibrarySearchPath(HsPtr dll_path_index)
+{
+    debugBelch("\nremoveLibrarySearchPath: dll_path = `%p'\n", dll_path_index);
+
+#if defined(_OBJFORMAT_PEi386)
+    HsBool result = RemoveDllDirectory(dll_path_index);
+
+    if (0 == result) {
+        sysErrorBelch("removeLibrarySearchPath: %p (Win32 error %lu)", dll_path_index, GetLastError());
+        return 0;
+    }
+
+    return result;
+#else
+    return 0;
+#endif
 }
 
 /* -----------------------------------------------------------------------------
