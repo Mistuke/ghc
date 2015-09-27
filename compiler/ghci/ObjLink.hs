@@ -9,14 +9,16 @@
 -- | Primarily, this module consists of an interface to the C-land
 -- dynamic linker.
 module ObjLink (
-   initObjLinker,        -- :: IO ()
-   loadDLL,              -- :: String -> IO (Maybe String)
-   loadArchive,          -- :: String -> IO ()
-   loadObj,              -- :: String -> IO ()
-   unloadObj,            -- :: String -> IO ()
-   insertSymbol,         -- :: String -> String -> Ptr a -> IO ()
-   lookupSymbol,         -- :: String -> IO (Maybe (Ptr a))
-   resolveObjs           -- :: IO SuccessFlag
+   initObjLinker,          -- :: IO ()
+   loadDLL,                -- :: String -> IO (Maybe String)
+   loadArchive,            -- :: String -> IO ()
+   loadObj,                -- :: String -> IO ()
+   unloadObj,              -- :: String -> IO ()
+   insertSymbol,           -- :: String -> String -> Ptr a -> IO ()
+   lookupSymbol,           -- :: String -> IO (Maybe (Ptr a))
+   resolveObjs,            -- :: IO SuccessFlag
+   addLibrarySearchPath,   -- :: CFilePath -> IO (Ptr ())
+   removeLibrarySearchPath -- :: Ptr() -> IO Bool
   )  where
 
 import Panic
@@ -75,11 +77,19 @@ loadDLL str0 = do
      str | isWindowsHost = dropExtension str0
          | otherwise     = str0
   --
-  maybe_errmsg <- withFilePath str $ \dll -> c_addDLL dll
+  maybe_errmsg <- withFilePath (map normslash str) $ \dll -> c_addDLL dll
   if maybe_errmsg == nullPtr
         then return Nothing
         else do str <- peekCString maybe_errmsg
                 return (Just str)
+                
+     -- It is very important we normalize slashes. LoadLibrary does not
+     -- support forward slashes (/) in paths and insists on backward slashes (/)
+     -- which is a problem since the tryGcc function will always return msys paths
+     -- which use forward slashes.
+    where normslash '/' = '\\' 
+          normslash x = x 
+
 
 loadArchive :: String -> IO ()
 loadArchive str = do
@@ -98,6 +108,13 @@ unloadObj str =
    withFilePath str $ \c_str -> do
      r <- c_unloadObj c_str
      when (r == 0) (panic ("unloadObj " ++ show str ++ ": failed"))
+     
+addLibrarySearchPath :: String -> IO (Ptr ())
+addLibrarySearchPath str =
+   withFilePath str $ \c_str -> c_addLibrarySearchPath c_str
+   
+removeLibrarySearchPath :: Ptr () -> IO Bool
+removeLibrarySearchPath = c_removeLibrarySearchPath
 
 resolveObjs :: IO SuccessFlag
 resolveObjs = do
@@ -108,11 +125,13 @@ resolveObjs = do
 -- Foreign declarations to RTS entry points which does the real work;
 -- ---------------------------------------------------------------------------
 
-foreign import ccall unsafe "addDLL"       c_addDLL :: CFilePath -> IO CString
-foreign import ccall unsafe "initLinker"   initObjLinker :: IO ()
-foreign import ccall unsafe "insertSymbol" c_insertSymbol :: CFilePath -> CString -> Ptr a -> IO ()
-foreign import ccall unsafe "lookupSymbol" c_lookupSymbol :: CString -> IO (Ptr a)
-foreign import ccall unsafe "loadArchive"  c_loadArchive :: CFilePath -> IO Int
-foreign import ccall unsafe "loadObj"      c_loadObj :: CFilePath -> IO Int
-foreign import ccall unsafe "unloadObj"    c_unloadObj :: CFilePath -> IO Int
-foreign import ccall unsafe "resolveObjs"  c_resolveObjs :: IO Int
+foreign import ccall unsafe "addDLL"                  c_addDLL                  :: CFilePath -> IO CString
+foreign import ccall unsafe "initLinker"              initObjLinker             :: IO ()
+foreign import ccall unsafe "insertSymbol"            c_insertSymbol            :: CFilePath -> CString -> Ptr a -> IO ()
+foreign import ccall unsafe "lookupSymbol"            c_lookupSymbol            :: CString -> IO (Ptr a)
+foreign import ccall unsafe "loadArchive"             c_loadArchive             :: CFilePath -> IO Int
+foreign import ccall unsafe "loadObj"                 c_loadObj                 :: CFilePath -> IO Int
+foreign import ccall unsafe "unloadObj"               c_unloadObj               :: CFilePath -> IO Int
+foreign import ccall unsafe "resolveObjs"             c_resolveObjs             :: IO Int
+foreign import ccall unsafe "addLibrarySearchPath"    c_addLibrarySearchPath    :: CFilePath -> IO (Ptr ())
+foreign import ccall unsafe "removeLibrarySearchPath" c_removeLibrarySearchPath :: Ptr() -> IO Bool
