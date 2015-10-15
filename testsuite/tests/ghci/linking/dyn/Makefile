@@ -21,3 +21,10 @@ load_short_name:
 .PHONY: compile_libAS
 compile_libAS:
 	gcc -shared A.c -o $(call DLL,AS)
+
+.PHONY: compile_libAB_dep
+compile_libAB_dep:
+	rm -rf bin_dep
+	mkdir bin_dep
+	gcc -shared A.c -o "bin_dep/$(call DLL,A)"
+	gcc -shared B.c -o "bin_dep/$(call DLL,B)" -lA -L"$(PWD)/bin_dep"

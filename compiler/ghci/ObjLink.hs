@@ -87,9 +87,8 @@ loadDLL str0 = do
      -- support forward slashes (/) in paths and insists on backward slashes (/)
      -- which is a problem since the tryGcc function will always return msys paths
      -- which use forward slashes.
-    where normslash '/' = '\\' 
-          normslash x = x 
-
+    where normslash '/' = '\\'
+          normslash x = x
 
 loadArchive :: String -> IO ()
 loadArchive str = do

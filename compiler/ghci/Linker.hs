@@ -294,44 +294,55 @@ linkCmdLineLibs :: DynFlags -> IO ()
 linkCmdLineLibs dflags = do
   initDynLinker dflags
   modifyPLS_ $ \pls -> do
+
+
     linkCmdLineLibs' dflags pls
+
 
 linkCmdLineLibs' :: DynFlags -> PersistentLinkerState -> IO PersistentLinkerState
 linkCmdLineLibs' dflags@(DynFlags { ldInputs     = cmdline_ld_inputs
                                   , libraryPaths = lib_paths}) pls =
-  do  {   -- (c) Link libraries from the command-line
-        ; let minus_ls = [ lib | Option ('-':'l':lib) <- cmdline_ld_inputs ]
-        ; libspecs <- mapM (locateLib dflags False lib_paths) minus_ls
+  do  -- (c) Link libraries from the command-line
+      let minus_ls = [ lib | Option ('-':'l':lib) <- cmdline_ld_inputs ]
+      libspecs <- mapM (locateLib dflags False lib_paths) minus_ls
 
-          -- (d) Link .o files from the command-line
-        ; classified_ld_inputs <- mapM (classifyLdInput dflags)
-                                    [ f | FileOption _ f <- cmdline_ld_inputs ]
+      -- (d) Link .o files from the command-line
+      classified_ld_inputs <- mapM (classifyLdInput dflags)
+                                [ f | FileOption _ f <- cmdline_ld_inputs ]
 
-          -- (e) Link any MacOS frameworks
-        ; let platform = targetPlatform dflags
-        ; let (framework_paths, frameworks) =
-                if platformUsesFrameworks platform
-                 then (frameworkPaths dflags, cmdlineFrameworks dflags)
-                  else ([],[])
+      -- (e) Link any MacOS frameworks
+      let platform = targetPlatform dflags
+      let (framework_paths, frameworks) =
+            if platformUsesFrameworks platform
+             then (frameworkPaths dflags, cmdlineFrameworks dflags)
+              else ([],[])
 
-          -- Finally do (c),(d),(e)
-        ; let cmdline_lib_specs = catMaybes classified_ld_inputs
-                               ++ libspecs
-                               ++ map Framework frameworks
-        ; if null cmdline_lib_specs then return pls
-                                    else do
+      -- Finally do (c),(d),(e)
+      let cmdline_lib_specs = catMaybes classified_ld_inputs
+                           ++ libspecs
+                           ++ map Framework frameworks
+      if null cmdline_lib_specs then return pls
+                                else do
 
-        { pls1 <- foldM (preloadLib dflags lib_paths framework_paths) pls
-                        cmdline_lib_specs
-        ; maybePutStr dflags "final link ... "
-        ; ok <- resolveObjs
+      -- Add directories to library search paths
+      let all_paths = let paths = framework_paths 
+                               ++ lib_paths 
+                               ++ [ takeDirectory dll | DLLPath dll <- libspecs ]
+                      in nub $ map normalise paths
+      pathCache <- mapM addLibrarySearchPath all_paths
 
-        ; if succeeded ok then maybePutStrLn dflags "done"
-          else throwGhcExceptionIO (ProgramError "linking extra libraries/objects failed")
+      pls1 <- foldM (preloadLib dflags lib_paths framework_paths) pls
+                    cmdline_lib_specs
+      maybePutStr dflags "final link ... "
+      ok <- resolveObjs
 
-        ; return pls1
-        }}
+      -- DLLs are loaded, reset the search paths
+      _ <- mapM removeLibrarySearchPath $ reverse pathCache
 
+      if succeeded ok then maybePutStrLn dflags "done"
+      else throwGhcExceptionIO (ProgramError "linking extra libraries/objects failed")
+
+      return pls1
 
 {- Note [preload packages]
 
@@ -631,37 +642,30 @@ getLinkDeps hsc_env hpt pls replace_osuf span mods
 
     get_linkable osuf mod_name      -- A home-package module
         | Just mod_info <- lookupUFM hpt mod_name
-        = adjust_linkable (hm_iface mod_info)
-            (Maybes.expectJust "getLinkDeps" (hm_linkable mod_info))
+        = adjust_linkable (Maybes.expectJust "getLinkDeps" (hm_linkable mod_info))
         | otherwise
         = do    -- It's not in the HPT because we are in one shot mode,
                 -- so use the Finder to get a ModLocation...
-                -- ezyang: I don't actually know how to trigger this codepath,
-                -- seeing as this is GHCi logic. Template Haskell, maybe?
              mb_stuff <- findHomeModule hsc_env mod_name
              case mb_stuff of
-                  FoundExact loc mod -> found loc mod
+                  Found loc mod -> found loc mod
                   _ -> no_obj mod_name
         where
             found loc mod = do {
                 -- ...and then find the linkable for it
                mb_lnk <- findObjectLinkableMaybe mod loc ;
-               iface <- initIfaceCheck hsc_env $
-                            loadUserInterface False (text "getLinkDeps2") mod ;
                case mb_lnk of {
                   Nothing  -> no_obj mod ;
-                  Just lnk -> adjust_linkable iface lnk
+                  Just lnk -> adjust_linkable lnk
               }}
 
-            adjust_linkable iface lnk
-                -- Signatures have no linkables! Don't return one.
-                | mi_hsc_src iface == HsigFile = return Nothing
+            adjust_linkable lnk
                 | Just new_osuf <- replace_osuf = do
                         new_uls <- mapM (adjust_ul new_osuf)
                                         (linkableUnlinked lnk)
-                        return (Just lnk{ linkableUnlinked=new_uls })
+                        return lnk{ linkableUnlinked=new_uls }
                 | otherwise =
-                        return (Just lnk)
+                        return lnk
 
             adjust_ul new_osuf (DotO file) = do
                 MASSERT(osuf `isSuffixOf` file)
@@ -1030,7 +1034,7 @@ data LibrarySpec
 
    | DLL String         -- "Unadorned" name of a .DLL/.so
                         --  e.g.    On unix     "qt"  denotes "libqt.so"
-                        --          On WinDoze  "burble"  denotes "burble.DLL"
+                        --          On Windose  "burble"  denotes "burble.DLL"
                         --  loadDLL is platform-specific and adds the lib/.so/.DLL
                         --  suffixes platform-dependently
 
@@ -1124,7 +1128,7 @@ linkPackage dflags pkg
         -- Because of slight differences between the GHC dynamic linker and
         -- the native system linker some packages have to link with a
         -- different list of libraries when using GHCi. Examples include: libs
-        -- that are actually gnu ld scripts, and the possability that the .a
+        -- that are actually gnu ld scripts, and the possibility that the .a
         -- libs do not exactly match the .so/.dll equivalents. So if the
         -- package file provides an "extra-ghci-libraries" field then we use
         -- that instead of the "extra-libraries" field.
@@ -1158,7 +1162,7 @@ linkPackage dflags pkg
             mapM_ load_dyn (known_dlls ++ map (mkSOName platform) dlls)
             
         -- DLLs are loaded, reset the search paths
-        _ <- mapM removeLibrarySearchPath pathCache
+        _ <- mapM removeLibrarySearchPath $ reverse pathCache
 
         -- After loading all the DLLs, we can load the static objects.
         -- Ordering isn't important here, because we do one final link

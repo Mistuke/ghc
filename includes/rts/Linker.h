@@ -73,6 +73,10 @@ HsPtr addLibrarySearchPath(pathchar* dll_path);
    path must have been added using addLibrarySearchPath */
 HsBool removeLibrarySearchPath(HsPtr dll_path_index);
 
+/* give a warning about missing Windows patches that would make
+   the linker work better */
+void warnMissingKBLibraryPaths( void );
+
 /* called by the initialization code for a module, not a user API */
 StgStablePtr foreignExportStablePtr (StgPtr p);
 
