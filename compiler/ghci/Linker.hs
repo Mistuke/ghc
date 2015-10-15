@@ -55,6 +55,7 @@ import SysTools
 
 -- Standard libraries
 import Control.Monad
+import Control.Applicative((<|>))
 
 import Data.IORef
 import Data.List
@@ -1213,13 +1214,15 @@ locateLib dflags is_hs dirs lib
     --       for a dynamic library (#5289)
     --   otherwise, assume loadDLL can find it
     --
-  = findDll `orElse`
-    findArchive `orElse`
-    tryGcc `orElse`
-    tryGccPrefixed `orElse`
-    assumeDll
+  = findDll `orElse` findArchive `orElse` tryGcc `orElse` assumeDll
 
-  | dynamicGhc
+  | not dynamicGhc
+    -- When the GHC package was not compiled as dynamic library
+    -- (=DYNAMIC not set), we search for .o libraries or, if they
+    -- don't exist, .a libraries.
+  = findObject `orElse` findArchive `orElse` assumeDll
+
+  | otherwise
     -- When the GHC package was compiled as dynamic library (=DYNAMIC set),
     -- we search for .so libraries first.
   = findHSDll `orElse` findDynObject `orElse` assumeDll
@@ -1256,8 +1259,10 @@ locateLib dflags is_hs dirs lib
      findArchive    = liftM (fmap Archive) $ findFile dirs arch_file
      findHSDll      = liftM (fmap DLLPath) $ findFile dirs hs_dyn_lib_file
      findDll        = liftM (fmap DLLPath) $ findFile dirs dyn_lib_file
-     tryGcc         = liftM (fmap DLLPath) $ searchForLibUsingGcc dflags so_name     dirs
-     tryGccPrefixed = liftM (fmap DLLPath) $ searchForLibUsingGcc dflags lib_so_name dirs
+     tryGcc         = let short = liftM (fmap DLLPath) $ searchForLibUsingGcc dflags so_name     dirs
+                          full  = liftM (fmap DLLPath) $ searchForLibUsingGcc dflags lib_so_name dirs
+                          arch  = liftM (fmap Archive) $ searchForLibUsingGcc dflags arch_file   dirs
+                      in liftM3 (\a b c -> a <|> b <|> c) short full arch
 
      assumeDll   = return (DLL lib)
      infixr `orElse`
