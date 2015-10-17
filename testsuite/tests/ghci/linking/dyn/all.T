@@ -11,10 +11,14 @@ test('T1407',
      extra_hc_opts('-L$(PWD)')],
      ghci_script, ['T1407.script'])
 
-# make issue number
-test('load_indirect_ref',
+test('T10955',
      [unless(doing_ghci, skip),
      extra_clean(['bin_dep/*', 'bin_dep']),
      pre_cmd('$MAKE -s --no-print-directory compile_libAB_dep'),
      extra_hc_opts('-L$(PWD)/bin_dep')],
-     ghci_script, ['load_indirect_ref.script'])
+     ghci_script, ['T10955.script'])
+
+test('T10955dyn',
+     [extra_clean(['bin_dyn/*', 'bin_dyn'])],
+     run_command,
+     ['$MAKE -s --no-print-directory compile_libAB_dyn'])

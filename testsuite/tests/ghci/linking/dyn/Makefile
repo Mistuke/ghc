@@ -10,6 +10,13 @@ else
 DLL = lib$1.so
 endif
 
+ifeq "$(WINDOWS)" "YES"
+EXE = $1.exe
+else ifeq "$(DARWIN)" "YES"
+EXE = $1
+else
+EXE = $1
+endif
 
 .PHONY: load_short_name
 load_short_name:
@@ -28,3 +35,13 @@ compile_libAB_dep:
 	mkdir bin_dep
 	gcc -shared A.c -o "bin_dep/$(call DLL,A)"
 	gcc -shared B.c -o "bin_dep/$(call DLL,B)" -lA -L"$(PWD)/bin_dep"
+
+.PHONY: compile_libAB_dyn
+compile_libAB_dyn:
+	rm -rf bin_dyn
+	mkdir bin_dyn
+	gcc -shared A.c -o "bin_dyn/$(call DLL,A)"
+	gcc -shared B.c -o "bin_dyn/$(call DLL,B)" -lA -L"$(PWD)/bin_dyn"
+	"$(TEST_HC)" -ignore-dot-ghci -v0 -o $(call EXE,T10955dyn) -L$(PWD)/bin_dep -lB -lA T10955dyn.hs -v0
+	cp $(call EXE,T10955dyn) bin_dyn
+	./bin_dyn/$(call EXE,T10955dyn)
