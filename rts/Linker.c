@@ -2056,7 +2056,8 @@ addDLL( pathchar *dll_name )
    size_t bufsize = pathlen(dll_name) + 10;
    buf = stgMallocBytes(bufsize * sizeof(wchar_t), "addDLL");
    snwprintf(buf, bufsize, L"%s.DLL", dll_name);
-   instance = LoadLibraryExW(buf, NULL, flags);
+   // instance = LoadLibraryExW(buf, NULL, flags);
+   instance = LoadLibraryW(buf);
    if (instance == NULL) {
        if (GetLastError() != ERROR_MOD_NOT_FOUND) goto error;
        // KAA: allow loading of drivers (like winspool.drv)
@@ -2124,7 +2125,7 @@ HsPtr addLibrarySearchPath(pathchar* dll_path)
 
     HsPtr result = 0;
 
-    if (!AddDllDirectory) {
+    if (AddDllDirectory) {
         result = AddDllDirectory(dll_path);
     } else {
         warnMissingKBLibraryPaths();
@@ -2141,14 +2142,15 @@ HsPtr addLibrarySearchPath(pathchar* dll_path)
 
 
         bufsize = wResult + 2 + wcslen(dll_path);
-        debugBelch("%lu-%d\n", wResult, bufsize);
         wchar_t* newPath = malloc(sizeof(wchar_t) * bufsize);
 
-        wcscpy(newPath, str     );
+        wcscpy(newPath, dll_path);
         wcscat(newPath, L";"    );
-        wcscat(newPath, dll_path);
-        SetEnvironmentVariableW(L"PATH", (LPCWSTR)newPath);
-        debugBelch("%ls\n", newPath);
+        wcscat(newPath, str     );
+        if (!SetEnvironmentVariableW(L"PATH", (LPCWSTR)newPath)) {
+            sysErrorBelch("addLibrarySearchPath: %" PATH_FMT " (Win32 error %lu)", dll_path, GetLastError());
+        }
+
         free(newPath);
 
         return str;
@@ -2183,7 +2185,7 @@ HsBool removeLibrarySearchPath(HsPtr dll_path_index)
 
     HsBool result = 0;
 
-    if (!RemoveDllDirectory) {
+    if (RemoveDllDirectory) {
         result = RemoveDllDirectory(dll_path_index);
     } else {
         warnMissingKBLibraryPaths();
