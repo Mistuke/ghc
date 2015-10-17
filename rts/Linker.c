@@ -2056,8 +2056,7 @@ addDLL( pathchar *dll_name )
    size_t bufsize = pathlen(dll_name) + 10;
    buf = stgMallocBytes(bufsize * sizeof(wchar_t), "addDLL");
    snwprintf(buf, bufsize, L"%s.DLL", dll_name);
-   // instance = LoadLibraryExW(buf, NULL, flags);
-   instance = LoadLibraryW(buf);
+   instance = LoadLibraryExW(buf, NULL, flags);
    if (instance == NULL) {
        if (GetLastError() != ERROR_MOD_NOT_FOUND) goto error;
        // KAA: allow loading of drivers (like winspool.drv)
@@ -2139,7 +2138,6 @@ HsPtr addLibrarySearchPath(pathchar* dll_path)
             str = realloc(str, sizeof(WCHAR) * wResult);
             wResult = GetEnvironmentVariableW(L"PATH", str, bufsize);
         }
-
 
         bufsize = wResult + 2 + wcslen(dll_path);
         wchar_t* newPath = malloc(sizeof(wchar_t) * bufsize);
