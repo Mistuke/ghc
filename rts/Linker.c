@@ -263,6 +263,12 @@ static void machoInitSymbolsWithoutUnderscore( void );
 #endif
 #endif
 
+#if defined(OBJFORMAT_PEi386)
+// MingW-w64 is missing these from the implementation. So we have to look them up
+typedef DLL_DIRECTORY_COOKIE(*LPAddDLLDirectory)(PCWSTR NewDirectory);
+typedef WINBOOL(*LPRemoveDLLDirectory)(DLL_DIRECTORY_COOKIE Cookie);
+#endif
+
 static void freeProddableBlocks (ObjectCode *oc);
 
 #ifdef USE_MMAP
@@ -2051,7 +2057,12 @@ addDLL( pathchar *dll_name )
         point character (.) to indicate that the module name has no
         extension. */
 
-   DWORD flags = LOAD_LIBRARY_SEARCH_USER_DIRS | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+   DWORD flags = 0;
+
+   // Detect if newer api are available
+   if (GetProcAddress((HMODULE)LoadLibraryW(L"Kernel32.DLL"), "AddDllDirectory")) {
+       flags = LOAD_LIBRARY_SEARCH_USER_DIRS | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+   }
 
    size_t bufsize = pathlen(dll_name) + 10;
    buf = stgMallocBytes(bufsize * sizeof(wchar_t), "addDLL");
@@ -2116,11 +2127,8 @@ HsPtr addLibrarySearchPath(pathchar* dll_path)
     IF_DEBUG(linker, debugBelch("\naddLibrarySearchPath: dll_path = `%" PATH_FMT "'\n", dll_path));
 
 #if defined(OBJFORMAT_PEi386)
-    typedef DLL_DIRECTORY_COOKIE(*LPAddDLLDirectory)(PCWSTR NewDirectory);
-    HINSTANCE hDLL = NULL;
-    LPAddDLLDirectory AddDllDirectory;
-    hDLL = LoadLibraryW(L"Kernel32.DLL");
-    AddDllDirectory = (LPAddDLLDirectory)GetProcAddress((HMODULE)hDLL, "AddDllDirectory");
+    HINSTANCE hDLL = LoadLibraryW(L"Kernel32.DLL");
+    LPAddDLLDirectory AddDllDirectory = (LPAddDLLDirectory)GetProcAddress((HMODULE)hDLL, "AddDllDirectory");
 
     HsPtr result = 0;
 
@@ -2139,7 +2147,7 @@ HsPtr addLibrarySearchPath(pathchar* dll_path)
             wResult = GetEnvironmentVariableW(L"PATH", str, bufsize);
         }
 
-        bufsize = wResult + 2 + wcslen(dll_path);
+        bufsize = wResult + 2 + pathlen(dll_path);
         wchar_t* newPath = malloc(sizeof(wchar_t) * bufsize);
 
         wcscpy(newPath, dll_path);
@@ -2175,11 +2183,8 @@ HsBool removeLibrarySearchPath(HsPtr dll_path_index)
     IF_DEBUG(linker, debugBelch("\nremoveLibrarySearchPath: ptr = `%p'\n", dll_path_index));
 
 #if defined(OBJFORMAT_PEi386)
-    typedef WINBOOL(*LPRemoveDLLDirectory)(DLL_DIRECTORY_COOKIE Cookie);
-    HINSTANCE hDLL = NULL;
-    LPRemoveDLLDirectory RemoveDllDirectory;
-    hDLL = LoadLibraryW(L"Kernel32.DLL");
-    RemoveDllDirectory = (LPRemoveDLLDirectory)GetProcAddress((HMODULE)hDLL, "RemoveDllDirectory");
+    HINSTANCE hDLL = LoadLibraryW(L"Kernel32.DLL");
+    LPRemoveDLLDirectory RemoveDllDirectory = (LPRemoveDLLDirectory)GetProcAddress((HMODULE)hDLL, "RemoveDllDirectory");
 
     HsBool result = 0;
 
@@ -4153,7 +4158,6 @@ typedef
    COFF_reloc;
 
 #define sizeof_COFF_reloc 10
-
 
 /* From PE spec doc, section 3.3.2 */
 /* Note use of MYIMAGE_* since IMAGE_* are already defined in
