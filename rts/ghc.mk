@@ -190,7 +190,7 @@ rts_dist_$1_CC_OPTS += -DRtsWay=\"rts_$1\"
 # Adding this here means it doesn't have to be done in individual .c files
 # and also centralizes the versioning.
 ifeq "$$(TargetOS_CPP)" "mingw32"
-rts_dist_$1_CC_OPTS += -DWINVER=0x0501
+rts_dist_$1_CC_OPTS += -DWINVER=$(rts_WINVER)
 endif
 
 ifneq "$$(UseSystemLibFFI)" "YES"
