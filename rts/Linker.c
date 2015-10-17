@@ -6307,18 +6307,18 @@ static int
 do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
                           Elf_Shdr* shdr, int shnum )
 {
-    int j;
-    char *symbol = NULL;
-    Elf_Rela* rtab = (Elf_Rela*)(ehdrC + shdr[shnum].sh_offset);
-    Elf_Sym*  stab;
-    char*     strtab;
-    int         nent = shdr[shnum].sh_size / sizeof(Elf_Rela);
-    int symtab_shndx = shdr[shnum].sh_link;
-    int strtab_shndx = shdr[symtab_shndx].sh_link;
+   int j;
+   char *symbol = NULL;
+   Elf_Rela* rtab = (Elf_Rela*) (ehdrC + shdr[shnum].sh_offset);
+   Elf_Sym*  stab;
+   char*     strtab;
+   int         nent = shdr[shnum].sh_size / sizeof(Elf_Rela);
+   int symtab_shndx = shdr[shnum].sh_link;
+   int strtab_shndx = shdr[symtab_shndx].sh_link;
+   int target_shndx = shdr[shnum].sh_info;
 #if defined(DEBUG) || defined(sparc_HOST_ARCH) || defined(ia64_HOST_ARCH) || defined(powerpc_HOST_ARCH) || defined(x86_64_HOST_ARCH)
-    /* This #ifdef only serves to avoid unused-var warnings. */
-    Elf_Addr targ;
-    int target_shndx = shdr[shnum].sh_info;
+   /* This #ifdef only serves to avoid unused-var warnings. */
+   Elf_Addr targ = (Elf_Addr) oc->sections[target_shndx].start;
 #endif
 
    stab  = (Elf_Sym*) (ehdrC + shdr[ symtab_shndx ].sh_offset);
