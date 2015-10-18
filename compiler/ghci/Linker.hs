@@ -294,10 +294,7 @@ linkCmdLineLibs :: DynFlags -> IO ()
 linkCmdLineLibs dflags = do
   initDynLinker dflags
   modifyPLS_ $ \pls -> do
-
-
     linkCmdLineLibs' dflags pls
-
 
 linkCmdLineLibs' :: DynFlags -> PersistentLinkerState -> IO PersistentLinkerState
 linkCmdLineLibs' dflags@(DynFlags { ldInputs     = cmdline_ld_inputs
@@ -325,8 +322,8 @@ linkCmdLineLibs' dflags@(DynFlags { ldInputs     = cmdline_ld_inputs
                                 else do
 
       -- Add directories to library search paths
-      let all_paths = let paths = framework_paths 
-                               ++ lib_paths 
+      let all_paths = let paths = framework_paths
+                               ++ lib_paths
                                ++ [ takeDirectory dll | DLLPath dll <- libspecs ]
                       in nub $ map normalise paths
       pathCache <- mapM addLibrarySearchPath all_paths
@@ -1147,7 +1144,7 @@ linkPackage dflags pkg
             dlls       = [ dll  | DLL dll        <- classifieds ]
             objs       = [ obj  | Object obj     <- classifieds ]
             archs      = [ arch | Archive arch   <- classifieds ]
-            
+
         -- Add directories to library search paths
         let dll_paths  = map takeDirectory known_dlls
             all_paths  = nub $ map normalise $ dll_paths ++ dirs
@@ -1160,7 +1157,7 @@ linkPackage dflags pkg
         when (packageName pkg `notElem` partOfGHCi) $ do
             loadFrameworks platform pkg
             mapM_ load_dyn (known_dlls ++ map (mkSOName platform) dlls)
-            
+
         -- DLLs are loaded, reset the search paths
         _ <- mapM removeLibrarySearchPath $ reverse pathCache
 

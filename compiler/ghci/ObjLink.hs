@@ -82,7 +82,7 @@ loadDLL str0 = do
         then return Nothing
         else do str <- peekCString maybe_errmsg
                 return (Just str)
-                
+
      -- It is very important we normalize slashes. LoadLibrary does not
      -- support forward slashes (/) in paths and insists on backward slashes (/)
      -- which is a problem since the tryGcc function will always return msys paths
@@ -107,11 +107,11 @@ unloadObj str =
    withFilePath str $ \c_str -> do
      r <- c_unloadObj c_str
      when (r == 0) (panic ("unloadObj " ++ show str ++ ": failed"))
-     
+
 addLibrarySearchPath :: String -> IO (Ptr ())
 addLibrarySearchPath str =
    withFilePath str $ \c_str -> c_addLibrarySearchPath c_str
-   
+
 removeLibrarySearchPath :: Ptr () -> IO Bool
 removeLibrarySearchPath = c_removeLibrarySearchPath
 

@@ -1964,153 +1964,153 @@ internal_dlsym(const char *symbol) {
 #  endif
 
 const char *
-addDLL(pathchar *dll_name)
+addDLL( pathchar *dll_name )
 {
 #  if defined(OBJFORMAT_ELF) || defined(OBJFORMAT_MACHO)
-    /* ------------------- ELF DLL loader ------------------- */
+   /* ------------------- ELF DLL loader ------------------- */
 
 #define NMATCH 5
-    regmatch_t match[NMATCH];
-    const char *errmsg;
-    FILE* fp;
-    size_t match_length;
+   regmatch_t match[NMATCH];
+   const char *errmsg;
+   FILE* fp;
+   size_t match_length;
 #define MAXLINE 1000
-    char line[MAXLINE];
-    int result;
+   char line[MAXLINE];
+   int result;
 
-    IF_DEBUG(linker, debugBelch("addDLL: dll_name = '%s'\n", dll_name));
-    errmsg = internal_dlopen(dll_name);
+   IF_DEBUG(linker, debugBelch("addDLL: dll_name = '%s'\n", dll_name));
+   errmsg = internal_dlopen(dll_name);
 
-    if (errmsg == NULL) {
-        return NULL;
-    }
+   if (errmsg == NULL) {
+      return NULL;
+   }
 
-    // GHC Trac ticket #2615
-    // On some systems (e.g., Gentoo Linux) dynamic files (e.g. libc.so)
-    // contain linker scripts rather than ELF-format object code. This
-    // code handles the situation by recognizing the real object code
-    // file name given in the linker script.
-    //
-    // If an "invalid ELF header" error occurs, it is assumed that the
-    // .so file contains a linker script instead of ELF object code.
-    // In this case, the code looks for the GROUP ( ... ) linker
-    // directive. If one is found, the first file name inside the
-    // parentheses is treated as the name of a dynamic library and the
-    // code attempts to dlopen that file. If this is also unsuccessful,
-    // an error message is returned.
+   // GHC Trac ticket #2615
+   // On some systems (e.g., Gentoo Linux) dynamic files (e.g. libc.so)
+   // contain linker scripts rather than ELF-format object code. This
+   // code handles the situation by recognizing the real object code
+   // file name given in the linker script.
+   //
+   // If an "invalid ELF header" error occurs, it is assumed that the
+   // .so file contains a linker script instead of ELF object code.
+   // In this case, the code looks for the GROUP ( ... ) linker
+   // directive. If one is found, the first file name inside the
+   // parentheses is treated as the name of a dynamic library and the
+   // code attempts to dlopen that file. If this is also unsuccessful,
+   // an error message is returned.
 
-    // see if the error message is due to an invalid ELF header
-    IF_DEBUG(linker, debugBelch("errmsg = '%s'\n", errmsg));
-    result = regexec(&re_invalid, errmsg, (size_t)NMATCH, match, 0);
-    IF_DEBUG(linker, debugBelch("result = %i\n", result));
-    if (result == 0) {
-        // success -- try to read the named file as a linker script
-        match_length = (size_t)stg_min((match[1].rm_eo - match[1].rm_so),
-            MAXLINE - 1);
-        strncpy(line, (errmsg + (match[1].rm_so)), match_length);
-        line[match_length] = '\0'; // make sure string is null-terminated
-        IF_DEBUG(linker, debugBelch("file name = '%s'\n", line));
-        if ((fp = fopen(line, "r")) == NULL) {
-            return errmsg; // return original error if open fails
-        }
-        // try to find a GROUP or INPUT ( ... ) command
-        while (fgets(line, MAXLINE, fp) != NULL) {
-            IF_DEBUG(linker, debugBelch("input line = %s", line));
-            if (regexec(&re_realso, line, (size_t)NMATCH, match, 0) == 0) {
-                // success -- try to dlopen the first named file
-                IF_DEBUG(linker, debugBelch("match%s\n", ""));
-                line[match[2].rm_eo] = '\0';
-                stgFree((void*)errmsg); // Free old message before creating new one
-                errmsg = internal_dlopen(line + match[2].rm_so);
-                break;
-            }
-            // if control reaches here, no GROUP or INPUT ( ... ) directive
-            // was found and the original error message is returned to the
-            // caller
-        }
-        fclose(fp);
-    }
-    return errmsg;
+   // see if the error message is due to an invalid ELF header
+   IF_DEBUG(linker, debugBelch("errmsg = '%s'\n", errmsg));
+   result = regexec(&re_invalid, errmsg, (size_t) NMATCH, match, 0);
+   IF_DEBUG(linker, debugBelch("result = %i\n", result));
+   if (result == 0) {
+      // success -- try to read the named file as a linker script
+      match_length = (size_t) stg_min((match[1].rm_eo - match[1].rm_so),
+                                 MAXLINE-1);
+      strncpy(line, (errmsg+(match[1].rm_so)),match_length);
+      line[match_length] = '\0'; // make sure string is null-terminated
+      IF_DEBUG(linker, debugBelch ("file name = '%s'\n", line));
+      if ((fp = fopen(line, "r")) == NULL) {
+         return errmsg; // return original error if open fails
+      }
+      // try to find a GROUP or INPUT ( ... ) command
+      while (fgets(line, MAXLINE, fp) != NULL) {
+         IF_DEBUG(linker, debugBelch("input line = %s", line));
+         if (regexec(&re_realso, line, (size_t) NMATCH, match, 0) == 0) {
+            // success -- try to dlopen the first named file
+            IF_DEBUG(linker, debugBelch("match%s\n",""));
+            line[match[2].rm_eo] = '\0';
+            stgFree((void*)errmsg); // Free old message before creating new one
+            errmsg = internal_dlopen(line+match[2].rm_so);
+            break;
+         }
+         // if control reaches here, no GROUP or INPUT ( ... ) directive
+         // was found and the original error message is returned to the
+         // caller
+      }
+      fclose(fp);
+   }
+   return errmsg;
 
 #  elif defined(OBJFORMAT_PEi386)
-    /* ------------------- Win32 DLL loader ------------------- */
+   /* ------------------- Win32 DLL loader ------------------- */
 
-    pathchar*      buf;
-    OpenedDLL* o_dll;
-    HINSTANCE  instance;
+   pathchar*      buf;
+   OpenedDLL* o_dll;
+   HINSTANCE  instance;
 
-    IF_DEBUG(linker, debugBelch("\naddDLL; dll_name = `%" PATH_FMT "'\n", dll_name));
+   IF_DEBUG(linker, debugBelch("\naddDLL; dll_name = `%" PATH_FMT "'\n", dll_name));
 
-    /* See if we've already got it, and ignore if so. */
-    for (o_dll = opened_dlls; o_dll != NULL; o_dll = o_dll->next) {
-        if (0 == pathcmp(o_dll->name, dll_name))
-            return NULL;
-    }
+   /* See if we've already got it, and ignore if so. */
+   for (o_dll = opened_dlls; o_dll != NULL; o_dll = o_dll->next) {
+      if (0 == pathcmp(o_dll->name, dll_name))
+         return NULL;
+   }
 
-    /* The file name has no suffix (yet) so that we can try
-       both foo.dll and foo.drv
+   /* The file name has no suffix (yet) so that we can try
+      both foo.dll and foo.drv
 
-       The documentation for LoadLibrary says:
-       If no file name extension is specified in the lpFileName
-       parameter, the default library extension .dll is
-       appended. However, the file name string can include a trailing
-       point character (.) to indicate that the module name has no
-       extension. */
+      The documentation for LoadLibrary says:
+        If no file name extension is specified in the lpFileName
+        parameter, the default library extension .dll is
+        appended. However, the file name string can include a trailing
+        point character (.) to indicate that the module name has no
+        extension. */
 
-    size_t bufsize = pathlen(dll_name) + 10;
-    buf = stgMallocBytes(bufsize * sizeof(wchar_t), "addDLL");
+   size_t bufsize = pathlen(dll_name) + 10;
+   buf = stgMallocBytes(bufsize * sizeof(wchar_t), "addDLL");
 
-    /* These are ordered by probability of success and order we'd like them */
-    const wchar_t *formats[] = { L"%s.DLL", L"%s.DRV", L"lib%s.DLL", L"%s" };
-    const DWORD flags[]      = { LOAD_LIBRARY_SEARCH_USER_DIRS | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, 0 };
+   /* These are ordered by probability of success and order we'd like them */
+   const wchar_t *formats[] = { L"%s.DLL", L"%s.DRV", L"lib%s.DLL", L"%s" };
+   const DWORD flags[]      = { LOAD_LIBRARY_SEARCH_USER_DIRS | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, 0 };
 
-    int cFormat;
-    int cFlag;
-    int flags_start = 1; // Assume we don't support the new API
+   int cFormat;
+   int cFlag;
+   int flags_start = 1; // Assume we don't support the new API
 
-    /* Detect if newer API are available, if not, skip the first flags entry */
-    if (GetProcAddress((HMODULE)LoadLibraryW(L"Kernel32.DLL"), "AddDllDirectory")) {
-        flags_start = 0;
-    }
+   /* Detect if newer API are available, if not, skip the first flags entry */
+   if (GetProcAddress((HMODULE)LoadLibraryW(L"Kernel32.DLL"), "AddDllDirectory")) {
+       flags_start = 0;
+   }
 
-    /* Iterate through the possible flags and formats */
-    for (cFlag = flags_start; cFlag < 2; cFlag++)
-    {
-        for (cFormat = 0; cFormat < 4; cFormat++)
-        {
-            snwprintf(buf, bufsize, formats[cFormat], dll_name);
-            instance = LoadLibraryExW(buf, NULL, flags[cFlag]);
-            if (instance == NULL && GetLastError() != ERROR_MOD_NOT_FOUND)
-            {
-                goto error;
-            }
-            else
-            {
-                break; // We're done. DLL has been loaded.
-            }
-        }
-    }
+   /* Iterate through the possible flags and formats */
+   for (cFlag = flags_start; cFlag < 2; cFlag++)
+   {
+       for (cFormat = 0; cFormat < 4; cFormat++)
+       {
+           snwprintf(buf, bufsize, formats[cFormat], dll_name);
+           instance = LoadLibraryExW(buf, NULL, flags[cFlag]);
+           if (instance == NULL && GetLastError() != ERROR_MOD_NOT_FOUND)
+           {
+               goto error;
+           }
+           else
+           {
+               break; // We're done. DLL has been loaded.
+           }
+       }
+   }
 
-    // Check if we managed to load the DLL
-    if (instance == NULL) {
-        goto error;
-    }
+   // Check if we managed to load the DLL
+   if (instance == NULL) {
+       goto error;
+   }
 
-    stgFree(buf);
+   stgFree(buf);
 
-    addDLLHandle(dll_name, instance);
+   addDLLHandle(dll_name, instance);
 
-    return NULL;
+   return NULL;
 
 error:
-    stgFree(buf);
-    sysErrorBelch("addDLL: %" PATH_FMT " (Win32 error %lu)", dll_name, GetLastError());
+   stgFree(buf);
+   sysErrorBelch("addDLL: %" PATH_FMT " (Win32 error %lu)", dll_name, GetLastError());
 
-    /* LoadLibrary failed; return a ptr to the error msg. */
-    return "addDLL: could not load DLL";
+   /* LoadLibrary failed; return a ptr to the error msg. */
+   return "addDLL: could not load DLL";
 
 #  else
-    barf("addDLL: not implemented on this platform");
+   barf("addDLL: not implemented on this platform");
 #  endif
 }
 
