@@ -2080,9 +2080,12 @@ addDLL( pathchar *dll_name )
        {
            snwprintf(buf, bufsize, formats[cFormat], dll_name);
            instance = LoadLibraryExW(buf, NULL, flags[cFlag]);
-           if (instance == NULL && GetLastError() != ERROR_MOD_NOT_FOUND)
+           if (instance == NULL)
            {
-               goto error;
+               if (GetLastError() != ERROR_MOD_NOT_FOUND)
+               {
+                   goto error;
+               }
            }
            else
            {
