@@ -2199,6 +2199,7 @@ HsPtr addLibrarySearchPath(pathchar* dll_path)
     free(abs_path);
     return result;
 #else
+    (void)(dll_path); // Function not implemented for other platforms.
     return 0;
 #endif
 }
@@ -2235,6 +2236,7 @@ HsBool removeLibrarySearchPath(HsPtr dll_path_index)
 
     return result;
 #else
+    (void)(dll_path_index); // Function not implemented for other platforms.
     return 0;
 #endif
 }
