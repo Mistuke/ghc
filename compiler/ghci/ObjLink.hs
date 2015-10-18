@@ -31,7 +31,7 @@ import Foreign.C
 import Foreign          ( nullPtr )
 import GHC.Exts         ( Ptr(..) )
 import System.Posix.Internals ( CFilePath, withFilePath )
-import System.FilePath  ( dropExtension )
+import System.FilePath  ( dropExtension, normalise )
 
 
 -- ---------------------------------------------------------------------------
@@ -77,18 +77,11 @@ loadDLL str0 = do
      str | isWindowsHost = dropExtension str0
          | otherwise     = str0
   --
-  maybe_errmsg <- withFilePath (map normslash str) $ \dll -> c_addDLL dll
+  maybe_errmsg <- withFilePath (normalise str) $ \dll -> c_addDLL dll
   if maybe_errmsg == nullPtr
         then return Nothing
         else do str <- peekCString maybe_errmsg
                 return (Just str)
-
-     -- It is very important we normalize slashes. LoadLibrary does not
-     -- support forward slashes (/) in paths and insists on backward slashes (/)
-     -- which is a problem since the tryGcc function will always return msys paths
-     -- which use forward slashes.
-    where normslash '/' = '\\'
-          normslash x = x
 
 loadArchive :: String -> IO ()
 loadArchive str = do
