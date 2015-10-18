@@ -42,6 +42,6 @@ compile_libAB_dyn:
 	mkdir bin_dyn
 	gcc -shared A.c -o "bin_dyn/$(call DLL,A)"
 	gcc -shared B.c -o "bin_dyn/$(call DLL,B)" -lA -L"$(PWD)/bin_dyn"
-	"$(TEST_HC)" -ignore-dot-ghci -v0 -o $(call EXE,T10955dyn) -L$(PWD)/bin_dep -lB -lA T10955dyn.hs -v0
+	"$(TEST_HC)" -ignore-dot-ghci -v0 -o $(call EXE,T10955dyn) -L$(PWD)/bin_dyn -lB -lA T10955dyn.hs -v0
 	cp $(call EXE,T10955dyn) bin_dyn
 	./bin_dyn/$(call EXE,T10955dyn)
