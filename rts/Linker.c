@@ -2121,8 +2121,6 @@ error:
 /* -----------------------------------------------------------------------------
 * Emits a warning determining that the system is missing a required security
 * update that we need to get access to the proper APIs
-*
-* Returns: 0 on failure, nozero on success
 */
 void warnMissingKBLibraryPaths( void )
 {
@@ -2136,7 +2134,8 @@ void warnMissingKBLibraryPaths( void )
 /* -----------------------------------------------------------------------------
 * appends a directory to the process DLL Load path so LoadLibrary can find it
 *
-* Returns: 0 on failure, nozero on success
+* Returns: NULL on failure, or pointer to be passed to removeLibrarySearchPath to
+*          restore the search path to what it was before this call.
 */
 HsPtr addLibrarySearchPath(pathchar* dll_path)
 {
@@ -2146,7 +2145,7 @@ HsPtr addLibrarySearchPath(pathchar* dll_path)
     HINSTANCE hDLL = LoadLibraryW(L"Kernel32.DLL");
     LPAddDLLDirectory AddDllDirectory = (LPAddDLLDirectory)GetProcAddress((HMODULE)hDLL, "AddDllDirectory");
 
-    HsPtr result = 0;
+    HsPtr result = NULL;
 
     const unsigned int init_buf_size = 4096;
     int bufsize = init_buf_size;
@@ -2165,7 +2164,8 @@ HsPtr addLibrarySearchPath(pathchar* dll_path)
     if (AddDllDirectory) {
         result = AddDllDirectory(abs_path);
     }
-    else {
+    else
+    {
         warnMissingKBLibraryPaths();
         WCHAR* str = malloc(sizeof(WCHAR) * init_buf_size);
         wResult = GetEnvironmentVariableW(L"PATH", str, bufsize);
@@ -2193,51 +2193,55 @@ HsPtr addLibrarySearchPath(pathchar* dll_path)
     if (!result) {
         sysErrorBelch("addLibrarySearchPath: %" PATH_FMT " (Win32 error %lu)", abs_path, GetLastError());
         free(abs_path);
-        return 0;
+        return NULL;
     }
 
     free(abs_path);
     return result;
 #else
     (void)(dll_path); // Function not implemented for other platforms.
-    return 0;
+    return NULL;
 #endif
 }
 
 /* -----------------------------------------------------------------------------
 * removes a directory from the process DLL Load path
 *
-* Returns: 0 on failure, nozero on success
+* Returns: HS_BOOL_TRUE on success, otherwise HS_BOOL_FALSE
 */
 HsBool removeLibrarySearchPath(HsPtr dll_path_index)
 {
     IF_DEBUG(linker, debugBelch("\nremoveLibrarySearchPath: ptr = `%p'\n", dll_path_index));
 
 #if defined(OBJFORMAT_PEi386)
-    HINSTANCE hDLL = LoadLibraryW(L"Kernel32.DLL");
-    LPRemoveDLLDirectory RemoveDllDirectory = (LPRemoveDLLDirectory)GetProcAddress((HMODULE)hDLL, "RemoveDllDirectory");
-
     HsBool result = 0;
 
-    if (RemoveDllDirectory) {
-        result = RemoveDllDirectory(dll_path_index);
-    } else {
-        warnMissingKBLibraryPaths();
+    if (dll_path_index != NULL) {
+        HINSTANCE hDLL = LoadLibraryW(L"Kernel32.DLL");
+        LPRemoveDLLDirectory RemoveDllDirectory = (LPRemoveDLLDirectory)GetProcAddress((HMODULE)hDLL, "RemoveDllDirectory");
 
-        result = SetEnvironmentVariableW(L"PATH", (LPCWSTR)dll_path_index);
+        if (RemoveDllDirectory) {
+            result = RemoveDllDirectory(dll_path_index);
+        }
+        else
+        {
+            warnMissingKBLibraryPaths();
 
-        free(dll_path_index);
+            result = SetEnvironmentVariableW(L"PATH", (LPCWSTR)dll_path_index);
+
+            free(dll_path_index);
+        }
+
+        if (!result) {
+            sysErrorBelch("removeLibrarySearchPath: %p (Win32 error %lu)", dll_path_index, GetLastError());
+            return HS_BOOL_FALSE;
+        }
     }
 
-    if (!result) {
-        sysErrorBelch("removeLibrarySearchPath: %p (Win32 error %lu)", dll_path_index, GetLastError());
-        return 0;
-    }
-
-    return result;
+    return result == 0 ? HS_BOOL_TRUE : HS_BOOL_FALSE;
 #else
     (void)(dll_path_index); // Function not implemented for other platforms.
-    return 0;
+    return HS_BOOL_FALSE;
 #endif
 }
 
