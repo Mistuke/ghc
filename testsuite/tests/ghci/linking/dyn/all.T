@@ -8,14 +8,14 @@ test('T1407',
      [unless(doing_ghci, skip),
      extra_clean(['libAS.*']),
      pre_cmd('$MAKE -s --no-print-directory compile_libAS'),
-     extra_hc_opts('-L$(PWD)')],
+     extra_hc_opts('-L.')],
      ghci_script, ['T1407.script'])
 
 test('T10955',
      [unless(doing_ghci, skip),
      extra_clean(['bin_dep/*', 'bin_dep']),
      pre_cmd('$MAKE -s --no-print-directory compile_libAB_dep'),
-     extra_hc_opts('-L$(PWD)/bin_dep')],
+     extra_hc_opts('-L./bin_dep')],
      ghci_script, ['T10955.script'])
 
 test('T10955dyn',
