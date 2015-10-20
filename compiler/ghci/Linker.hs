@@ -334,7 +334,7 @@ linkCmdLineLibs' dflags@(DynFlags { ldInputs     = cmdline_ld_inputs
       ok <- resolveObjs
 
       -- DLLs are loaded, reset the search paths
-      _ <- mapM removeLibrarySearchPath $ reverse pathCache
+      mapM_ removeLibrarySearchPath $ reverse pathCache
 
       if succeeded ok then maybePutStrLn dflags "done"
       else throwGhcExceptionIO (ProgramError "linking extra libraries/objects failed")
@@ -1159,7 +1159,7 @@ linkPackage dflags pkg
             mapM_ load_dyn (known_dlls ++ map (mkSOName platform) dlls)
 
         -- DLLs are loaded, reset the search paths
-        _ <- mapM removeLibrarySearchPath $ reverse pathCache
+        mapM_ removeLibrarySearchPath $ reverse pathCache
 
         -- After loading all the DLLs, we can load the static objects.
         -- Ordering isn't important here, because we do one final link

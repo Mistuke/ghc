@@ -103,7 +103,7 @@ unloadObj str =
 
 addLibrarySearchPath :: String -> IO (Ptr ())
 addLibrarySearchPath str =
-   withFilePath str $ \c_str -> c_addLibrarySearchPath c_str
+   withFilePath str c_addLibrarySearchPath
 
 removeLibrarySearchPath :: Ptr () -> IO Bool
 removeLibrarySearchPath = c_removeLibrarySearchPath
