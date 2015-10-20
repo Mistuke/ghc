@@ -19,7 +19,9 @@ rts_dist_HC = $(GHC_STAGE1)
 rts_INSTALL_INFO = rts
 rts_VERSION = 1.0
 
-# Minimum supported Windows version
+# Minimum supported Windows version.
+# These numbers can be found at:
+#  https://msdn.microsoft.com/en-us/library/windows/desktop/aa383745(v=vs.85).aspx
 # If we're compiling on windows, enforce that we only support Vista SP1+
 # Adding this here means it doesn't have to be done in individual .c files
 # and also centralizes the versioning.
