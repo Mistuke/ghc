@@ -1214,7 +1214,7 @@ locateLib dflags is_hs dirs lib
     --       for a dynamic library (#5289)
     --   otherwise, assume loadDLL can find it
     --
-  = findDll `orElse` findArchive `orElse` tryGcc `orElse` assumeDll
+  = findDll `orElse` tryGcc `orElse` findArchive `orElse` assumeDll
 
   | not dynamicGhc
     -- When the GHC package was not compiled as dynamic library
@@ -1256,13 +1256,14 @@ locateLib dflags is_hs dirs lib
 
      findObject     = liftM (fmap Object)  $ findFile dirs obj_file
      findDynObject  = liftM (fmap Object)  $ findFile dirs dyn_obj_file
-     findArchive    = liftM (fmap Archive) $ findFile dirs arch_file
+     findArchive    = let local  = liftM (fmap Archive) $ findFile dirs arch_file
+                          linked = liftM (fmap Archive) $ searchForLibUsingGcc dflags arch_file dirs
+                      in liftM2 (<|>) local linked
      findHSDll      = liftM (fmap DLLPath) $ findFile dirs hs_dyn_lib_file
      findDll        = liftM (fmap DLLPath) $ findFile dirs dyn_lib_file
      tryGcc         = let short = liftM (fmap DLLPath) $ searchForLibUsingGcc dflags so_name     dirs
                           full  = liftM (fmap DLLPath) $ searchForLibUsingGcc dflags lib_so_name dirs
-                          arch  = liftM (fmap Archive) $ searchForLibUsingGcc dflags arch_file   dirs
-                      in liftM3 (\a b c -> a <|> b <|> c) short full arch
+                      in liftM2 (<|>) short full
 
      assumeDll   = return (DLL lib)
      infixr `orElse`
