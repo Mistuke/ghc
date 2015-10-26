@@ -10,15 +10,16 @@
 -- dynamic linker.
 module ObjLink (
    initObjLinker,          -- :: IO ()
-   loadDLL,                -- :: String -> IO (Maybe String)
-   loadArchive,            -- :: String -> IO ()
-   loadObj,                -- :: String -> IO ()
-   unloadObj,              -- :: String -> IO ()
-   insertSymbol,           -- :: String -> String -> Ptr a -> IO ()
-   lookupSymbol,           -- :: String -> IO (Maybe (Ptr a))
+   loadDLL,                -- :: String   -> IO (Maybe String)
+   loadArchive,            -- :: String   -> IO ()
+   loadObj,                -- :: String   -> IO ()
+   unloadObj,              -- :: String   -> IO ()
+   insertSymbol,           -- :: String   -> String -> Ptr a -> IO ()
+   lookupSymbol,           -- :: String   -> IO (Maybe (Ptr a))
    resolveObjs,            -- :: IO SuccessFlag
-   addLibrarySearchPath,   -- :: CFilePath -> IO (Ptr ())
-   removeLibrarySearchPath -- :: Ptr() -> IO Bool
+   addLibrarySearchPath,   -- :: FilePath -> IO (Ptr ())
+   removeLibrarySearchPath -- :: Ptr ()   -> IO Bool
+   findSystemLibrary       -- :: FilePath -> IO (Maybe FilePath)
   )  where
 
 import Panic
@@ -28,6 +29,7 @@ import Util
 
 import Control.Monad    ( when )
 import Foreign.C
+import Foreign.C.Strings ( peekCWString )
 import Foreign          ( nullPtr )
 import GHC.Exts         ( Ptr(..) )
 import System.Posix.Internals ( CFilePath, withFilePath )
@@ -108,6 +110,13 @@ addLibrarySearchPath str =
 removeLibrarySearchPath :: Ptr () -> IO Bool
 removeLibrarySearchPath = c_removeLibrarySearchPath
 
+findSystemLibrary :: String -> IO (Maybe String)
+findSystemLibrary str = do
+    result <- withFilePath str c_findSystemLibrary
+    case result == nullPtr of
+        True  -> return Nothing
+        False -> return $ Just $ peekCWString result
+
 resolveObjs :: IO SuccessFlag
 resolveObjs = do
    r <- c_resolveObjs
@@ -120,10 +129,11 @@ resolveObjs = do
 foreign import ccall unsafe "addDLL"                  c_addDLL                  :: CFilePath -> IO CString
 foreign import ccall unsafe "initLinker"              initObjLinker             :: IO ()
 foreign import ccall unsafe "insertSymbol"            c_insertSymbol            :: CFilePath -> CString -> Ptr a -> IO ()
-foreign import ccall unsafe "lookupSymbol"            c_lookupSymbol            :: CString -> IO (Ptr a)
+foreign import ccall unsafe "lookupSymbol"            c_lookupSymbol            :: CString   -> IO (Ptr a)
 foreign import ccall unsafe "loadArchive"             c_loadArchive             :: CFilePath -> IO Int
 foreign import ccall unsafe "loadObj"                 c_loadObj                 :: CFilePath -> IO Int
 foreign import ccall unsafe "unloadObj"               c_unloadObj               :: CFilePath -> IO Int
 foreign import ccall unsafe "resolveObjs"             c_resolveObjs             :: IO Int
 foreign import ccall unsafe "addLibrarySearchPath"    c_addLibrarySearchPath    :: CFilePath -> IO (Ptr ())
-foreign import ccall unsafe "removeLibrarySearchPath" c_removeLibrarySearchPath :: Ptr() -> IO Bool
+foreign import ccall unsafe "removeLibrarySearchPath" c_removeLibrarySearchPath :: Ptr ()    -> IO Bool
+foreign import ccall unsafe "findSystemLibrary"       c_findSystemLibrary       :: CFilePath -> IO CFilePath
