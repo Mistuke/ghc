@@ -9,17 +9,17 @@
 -- | Primarily, this module consists of an interface to the C-land
 -- dynamic linker.
 module ObjLink (
-   initObjLinker,          -- :: IO ()
-   loadDLL,                -- :: String   -> IO (Maybe String)
-   loadArchive,            -- :: String   -> IO ()
-   loadObj,                -- :: String   -> IO ()
-   unloadObj,              -- :: String   -> IO ()
-   insertSymbol,           -- :: String   -> String -> Ptr a -> IO ()
-   lookupSymbol,           -- :: String   -> IO (Maybe (Ptr a))
-   resolveObjs,            -- :: IO SuccessFlag
-   addLibrarySearchPath,   -- :: FilePath -> IO (Ptr ())
-   removeLibrarySearchPath -- :: Ptr ()   -> IO Bool
-   findSystemLibrary       -- :: FilePath -> IO (Maybe FilePath)
+   initObjLinker,           -- :: IO ()
+   loadDLL,                 -- :: String   -> IO (Maybe String)
+   loadArchive,             -- :: String   -> IO ()
+   loadObj,                 -- :: String   -> IO ()
+   unloadObj,               -- :: String   -> IO ()
+   insertSymbol,            -- :: String   -> String -> Ptr a -> IO ()
+   lookupSymbol,            -- :: String   -> IO (Maybe (Ptr a))
+   resolveObjs,             -- :: IO SuccessFlag
+   addLibrarySearchPath,    -- :: FilePath -> IO (Ptr ())
+   removeLibrarySearchPath, -- :: Ptr ()   -> IO Bool
+   findSystemLibrary        -- :: FilePath -> IO (Maybe FilePath)
   )  where
 
 import Panic
@@ -29,7 +29,8 @@ import Util
 
 import Control.Monad    ( when )
 import Foreign.C
-import Foreign.C.Strings ( peekCWString )
+import Foreign.C.String ( peekCWString )
+import Foreign.Marshal.Alloc ( free )
 import Foreign          ( nullPtr )
 import GHC.Exts         ( Ptr(..) )
 import System.Posix.Internals ( CFilePath, withFilePath )
@@ -115,7 +116,9 @@ findSystemLibrary str = do
     result <- withFilePath str c_findSystemLibrary
     case result == nullPtr of
         True  -> return Nothing
-        False -> return $ Just $ peekCWString result
+        False -> do path <- peekCWString result
+                    free result
+                    return $ Just path
 
 resolveObjs :: IO SuccessFlag
 resolveObjs = do
