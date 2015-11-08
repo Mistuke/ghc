@@ -932,16 +932,18 @@ pathchar* findSystemLibrary(pathchar* dll_name)
 
 #if defined(OBJFORMAT_PEi386)
     const unsigned int init_buf_size = 1024;
-    int bufsize     = init_buf_size;
+    unsigned int bufsize     = init_buf_size;
     wchar_t* result = malloc(sizeof(wchar_t) * bufsize);
-    DWORD wResult   = SearchPathW(NULL, dll_name, NULL, bufsize, result);
+    DWORD wResult   = SearchPathW(NULL, dll_name, NULL, bufsize, result, NULL);
 
-    if (!wResult) {
-        sysErrorBelch("findSystemLibrary: %" PATH_FMT " (Win32 error %lu)", dll_name, GetLastError());
+    if (wResult > bufsize) {
+        result  = realloc(result, sizeof(wchar_t) * wResult);
     }
-    else if (wResult > bufsize) {
-        result  = realloc(sizeof(wchar_t) * wResult);
-        wResult = SearchPathW(NULL, dll_name, NULL, wResult, result);
+
+
+    if (!wResult && !SearchPathW(NULL, dll_name, NULL, wResult, result, NULL)) {
+        free(result);
+        return NULL;
     }
 
     return result;
