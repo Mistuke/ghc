@@ -1299,26 +1299,32 @@ locateLib hsc_env is_hs dirs lib
      loading_profiled_hs_libs = interpreterProfiled dflags
      loading_dynamic_hs_libs  = interpreterDynamic dflags
 
+     import_libs  = [lib <.> "lib", "lib" ++ lib ++ ".dll.a"]
+
      hs_dyn_lib_name = lib ++ '-':programName dflags ++ projectVersion dflags
      hs_dyn_lib_file = mkHsSOName platform hs_dyn_lib_name
 
-     so_name = mkSOName platform lib
+     so_name     = mkSOName platform lib
      lib_so_name = "lib" ++ so_name
      dyn_lib_file = case (arch, os) of
                              (ArchX86_64, OSSolaris2) -> "64" </> so_name
                              _ -> so_name
 
-     findObject     = liftM (fmap Object)  $ findFile dirs obj_file
-     findDynObject  = liftM (fmap Object)  $ findFile dirs dyn_obj_file
-     findArchive    = let local  = liftM (fmap Archive) $ findFile dirs arch_file
-                          linked = liftM (fmap Archive) $ searchForLibUsingGcc dflags arch_file dirs
-                      in liftM2 (<|>) local linked
-     findHSDll      = liftM (fmap DLLPath) $ findFile dirs hs_dyn_lib_file
-     findDll        = liftM (fmap DLLPath) $ findFile dirs dyn_lib_file
-     findSysDll     = fmap (fmap $ DLL . takeFileName) $ findSystemLibrary hsc_env so_name
-     tryGcc         = let short = liftM (fmap DLLPath) $ searchForLibUsingGcc dflags so_name     dirs
-                          full  = liftM (fmap DLLPath) $ searchForLibUsingGcc dflags lib_so_name dirs
-                      in liftM2 (<|>) short full
+     findObject    = liftM (fmap Object)  $ findFile dirs obj_file
+     findDynObject = liftM (fmap Object)  $ findFile dirs dyn_obj_file
+     findArchive   = let local  = liftM (fmap Archive) $ findFile dirs arch_file
+                         linked = liftM (fmap Archive) $ searchForLibUsingGcc dflags arch_file dirs
+                     in liftM2 (<|>) local linked
+     findHSDll     = liftM (fmap DLLPath) $ findFile dirs hs_dyn_lib_file
+     findDll       = liftM (fmap DLLPath) $ findFile dirs dyn_lib_file
+     findSysDll    = fmap (fmap $ DLL . takeFileName) $ findSystemLibrary so_name
+     tryGcc        = let short = liftM (fmap DLLPath) $ searchForLibUsingGcc dflags so_name     dirs
+                         full  = liftM (fmap DLLPath) $ searchForLibUsingGcc dflags lib_so_name dirs
+                     in liftM2 (<|>) short full
+     tryImpLib     = case os of
+                       OSMinGW32 -> let check name = liftM (fmap Archive) $ searchForLibUsingGcc dflags name dirs
+                                    in foldl' (liftM (<|>)) id (map check import_libs) Nothing
+                       _         -> return Nothing
 
      assumeDll   = return (DLL lib)
      infixr `orElse`
