@@ -1323,7 +1323,8 @@ locateLib hsc_env is_hs dirs lib
                      in liftM2 (<|>) short full
      tryImpLib     = case os of
                        OSMinGW32 -> let check name = liftM (fmap Archive) $ searchForLibUsingGcc dflags name dirs
-                                    in foldl' (liftM (<|>)) id (map check import_libs) Nothing
+                                    in do results <- mapM check import_libs
+                                          return $ foldl' (liftM (<|>)) id results Nothing
                        _         -> return Nothing
 
      assumeDll   = return (DLL lib)
