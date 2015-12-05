@@ -1070,7 +1070,11 @@
 #endif
 
 /* entirely bogus claims about types of these symbols */
-#define SymI_NeedsProto(vvv)  extern void vvv(void);
+#if defined(mingw32_HOST_OS)
+#   define SymI_NeedsProto(vvv)  extern void vvv(void) __attribute__((weak));
+#else
+#   define SymI_NeedsProto(vvv)  extern void vvv(void);
+#endif
 #define SymI_NeedsDataProto(vvv)  extern StgWord vvv[];
 #if defined(COMPILING_WINDOWS_DLL)
 #define SymE_HasProto(vvv)    SymE_HasProto(vvv);

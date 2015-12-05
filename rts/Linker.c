@@ -371,6 +371,7 @@ static int ghciInsertSymbolTable(
    HsBool weak,
    ObjectCode *owner)
 {
+   debugBelch("Inserting Symbol %s with Weak:%ld\n", key, weak);
    RtsSymbolInfo *pinfo = lookupStrHashTable(table, key);
    if (!pinfo) /* new entry */
    {
@@ -379,6 +380,8 @@ static int ghciInsertSymbolTable(
       pinfo->owner = owner;
       pinfo->weak = weak;
       insertStrHashTable(table, key, pinfo);
+
+      debugBelch("Inserted Symbol %s with Weak:%ld\n", key, pinfo->weak);
       return 1;
    }
    else if ((!pinfo->weak || pinfo->value) && weak)
@@ -391,11 +394,13 @@ static int ghciInsertSymbolTable(
       pinfo->value = data;
       pinfo->owner = owner;
       pinfo->weak = HS_BOOL_FALSE;
+
+      debugBelch("Replacing Symbol %s with Weak:%ld\n", key, pinfo->weak);
       return 1;
    }
    debugBelch(
-      "GHC runtime linker: fatal error: I found a duplicate definition for symbol\n"
-      "   %s\n"
+      "\nGHC runtime linker: fatal error: I found a duplicate definition for symbol\n"
+      "   %s (Weak:%ld)\n"
       "whilst processing object file\n"
       "   %" PATH_FMT "\n"
       "This could be caused by:\n"
@@ -403,7 +408,7 @@ static int ghciInsertSymbolTable(
       "   * Specifying the same object file twice on the GHCi command line\n"
       "   * An incorrect `package.conf' entry, causing some object to be\n"
       "     loaded twice.\n",
-      (char*)key,
+      (char*)key, pinfo->weak,
       obj_name
    );
    return 0;
@@ -420,7 +425,7 @@ static HsBool ghciLookupSymbolTable(HashTable *table,
     if (pinfo->weak)
         IF_DEBUG(linker, debugBelch("lookup: promoting %s\n", key));
     /* Once it's looked up, it can no longer be overridden */
-    pinfo->weak = HS_BOOL_FALSE;
+    //pinfo->weak = HS_BOOL_FALSE;
 
     *result = pinfo->value;
     return HS_BOOL_TRUE;
@@ -495,7 +500,7 @@ initLinker_ (int retain_cafs)
     /* populate the symbol table with stuff from the RTS */
     for (sym = rtsSyms; sym->lbl != NULL; sym++) {
         if (! ghciInsertSymbolTable(WSTR("(GHCi built-in symbols)"),
-                                    symhash, sym->lbl, sym->addr, HS_BOOL_FALSE, NULL)) {
+                                    symhash, sym->lbl, sym->addr, HS_BOOL_TRUE, NULL)) {
             barf("ghciInsertSymbolTable failed");
         }
         IF_DEBUG(linker, debugBelch("initLinker: inserting rts symbol %s, %p\n", sym->lbl, sym->addr));

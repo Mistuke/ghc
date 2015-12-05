@@ -142,7 +142,7 @@ if config.use_threads == 1:
         config.use_threads = 0
     if windows: # See Trac ticket #10510.
         print("Warning: Ignoring request to use threads as running on Windows")
-        config.use_threads = 0
+        config.use_threads = 1
 
 config.cygwin = False
 config.msys = False
