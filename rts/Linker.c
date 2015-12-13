@@ -3171,14 +3171,26 @@ static int checkAndLoadImportLibrary( pathchar* arch_name, char* member_name, FI
     }
 
     char* symbol  = strtok(image, "\0");
-    int symLen = strlen(symbol) + 1;
+    int symLen    = strlen(symbol) + 1;
     char* dllName = malloc(n - symLen);
-    dllName = strncpy(dllName, image + symLen, n - symLen);
+    dllName       = strncpy(dllName, image + symLen, n - symLen);
+    pathchar* dll = malloc(sizeof(wchar_t) * symLen);
+    mbstowcs(dll, dllName, symLen);
+    free(dllName);
 
-    debugBelch("loadArchive: read symbol %s from lib `%s'\n", symbol, dllName);
-
+    IF_DEBUG(linker, debugBelch("loadArchive: read symbol %s from lib `%ls'\n", symbol, dll));
+    const char* result = addDLL(dll);
 
     free(image);
+
+    if (result != NULL){
+        errorBelch("Could not load `%ls'. Reason: %s\n", dll, result);
+        free(dll);
+        fseek(f, -(n + sizeof_COFF_import_Header), SEEK_CUR);
+        return 0;
+    }
+
+    free(dll);
     return 1;
 }
 
