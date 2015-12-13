@@ -3398,6 +3398,63 @@ allocateImageAndTrampolines (
    return image + PEi386_IMAGE_OFFSET;
 }
 
+static int checkAndLoadImportLibrary( pathchar* arch_name, char* member_name, FILE* f)
+{
+    char* image;
+
+    /* Based on Import Library specification. PE Spec section 7.1 */
+
+    COFF_import_header hdr;
+    size_t n;
+
+    n = fread(&hdr, 1, sizeof_COFF_import_Header, f);
+    if (n != sizeof(COFF_header)) {
+        errorBelch("getNumberOfSymbols: error whilst reading `%s' header in `%" PATH_FMT "'\n",
+            member_name, arch_name);
+        return 0;
+    }
+
+    if (hdr.Sig1 != 0x0 || hdr.Sig2 != 0xFFFF) {
+        fseek(f, -sizeof_COFF_import_Header, SEEK_CUR);
+        IF_DEBUG(linker, debugBelch("loadArchive: Object `%s` is not an import lib. Skipping...\n", member_name));
+        return 0;
+    }
+
+    fpos_t pos;
+    fgetpos(f, &pos);
+    IF_DEBUG(linker, debugBelch("loadArchive: reading %d bytes at %lld\n", hdr.SizeOfData, pos));
+
+    image = malloc(hdr.SizeOfData);
+    n = fread(image, 1, hdr.SizeOfData, f);
+    if (n != hdr.SizeOfData) {
+        errorBelch("loadArchive: error whilst reading `%s' header in `%" PATH_FMT "'. Did not read enough bytes.\n",
+            member_name, arch_name);
+    }
+
+    char* symbol  = strtok(image, "\0");
+    int symLen    = strlen(symbol) + 1;
+    char* dllName = malloc(n - symLen);
+    dllName       = strncpy(dllName, image + symLen, n - symLen);
+    pathchar* dll = malloc(sizeof(wchar_t) * symLen);
+    mbstowcs(dll, dllName, symLen);
+    free(dllName);
+
+    IF_DEBUG(linker, debugBelch("loadArchive: read symbol %s from lib `%ls'\n", symbol, dll));
+    const char* result = addDLL(dll);
+
+    free(image);
+
+    if (result != NULL){
+        errorBelch("Could not load `%ls'. Reason: %s\n", dll, result);
+        free(dll);
+        fseek(f, -(n + sizeof_COFF_import_Header), SEEK_CUR);
+        return 0;
+    }
+
+    free(dll);
+    return 1;
+}
+
 /* We use myindex to calculate array addresses, rather than
    simply doing the normal subscript thing.  That's because
    some of the above structs have sizes which are not
