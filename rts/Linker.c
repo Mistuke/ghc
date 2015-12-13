@@ -3435,6 +3435,7 @@ static int checkAndLoadImportLibrary( pathchar* arch_name, char* member_name, FI
     int symLen    = strlen(symbol) + 1;
     char* dllName = malloc(n - symLen);
     dllName       = strncpy(dllName, image + symLen, n - symLen);
+    symLen++;
     pathchar* dll = malloc(sizeof(wchar_t) * symLen);
     mbstowcs(dll, dllName, symLen);
     free(dllName);
