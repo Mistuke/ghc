@@ -858,7 +858,7 @@ addDLL( pathchar *dll_name )
    buf = stgMallocBytes(bufsize * sizeof(wchar_t), "addDLL");
 
    /* These are ordered by probability of success and order we'd like them */
-   const wchar_t *formats[] = { L"%s.DLL", L"%s.DRV", L"lib%s.DLL", L"%s" };
+   const wchar_t *formats[] = { L"%ls.DLL", L"%ls.DRV", L"lib%ls.DLL", L"%ls" };
    const DWORD flags[]      = { LOAD_LIBRARY_SEARCH_USER_DIRS | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, 0 };
 
    int cFormat;
@@ -3174,6 +3174,7 @@ static int checkAndLoadImportLibrary( pathchar* arch_name, char* member_name, FI
     int symLen    = strlen(symbol) + 1;
     char* dllName = malloc(n - symLen);
     dllName       = strncpy(dllName, image + symLen, n - symLen);
+    symLen++;
     pathchar* dll = malloc(sizeof(wchar_t) * symLen);
     mbstowcs(dll, dllName, symLen);
     free(dllName);
