@@ -244,7 +244,18 @@ static void machoInitSymbolsWithoutUnderscore( void );
 // MingW-w64 is missing these from the implementation. So we have to look them up
 typedef DLL_DIRECTORY_COOKIE(*LPAddDLLDirectory)(PCWSTR NewDirectory);
 typedef WINBOOL(*LPRemoveDLLDirectory)(DLL_DIRECTORY_COOKIE Cookie);
+
+/* Hack, for bug in ld.  Will be removed soon.  */
+#if defined(__GNUC__)
+#define __ImageBase __MINGW_LSYMBOL(_image_base__)
 #endif
+
+/* Get the base of the module.       */
+/* This symbol is defined by ld.     */
+extern IMAGE_DOS_HEADER __ImageBase;
+
+#define __image_base (void*)((HINSTANCE)&__ImageBase)
+#endif /* OBJFORMAT_PEi386 */
 
 static void freeProddableBlocks (ObjectCode *oc);
 
@@ -371,7 +382,7 @@ static int ghciInsertSymbolTable(
    HsBool weak,
    ObjectCode *owner)
 {
-   debugBelch("Inserting Symbol %s with Weak:%ld\n", key, weak);
+   //debugBelch("Inserting Symbol %s with Weak:%lld\n", key, weak);
    RtsSymbolInfo *pinfo = lookupStrHashTable(table, key);
    if (!pinfo) /* new entry */
    {
@@ -381,7 +392,7 @@ static int ghciInsertSymbolTable(
       pinfo->weak = weak;
       insertStrHashTable(table, key, pinfo);
 
-      debugBelch("Inserted Symbol %s with Weak:%ld\n", key, pinfo->weak);
+      //debugBelch("Inserted Symbol %s with Weak:%lld\n", key, pinfo->weak);
       return 1;
    }
    else if ((!pinfo->weak || pinfo->value) && weak)
@@ -395,12 +406,12 @@ static int ghciInsertSymbolTable(
       pinfo->owner = owner;
       pinfo->weak = HS_BOOL_FALSE;
 
-      debugBelch("Replacing Symbol %s with Weak:%ld\n", key, pinfo->weak);
+      //debugBelch("Replacing Symbol %s with Weak:%lld\n", key, pinfo->weak);
       return 1;
    }
    debugBelch(
       "\nGHC runtime linker: fatal error: I found a duplicate definition for symbol\n"
-      "   %s (Weak:%ld)\n"
+      "   %s (Weak:%lld)\n"
       "whilst processing object file\n"
       "   %" PATH_FMT "\n"
       "This could be caused by:\n"
@@ -425,7 +436,7 @@ static HsBool ghciLookupSymbolTable(HashTable *table,
     if (pinfo->weak)
         IF_DEBUG(linker, debugBelch("lookup: promoting %s\n", key));
     /* Once it's looked up, it can no longer be overridden */
-    //pinfo->weak = HS_BOOL_FALSE;
+    pinfo->weak = HS_BOOL_FALSE;
 
     *result = pinfo->value;
     return HS_BOOL_TRUE;
@@ -455,6 +466,9 @@ static Mutex dl_mutex; // mutex to protect dlopen/dlerror critical section
 #endif
 #elif defined(OBJFORMAT_PEi386)
 void addDLLHandle(pathchar* dll_name, HINSTANCE instance);
+extern HINSTANCE __mingw_winmain_hInstance;
+extern LPWSTR __mingw_winmain_lpCmdLine;
+extern DWORD* __mingw_winmain_nShowCmd;
 #endif
 
 void initLinker (void)
@@ -518,6 +532,38 @@ initLinker_ (int retain_cafs)
         barf("ghciInsertSymbolTable failed");
     }
 
+#if defined(mingw32_HOST_OS)
+    if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
+        symhash, "__image_base__", __image_base, HS_BOOL_FALSE, NULL)) {
+        barf("ghciInsertSymbolTable failed");
+    }
+
+    if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
+        symhash, "wWinMain", (void *)0x12345687, HS_BOOL_FALSE, NULL)) {
+        barf("ghciInsertSymbolTable failed");
+    }
+
+    if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
+        symhash, "__mingw_winmain_hInstance", __mingw_winmain_hInstance, HS_BOOL_FALSE, NULL)) {
+        barf("ghciInsertSymbolTable failed");
+    }
+
+    if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
+        symhash, "__mingw_winmain_lpCmdLine", __mingw_winmain_lpCmdLine, HS_BOOL_FALSE, NULL)) {
+        barf("ghciInsertSymbolTable failed");
+    }
+
+    if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
+        symhash, "__mingw_winmain_nShowCmd", __mingw_winmain_nShowCmd, HS_BOOL_FALSE, NULL)) {
+        barf("ghciInsertSymbolTable failed");
+    }
+
+    if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
+        symhash, "WinMain", (void *)0x12345687, HS_BOOL_FALSE, NULL)) {
+        barf("ghciInsertSymbolTable failed");
+    }
+#endif /* mingw32_HOST_OS */
+
     // Redirect newCAF to newRetainedCAF if retain_cafs is true.
     if (! ghciInsertSymbolTable(WSTR("(GHCi built-in symbols)"), symhash,
                                 MAYBE_LEADING_UNDERSCORE_STR("newCAF"),
@@ -562,6 +608,12 @@ initLinker_ (int retain_cafs)
      */
     addDLL(WSTR("msvcrt"));
     addDLL(WSTR("kernel32"));
+    addDLL(WSTR("Advapi32"));
+    addDLL(WSTR("user32"));
+    loadArchive(WSTR("E:\\msys64\\home\\Tamar\\ghc2\\inplace\\mingw\\lib\\gcc\\x86_64-w64-mingw32\\5.2.0\\libgcc.a"));
+    loadArchive(WSTR("E:\\msys64\\home\\Tamar\\ghc2\\inplace\\mingw\\x86_64-w64-mingw32\\lib\\libmingw32.a"));
+    loadArchive(WSTR("E:\\msys64\\home\\Tamar\\ghc2\\inplace\\mingw\\x86_64-w64-mingw32\\lib\\libmingwex.a"));
+    loadArchive(WSTR("E:\\msys64\\home\\Tamar\\ghc2\\inplace\\mingw\\x86_64-w64-mingw32\\lib\\libmsvcr120d.a"));
     addDLLHandle(WSTR("*.exe"), GetModuleHandle(NULL));
 #endif
 
@@ -3763,7 +3815,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
          /* cstring_from_COFF_symbol_name always succeeds. */
          oc->symbols[i] = (char*)sname;
          if (! ghciInsertSymbolTable(oc->fileName, symhash, (char*)sname, addr,
-                                     isWeak, oc)) {
+                                     HS_BOOL_TRUE || isWeak, oc)) {
              return 0;
          }
       } else {
