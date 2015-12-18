@@ -466,9 +466,7 @@ static Mutex dl_mutex; // mutex to protect dlopen/dlerror critical section
 #endif
 #elif defined(OBJFORMAT_PEi386)
 void addDLLHandle(pathchar* dll_name, HINSTANCE instance);
-extern HINSTANCE __mingw_winmain_hInstance;
-extern LPWSTR __mingw_winmain_lpCmdLine;
-extern DWORD* __mingw_winmain_nShowCmd;
+extern int mingw_app_type;
 #endif
 
 void initLinker (void)
@@ -534,32 +532,31 @@ initLinker_ (int retain_cafs)
 
 #if defined(mingw32_HOST_OS)
     if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
-        symhash, "__image_base__", __image_base, HS_BOOL_FALSE, NULL)) {
+        symhash, "__mingw_raise_matherr", __mingw_raise_matherr, HS_BOOL_TRUE, NULL)) {
         barf("ghciInsertSymbolTable failed");
     }
-
     if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
-        symhash, "wWinMain", (void *)0x12345687, HS_BOOL_FALSE, NULL)) {
+        symhash, "_fputwc_nolock", fputwc, HS_BOOL_TRUE, NULL)) {
         barf("ghciInsertSymbolTable failed");
     }
-
     if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
-        symhash, "__mingw_winmain_hInstance", __mingw_winmain_hInstance, HS_BOOL_FALSE, NULL)) {
+        symhash, "_fgetwc_nolock", fgetwc, HS_BOOL_TRUE, NULL)) {
         barf("ghciInsertSymbolTable failed");
     }
-
     if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
-        symhash, "__mingw_winmain_lpCmdLine", __mingw_winmain_lpCmdLine, HS_BOOL_FALSE, NULL)) {
+        symhash, "mingw_app_type", &mingw_app_type, HS_BOOL_TRUE, NULL)) {
         barf("ghciInsertSymbolTable failed");
     }
-
     if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
-        symhash, "__mingw_winmain_nShowCmd", __mingw_winmain_nShowCmd, HS_BOOL_FALSE, NULL)) {
+        symhash, "fileno", _fileno, HS_BOOL_TRUE, NULL)) {
         barf("ghciInsertSymbolTable failed");
     }
-
     if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
-        symhash, "WinMain", (void *)0x12345687, HS_BOOL_FALSE, NULL)) {
+        symhash, "strdup", _strdup, HS_BOOL_TRUE, NULL)) {
+        barf("ghciInsertSymbolTable failed");
+    }
+    if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
+        symhash, "__image_base__", __image_base, HS_BOOL_TRUE, NULL)) {
         barf("ghciInsertSymbolTable failed");
     }
 #endif /* mingw32_HOST_OS */
@@ -608,13 +605,11 @@ initLinker_ (int retain_cafs)
      */
     addDLL(WSTR("msvcrt"));
     addDLL(WSTR("kernel32"));
-    addDLL(WSTR("Advapi32"));
     addDLL(WSTR("user32"));
-    loadArchive(WSTR("E:\\msys64\\home\\Tamar\\ghc2\\inplace\\mingw\\lib\\gcc\\x86_64-w64-mingw32\\5.2.0\\libgcc.a"));
-    loadArchive(WSTR("E:\\msys64\\home\\Tamar\\ghc2\\inplace\\mingw\\x86_64-w64-mingw32\\lib\\libmingw32.a"));
-    loadArchive(WSTR("E:\\msys64\\home\\Tamar\\ghc2\\inplace\\mingw\\x86_64-w64-mingw32\\lib\\libmingwex.a"));
-    loadArchive(WSTR("E:\\msys64\\home\\Tamar\\ghc2\\inplace\\mingw\\x86_64-w64-mingw32\\lib\\libmsvcr120d.a"));
+    addDLL(WSTR("Advapi32"));
     addDLLHandle(WSTR("*.exe"), GetModuleHandle(NULL));
+    loadArchive(WSTR("E:\\msys64\\home\\Tamar\\ghc2\\inplace\\mingw\\lib\\gcc\\x86_64-w64-mingw32\\5.2.0\\libgcc.a"));
+    loadArchive(WSTR("E:\\msys64\\home\\Tamar\\ghc2\\inplace\\mingw\\x86_64-w64-mingw32\\lib\\libmingwex.a"));
 #endif
 
 #if USE_MMAP
