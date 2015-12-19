@@ -130,6 +130,10 @@
       SymI_NeedsProto(_getpid)                           \
       RTS_MINGW_GETTIMEOFDAY_SYM                         \
       SymI_HasProto(isatty)                              \
+      SymI_HasProto_redirect(_fputwc_nolock, fputwc)     \
+      SymI_HasProto_redirect(_fgetwc_nolock, fgetwc)     \
+      SymI_HasProto_redirect(fileno        , _fileno)    \
+      SymI_HasProto_redirect(strdup        , _strdup)    \
       SymI_NeedsProto(closedir)
 
 #else

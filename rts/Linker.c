@@ -527,22 +527,6 @@ initLinker_ (int retain_cafs)
     }
 
 #if defined(mingw32_HOST_OS)
-    if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
-        symhash, "_fputwc_nolock", fputwc, HS_BOOL_TRUE, NULL)) {
-        barf("ghciInsertSymbolTable failed");
-    }
-    if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
-        symhash, "_fgetwc_nolock", fgetwc, HS_BOOL_TRUE, NULL)) {
-        barf("ghciInsertSymbolTable failed");
-    }
-    if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
-        symhash, "fileno", _fileno, HS_BOOL_TRUE, NULL)) {
-        barf("ghciInsertSymbolTable failed");
-    }
-    if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
-        symhash, "strdup", _strdup, HS_BOOL_TRUE, NULL)) {
-        barf("ghciInsertSymbolTable failed");
-    }
     if (!ghciInsertSymbolTable(WSTR("(GHCi/Ld special symbols)"),
         symhash, "__image_base__", __image_base, HS_BOOL_TRUE, NULL)) {
         barf("ghciInsertSymbolTable failed");
