@@ -532,10 +532,6 @@ initLinker_ (int retain_cafs)
 
 #if defined(mingw32_HOST_OS)
     if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
-        symhash, "__mingw_raise_matherr", __mingw_raise_matherr, HS_BOOL_TRUE, NULL)) {
-        barf("ghciInsertSymbolTable failed");
-    }
-    if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
         symhash, "_fputwc_nolock", fputwc, HS_BOOL_TRUE, NULL)) {
         barf("ghciInsertSymbolTable failed");
     }
@@ -608,8 +604,6 @@ initLinker_ (int retain_cafs)
     addDLL(WSTR("user32"));
     addDLL(WSTR("Advapi32"));
     addDLLHandle(WSTR("*.exe"), GetModuleHandle(NULL));
-    loadArchive(WSTR("E:\\msys64\\home\\Tamar\\ghc2\\inplace\\mingw\\lib\\gcc\\x86_64-w64-mingw32\\5.2.0\\libgcc.a"));
-    loadArchive(WSTR("E:\\msys64\\home\\Tamar\\ghc2\\inplace\\mingw\\x86_64-w64-mingw32\\lib\\libmingwex.a"));
 #endif
 
 #if USE_MMAP
