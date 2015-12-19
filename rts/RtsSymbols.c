@@ -89,6 +89,7 @@
       SymI_HasProto(stg_asyncWritezh)                    \
       SymI_HasProto(stg_asyncDoProczh)                   \
       SymI_HasProto(__mingw_raise_matherr)               \
+      SymI_NeedsProto(mingw_app_type)                    \
       SymI_HasProto(getWin32ProgArgv)                    \
       SymI_HasProto(setWin32ProgArgv)                    \
       RTS___MINGW_VFPRINTF_SYM                           \

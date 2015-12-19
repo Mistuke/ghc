@@ -382,7 +382,6 @@ static int ghciInsertSymbolTable(
    HsBool weak,
    ObjectCode *owner)
 {
-   //debugBelch("Inserting Symbol %s with Weak:%lld\n", key, weak);
    RtsSymbolInfo *pinfo = lookupStrHashTable(table, key);
    if (!pinfo) /* new entry */
    {
@@ -392,7 +391,6 @@ static int ghciInsertSymbolTable(
       pinfo->weak = weak;
       insertStrHashTable(table, key, pinfo);
 
-      //debugBelch("Inserted Symbol %s with Weak:%lld\n", key, pinfo->weak);
       return 1;
    }
    else if ((!pinfo->weak || pinfo->value) && weak)
@@ -406,7 +404,6 @@ static int ghciInsertSymbolTable(
       pinfo->owner = owner;
       pinfo->weak = HS_BOOL_FALSE;
 
-      //debugBelch("Replacing Symbol %s with Weak:%lld\n", key, pinfo->weak);
       return 1;
    }
    debugBelch(
@@ -466,7 +463,6 @@ static Mutex dl_mutex; // mutex to protect dlopen/dlerror critical section
 #endif
 #elif defined(OBJFORMAT_PEi386)
 void addDLLHandle(pathchar* dll_name, HINSTANCE instance);
-extern int mingw_app_type;
 #endif
 
 void initLinker (void)
@@ -540,10 +536,6 @@ initLinker_ (int retain_cafs)
         barf("ghciInsertSymbolTable failed");
     }
     if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
-        symhash, "mingw_app_type", &mingw_app_type, HS_BOOL_TRUE, NULL)) {
-        barf("ghciInsertSymbolTable failed");
-    }
-    if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
         symhash, "fileno", _fileno, HS_BOOL_TRUE, NULL)) {
         barf("ghciInsertSymbolTable failed");
     }
@@ -551,7 +543,7 @@ initLinker_ (int retain_cafs)
         symhash, "strdup", _strdup, HS_BOOL_TRUE, NULL)) {
         barf("ghciInsertSymbolTable failed");
     }
-    if (!ghciInsertSymbolTable(WSTR("(GHCi special symbols)"),
+    if (!ghciInsertSymbolTable(WSTR("(GHCi/Ld special symbols)"),
         symhash, "__image_base__", __image_base, HS_BOOL_TRUE, NULL)) {
         barf("ghciInsertSymbolTable failed");
     }
