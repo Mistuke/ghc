@@ -77,7 +77,7 @@ compile_libAS_impl_msvc:
 	mkdir bin_impl_msvc
 	'$(TEST_HC)' $(MY_TEST_HC_OPTS) -odir "bin_impl_msvc" -shared A.c -o "bin_impl_msvc/$(call DLL,ASimpL)"
 	rm -f bin_impl_msvc/libAS*.a
-	echo ":q" | '$(TEST_HC)' $(TEST_HC_OPTS) --interactive -ignore-dot-ghci -v4 -lAS -L./bin_impl_msvc -L"./$(shell uname -m)"
+	echo ":q" | '$(TEST_HC)' $(TEST_HC_OPTS) --interactive -ignore-dot-ghci -v0 -lAS -L./bin_impl_msvc -L"./$(shell uname -m)"
 
 .PHONY: T1407
 T1407:
