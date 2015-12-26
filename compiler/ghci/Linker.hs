@@ -1281,9 +1281,10 @@ locateLib hsc_env is_hs dirs lib
     -- For non-Haskell libraries (e.g. gmp, iconv):
     --   first look in library-dirs for a dynamic library (libfoo.so)
     --   then  look in library-dirs for a static library (libfoo.a)
-    --   first look in library-dirs and inplace GCC for a dynamic library (libfoo.so)
+    --   then look in library-dirs and inplace GCC for a dynamic library (libfoo.so)
     --   then  check for system dynamic libraries (e.g. kernel32.dll on windows)
     --   then  try "gcc --print-file-name" to search gcc's search path
+    --   then  try looking for import libraries on Windows (.dll.a, .lib)
     --   then  look in library-dirs and inplace GCC for a static library (libfoo.a)
     --       for a dynamic library (#5289)
     --   otherwise, assume loadDLL can find it
@@ -1291,6 +1292,7 @@ locateLib hsc_env is_hs dirs lib
   = findDll     `orElse`
     findSysDll  `orElse`
     tryGcc      `orElse`
+    tryImpLib   `orElse`
     findArchive `orElse`
     assumeDll
 
