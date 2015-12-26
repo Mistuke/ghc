@@ -1323,7 +1323,7 @@ locateLib hsc_env is_hs dirs lib
      loading_profiled_hs_libs = interpreterProfiled dflags
      loading_dynamic_hs_libs  = interpreterDynamic dflags
 
-     import_libs  = [lib <.> "lib", "lib" ++ lib ++ ".dll.a"]
+     import_libs  = [lib <.> "lib", "lib" ++ lib <.> "lib", "lib" ++ lib <.> "dll.a"]
 
      hs_dyn_lib_name = lib ++ '-':programName dflags ++ projectVersion dflags
      hs_dyn_lib_file = mkHsSOName platform hs_dyn_lib_name
