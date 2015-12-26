@@ -216,10 +216,6 @@ static char *allocateImageAndTrampolines (
    FILE* f,
 #endif
    int size );
-static int checkAndLoadImportLibrary(
-    pathchar* arch_name,
-    char* member_name,
-    FILE* f);
 #if defined(x86_64_HOST_ARCH)
 static int ocAllocateSymbolExtras_PEi386 ( ObjectCode* oc );
 static size_t makeSymbolExtra_PEi386( ObjectCode* oc, size_t, char* symbol );
@@ -245,6 +241,11 @@ static void machoInitSymbolsWithoutUnderscore( void );
 #endif
 
 #if defined(OBJFORMAT_PEi386)
+static int checkAndLoadImportLibrary(
+    pathchar* arch_name,
+    char* member_name,
+    FILE* f);
+
 // MingW-w64 is missing these from the implementation. So we have to look them up
 typedef DLL_DIRECTORY_COOKIE(WINAPI *LPAddDLLDirectory)(PCWSTR NewDirectory);
 typedef WINBOOL(WINAPI *LPRemoveDLLDirectory)(DLL_DIRECTORY_COOKIE Cookie);
@@ -2174,6 +2175,7 @@ static HsInt loadArchive_ (pathchar *path)
             gnuFileIndex[memberSize] = '/';
             gnuFileIndexSize = memberSize;
         }
+#if defined(OBJFORMAT_PEi386)
         else if (isImportLib) {
             if (checkAndLoadImportLibrary(path, fileName, f)) {
                 IF_DEBUG(linker, debugBelch("loadArchive: Member is an import file section... Corresponding DLL has been loaded...\n"));
@@ -2186,6 +2188,7 @@ static HsInt loadArchive_ (pathchar *path)
                     memberSize, path);
             }
         }
+#endif
         else {
             IF_DEBUG(linker, debugBelch("loadArchive: '%s' does not appear to be an object file\n", fileName));
             if (!isThin || thisFileNameSize == 0) {
