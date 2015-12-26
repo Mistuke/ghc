@@ -1879,7 +1879,7 @@ static HsInt loadArchive_ (pathchar *path)
 
     while (1) {
         fgetpos(f, &pos);
-        IF_DEBUG(linker, debugBelch("loadArchive: reading at %lld\n", pos));
+        IF_DEBUG(linker, debugBelch("loadArchive: reading at %p\n", pos));
         n = fread ( fileName, 1, 16, f );
         if (n != 16) {
             if (feof(f)) {
