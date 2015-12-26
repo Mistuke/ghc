@@ -2132,13 +2132,16 @@ static HsInt loadArchive_ (pathchar *path)
     }
 #else
     else {
-        barf("loadArchive: Not an archive: `%s'", path);
+        barf("loadArchive: Not an archive: `%" PATH_FMT "'", path);
     }
 #endif
 
     IF_DEBUG(linker, debugBelch("loadArchive: loading archive contents\n"));
+    fpos_t pos;
 
-    while(1) {
+    while (1) {
+        fgetpos(f, &pos);
+        IF_DEBUG(linker, debugBelch("loadArchive: reading at %p\n", pos));
         n = fread ( fileName, 1, 16, f );
         if (n != 16) {
             if (feof(f)) {
@@ -2146,7 +2149,7 @@ static HsInt loadArchive_ (pathchar *path)
                 break;
             }
             else {
-                barf("loadArchive: Failed reading file name from `%s'", path);
+                barf("loadArchive: Failed reading file name from `%" PATH_FMT "'", path);
             }
         }
 
@@ -2159,19 +2162,19 @@ static HsInt loadArchive_ (pathchar *path)
 
         n = fread ( tmp, 1, 12, f );
         if (n != 12)
-            barf("loadArchive: Failed reading mod time from `%s'", path);
+            barf("loadArchive: Failed reading mod time from `%" PATH_FMT "'", path);
         n = fread ( tmp, 1, 6, f );
         if (n != 6)
-            barf("loadArchive: Failed reading owner from `%s'", path);
+            barf("loadArchive: Failed reading owner from `%" PATH_FMT "'", path);
         n = fread ( tmp, 1, 6, f );
         if (n != 6)
-            barf("loadArchive: Failed reading group from `%s'", path);
+            barf("loadArchive: Failed reading group from `%" PATH_FMT "'", path);
         n = fread ( tmp, 1, 8, f );
         if (n != 8)
-            barf("loadArchive: Failed reading mode from `%s'", path);
+            barf("loadArchive: Failed reading mode from `%" PATH_FMT "'", path);
         n = fread ( tmp, 1, 10, f );
         if (n != 10)
-            barf("loadArchive: Failed reading size from `%s'", path);
+            barf("loadArchive: Failed reading size from `%" PATH_FMT "'", path);
         tmp[10] = '\0';
         for (n = 0; isdigit(tmp[n]); n++);
         tmp[n] = '\0';
@@ -2180,9 +2183,9 @@ static HsInt loadArchive_ (pathchar *path)
         IF_DEBUG(linker, debugBelch("loadArchive: size of this archive member is %d\n", memberSize));
         n = fread ( tmp, 1, 2, f );
         if (n != 2)
-            barf("loadArchive: Failed reading magic from `%s'", path);
+            barf("loadArchive: Failed reading magic from `%" PATH_FMT "'", path);
         if (strncmp(tmp, "\x60\x0A", 2) != 0)
-            barf("loadArchive: Failed reading magic from `%s' at %ld. Got %c%c",
+            barf("loadArchive: Failed reading magic from `%" PATH_FMT "' at %ld. Got %c%c",
                  path, ftell(f), tmp[0], tmp[1]);
 
         isGnuIndex = 0;
@@ -2202,7 +2205,7 @@ static HsInt loadArchive_ (pathchar *path)
                 }
                 n = fread ( fileName, 1, thisFileNameSize, f );
                 if (n != (int)thisFileNameSize) {
-                    barf("loadArchive: Failed reading filename from `%s'",
+                    barf("loadArchive: Failed reading filename from `%" PATH_FMT "'",
                          path);
                 }
                 fileName[thisFileNameSize] = 0;
@@ -2302,6 +2305,24 @@ static HsInt loadArchive_ (pathchar *path)
                 fileName[thisFileNameSize - 2] == '_' &&
                 fileName[thisFileNameSize - 1] == 'o');
 
+#if defined(mingw32_HOST_OS)
+        /*
+        * Note [MSVC import files (ext .lib)]
+        * MSVC compilers store the object files in
+        * the import libraries with extension .dll
+        * so on Windows we should look for those too.
+        * The PE coff format doesn't specify any specific file name
+        * for sections. So on windows, just try to load it all.
+        *
+        * Linker members (e.g. filenme / are skipped since they are not needed)
+        */
+        isImportLib = (thisFileNameSize >= 4 &&
+                       fileName[thisFileNameSize - 4] == '.' &&
+                       fileName[thisFileNameSize - 3] == 'd' &&
+                       fileName[thisFileNameSize - 2] == 'l' &&
+                       fileName[thisFileNameSize - 1] == 'l');
+#endif // windows
+
         IF_DEBUG(linker, debugBelch("loadArchive: \tthisFileNameSize = %d\n", (int)thisFileNameSize));
         IF_DEBUG(linker, debugBelch("loadArchive: \tisObject = %d\n", isObject));
 
@@ -2311,8 +2332,8 @@ static HsInt loadArchive_ (pathchar *path)
             IF_DEBUG(linker, debugBelch("loadArchive: Member is an object file...loading...\n"));
 
 #if defined(mingw32_HOST_OS)
-        // TODO: We would like to use allocateExec here, but allocateExec
-        //       cannot currently allocate blocks large enough.
+            // TODO: We would like to use allocateExec here, but allocateExec
+            //       cannot currently allocate blocks large enough.
             image = allocateImageAndTrampolines(path, fileName,
 #if defined(x86_64_HOST_ARCH)
                f,
@@ -2376,7 +2397,7 @@ static HsInt loadArchive_ (pathchar *path)
             {
                 n = fread ( image, 1, memberSize, f );
                 if (n != memberSize) {
-                    barf("loadArchive: error whilst reading `%s'", path);
+                    barf("loadArchive: error whilst reading `%" PATH_FMT "'", path);
                 }
             }
 
@@ -2450,7 +2471,7 @@ static HsInt loadArchive_ (pathchar *path)
                     break;
                 }
                 else {
-                    barf("loadArchive: Failed reading padding from `%s'", path);
+                    barf("loadArchive: Failed reading padding from `%" PATH_FMT "'", path);
                 }
             }
             IF_DEBUG(linker, debugBelch("loadArchive: successfully read one pad byte\n"));
