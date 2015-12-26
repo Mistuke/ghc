@@ -2416,8 +2416,8 @@ static HsInt loadArchive_ (pathchar *path)
             gnuFileIndex[memberSize] = '/';
             gnuFileIndexSize = memberSize;
         }
-#if defined(OBJFORMAT_PEi386)
         else if (isImportLib) {
+#if defined(OBJFORMAT_PEi386)
             if (checkAndLoadImportLibrary(path, fileName, f)) {
                 IF_DEBUG(linker, debugBelch("loadArchive: Member is an import file section... Corresponding DLL has been loaded...\n"));
             }
@@ -2428,8 +2428,8 @@ static HsInt loadArchive_ (pathchar *path)
                     barf("loadArchive: error whilst seeking by %d in `%" PATH_FMT "'",
                     memberSize, path);
             }
-        }
 #endif
+        }
         else {
             IF_DEBUG(linker, debugBelch("loadArchive: '%s' does not appear to be an object file\n", fileName));
             if (!isThin || thisFileNameSize == 0) {
