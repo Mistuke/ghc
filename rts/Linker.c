@@ -4038,10 +4038,9 @@ ocGetNames_PEi386 ( ObjectCode* oc )
             = (COFF_section*) myindex ( sizeof_COFF_section,
                                         sectab,
                                         symtab_i->SectionNumber-1 );
-         if (   symtab_i->StorageClass == MYIMAGE_SYM_CLASS_EXTERNAL
-            ||  symtab_i->StorageClass == MYIMAGE_SYM_CLASS_SECTION
-            || (symtab_i->StorageClass == MYIMAGE_SYM_CLASS_STATIC
-             && sectabent->Characteristics & MYIMAGE_SCN_LNK_COMDAT)
+         if (symtab_i->StorageClass == MYIMAGE_SYM_CLASS_EXTERNAL
+            || (   symtab_i->StorageClass == MYIMAGE_SYM_CLASS_STATIC
+                && sectabent->Characteristics & MYIMAGE_SCN_LNK_COMDAT)
             ) {
                  addr = ((UChar*)(oc->image))
                         + (sectabent->PointerToRawData
