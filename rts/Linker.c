@@ -1875,11 +1875,9 @@ static HsInt loadArchive_ (pathchar *path)
 #endif
 
     IF_DEBUG(linker, debugBelch("loadArchive: loading archive contents\n"));
-    fpos_t pos;
 
     while (1) {
-        fgetpos(f, &pos);
-        IF_DEBUG(linker, debugBelch("loadArchive: reading at %p\n", pos));
+        IF_DEBUG(linker, debugBelch("loadArchive: reading at %ld\n", ftell(f)));
         n = fread ( fileName, 1, 16, f );
         if (n != 16) {
             if (feof(f)) {
@@ -3162,9 +3160,7 @@ static int checkAndLoadImportLibrary( pathchar* arch_name, char* member_name, FI
         return 0;
     }
 
-    fpos_t pos;
-    fgetpos(f, &pos);
-    IF_DEBUG(linker, debugBelch("loadArchive: reading %d bytes at %lld\n", hdr.SizeOfData, pos));
+    IF_DEBUG(linker, debugBelch("loadArchive: reading %d bytes at %ld\n", hdr.SizeOfData, ftell(f)));
 
     image = malloc(hdr.SizeOfData);
     n = fread(image, 1, hdr.SizeOfData, f);
