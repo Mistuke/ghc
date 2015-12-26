@@ -2073,9 +2073,9 @@ static HsInt loadArchive_ (pathchar *path)
             //       cannot currently allocate blocks large enough.
             image = allocateImageAndTrampolines(path, fileName,
 #if defined(x86_64_HOST_ARCH)
-                f,
+               f,
 #endif
-                memberSize);
+               memberSize);
 #elif defined(darwin_HOST_OS)
 #if USE_MMAP
             image = mmapForLinker(memberSize, MAP_ANONYMOUS, -1, 0);
@@ -2139,12 +2139,12 @@ static HsInt loadArchive_ (pathchar *path)
             }
 
             archiveMemberName = stgMallocBytes(pathlen(path) + thisFileNameSize + 3,
-                                                "loadArchive(file)");
+                                               "loadArchive(file)");
             sprintf(archiveMemberName, "%" PATH_FMT "(%.*s)",
                     path, (int)thisFileNameSize, fileName);
 
             oc = mkOc(path, image, memberSize, rtsFalse, archiveMemberName
-                        , misalignment);
+                     , misalignment);
 
             stgFree(archiveMemberName);
 
@@ -3453,7 +3453,7 @@ verifyCOFFHeader (COFF_header *hdr, pathchar *fileName)
    }
 #elif defined(x86_64_HOST_ARCH)
    if (hdr->Machine != 0x8664) {
-       errorBelch("%" PATH_FMT ": Not x86_64 PEi386", fileName);
+      errorBelch("%" PATH_FMT ": Not x86_64 PEi386", fileName);
       return 0;
    }
 #else
@@ -3834,10 +3834,9 @@ ocGetNames_PEi386 ( ObjectCode* oc )
             = (COFF_section*) myindex ( sizeof_COFF_section,
                                         sectab,
                                         symtab_i->SectionNumber-1 );
-         if (   symtab_i->StorageClass == MYIMAGE_SYM_CLASS_EXTERNAL
-            ||  symtab_i->StorageClass == MYIMAGE_SYM_CLASS_SECTION
-            || (symtab_i->StorageClass == MYIMAGE_SYM_CLASS_STATIC
-             && sectabent->Characteristics & MYIMAGE_SCN_LNK_COMDAT)
+         if (symtab_i->StorageClass == MYIMAGE_SYM_CLASS_EXTERNAL
+            || (   symtab_i->StorageClass == MYIMAGE_SYM_CLASS_STATIC
+                && sectabent->Characteristics & MYIMAGE_SCN_LNK_COMDAT)
             ) {
                  addr = ((UChar*)(oc->image))
                         + (sectabent->PointerToRawData
