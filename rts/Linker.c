@@ -325,6 +325,11 @@ static void machoInitSymbolsWithoutUnderscore( void );
 #endif
 
 #if defined(OBJFORMAT_PEi386)
+static int checkAndLoadImportLibrary(
+    pathchar* arch_name,
+    char* member_name,
+    FILE* f);
+
 
 /* Add ld symbol for PE image base. */
 #if defined(__GNUC__)
@@ -2406,11 +2411,25 @@ static HsInt loadArchive_ (pathchar *path)
 #endif
             n = fread ( gnuFileIndex, 1, memberSize, f );
             if (n != memberSize) {
-                barf("loadArchive: error whilst reading `%s'", path);
+                barf("loadArchive: error whilst reading `%" PATH_FMT "'", path);
             }
             gnuFileIndex[memberSize] = '/';
             gnuFileIndexSize = memberSize;
         }
+#if defined(OBJFORMAT_PEi386)
+        else if (isImportLib) {
+            if (checkAndLoadImportLibrary(path, fileName, f)) {
+                IF_DEBUG(linker, debugBelch("loadArchive: Member is an import file section... Corresponding DLL has been loaded...\n"));
+            }
+            else {
+                IF_DEBUG(linker, debugBelch("loadArchive: Member is not a valid import file section... Skipping...\n"));
+                n = fseek(f, memberSize, SEEK_CUR);
+                if (n != 0)
+                    barf("loadArchive: error whilst seeking by %d in `%" PATH_FMT "'",
+                    memberSize, path);
+            }
+        }
+#endif
         else {
             IF_DEBUG(linker, debugBelch("loadArchive: '%s' does not appear to be an object file\n", fileName));
             if (!isThin || thisFileNameSize == 0) {
