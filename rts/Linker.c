@@ -3172,11 +3172,11 @@ static int checkAndLoadImportLibrary( pathchar* arch_name, char* member_name, FI
 
     char* symbol  = strtok(image, "\0");
     int symLen    = strlen(symbol) + 1;
-    char* dllName = malloc(n - symLen);
-    dllName       = strncpy(dllName, image + symLen, n - symLen);
-    symLen++;
-    pathchar* dll = malloc(sizeof(wchar_t) * symLen);
-    mbstowcs(dll, dllName, symLen);
+    int nameLen = n - symLen;
+    char* dllName = malloc(sizeof(char) * nameLen);
+    dllName       = strncpy(dllName, image + symLen, nameLen);
+    pathchar* dll = malloc(sizeof(wchar_t) * nameLen);
+    mbstowcs(dll, dllName, nameLen);
     free(dllName);
 
     IF_DEBUG(linker, debugBelch("loadArchive: read symbol %s from lib `%ls'\n", symbol, dll));
