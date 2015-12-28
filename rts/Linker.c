@@ -432,6 +432,12 @@ static int ghciInsertSymbolTable(
       pinfo->weak = HS_BOOL_FALSE;
       return 1;
    }
+   else if (owner != NULL && owner->archiveMemberName != NULL)
+   {
+       /* Symbol is an archive member. Ignore the second symbol */
+       return 1;
+   }
+
    debugBelch(
       "GHC runtime linker: fatal error: I found a duplicate definition for symbol\n"
       "   %s\n"
