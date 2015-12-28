@@ -246,10 +246,20 @@ static int checkAndLoadImportLibrary(
     char* member_name,
     FILE* f);
 
+/* Hack, for bug in ld.  Will be removed soon.  */
+#if defined(__GNUC__)
+#define __ImageBase __MINGW_LSYMBOL(_image_base__)
+#endif
+
+/* Get the base of the module.       */
+/* This symbol is defined by ld.     */
+extern IMAGE_DOS_HEADER __ImageBase;
+#define __image_base (void*)((HINSTANCE)&__ImageBase)
+
 // MingW-w64 is missing these from the implementation. So we have to look them up
 typedef DLL_DIRECTORY_COOKIE(WINAPI *LPAddDLLDirectory)(PCWSTR NewDirectory);
 typedef WINBOOL(WINAPI *LPRemoveDLLDirectory)(DLL_DIRECTORY_COOKIE Cookie);
-#endif
+#endif /* OBJFORMAT_PEi386 */
 
 static void freeProddableBlocks (ObjectCode *oc);
 
@@ -541,6 +551,14 @@ initLinker_ (int retain_cafs)
                                 symhash, "__dso_handle", (void *)0x12345687, HS_BOOL_FALSE, NULL)) {
         barf("ghciInsertSymbolTable failed");
     }
+
+#if defined(OBJFORMAT_PEi386)
+    if (!ghciInsertSymbolTable(WSTR("(GHCi/Ld special symbols)"),
+                               symhash, "__image_base__", __image_base, HS_BOOL_TRUE, NULL)) {
+        barf("ghciInsertSymbolTable failed");
+    }
+#endif /* OBJFORMAT_PEi386 */
+
 
     // Redirect newCAF to newRetainedCAF if retain_cafs is true.
     if (! ghciInsertSymbolTable(WSTR("(GHCi built-in symbols)"), symhash,
