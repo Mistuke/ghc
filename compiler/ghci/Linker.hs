@@ -1205,14 +1205,17 @@ linkPackage hsc_env pkg
             mapM_ (load_dyn hsc_env)
               (known_dlls ++ map (mkSOName platform) dlls)
 
-        -- DLLs are loaded, reset the search paths
-        mapM_ (removeLibrarySearchPath hsc_env) $ reverse pathCache
-
         -- After loading all the DLLs, we can load the static objects.
         -- Ordering isn't important here, because we do one final link
         -- step to resolve everything.
         mapM_ (loadObj hsc_env) objs
         mapM_ (loadArchive hsc_env) archs
+
+        -- DLLs are loaded, reset the search paths
+        -- Import libraries will be loaded via loadArchive so only
+        -- reset the DLL search path after all archives are loaded
+        -- as well.
+        mapM_ (removeLibrarySearchPath hsc_env) $ reverse pathCache
 
         maybePutStr dflags "linking ... "
         ok <- resolveObjs hsc_env
