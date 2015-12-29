@@ -173,6 +173,9 @@ static ObjectCode* mkOc( pathchar *path, char *image, int imageSize,
 #define struct_stat struct _stat
 #define open wopen
 #define WSTR(s) L##s
+#define pathprintf swprintf
+#define pathsplit _wsplitpath_s
+#define pathsize sizeof(wchar_t)
 #else
 #define pathcmp strcmp
 #define pathlen strlen
@@ -180,6 +183,9 @@ static ObjectCode* mkOc( pathchar *path, char *image, int imageSize,
 #define pathstat stat
 #define struct_stat struct stat
 #define WSTR(s) s
+#define pathprintf snprintf
+#define pathsplit _splitpath_s
+#define pathsize sizeof(char)
 #endif
 
 static pathchar* pathdup(pathchar *path)
@@ -1876,12 +1882,10 @@ static HsInt loadArchive_ (pathchar *path)
     if (n != 8)
         barf("loadArchive: Failed reading header from `%" PATH_FMT "'", path);
     if (strncmp(tmp, "!<arch>\n", 8) == 0) {}
-#if !defined(mingw32_HOST_OS)
     /* See Note [thin archives on Windows] */
     else if (strncmp(tmp, "!<thin>\n", 8) == 0) {
         isThin = 1;
     }
-#endif
 #if defined(darwin_HOST_OS)
     /* Not a standard archive, look for a fat archive magic number: */
     else if (ntohl(*(uint32_t *)tmp) == FAT_MAGIC) {
@@ -2142,36 +2146,25 @@ static HsInt loadArchive_ (pathchar *path)
 #else // not windows or darwin
             image = stgMallocBytes(memberSize, "loadArchive(image)");
 #endif
-
-#if !defined(mingw32_HOST_OS)
-            /*
-                * Note [thin archives on Windows]
-                * This doesn't compile on Windows because it assumes
-                * char* pathnames, and we use wchar_t* on Windows.  It's
-                * not trivial to fix, so I'm leaving it disabled on
-                * Windows for now --SDM
-                */
             if (isThin) {
                 FILE *member;
-                char *pathCopy, *dirName, *memberPath;
+                pathchar *pathCopy, *dirName, *memberPath;
 
                 /* Allocate and setup the dirname of the archive.  We'll need
                     this to locate the thin member */
-                pathCopy = stgMallocBytes(strlen(path) + 1, "loadArchive(file)");
-                strcpy(pathCopy, path);
-                dirName = dirname(pathCopy);
+                pathCopy = pathdup(path);
+                dirName = stgMallocBytes(pathsize * pathlen(path), "loadArchive(file)");
+                pathsplit(pathCopy, NULL, 0, dirName, pathsize * pathlen(path), NULL, 0, NULL, 0);
 
                 /* Append the relative member name to the dirname.  This should be
                     be the full path to the actual thin member. */
-                memberPath = stgMallocBytes(
-                    strlen(path) + 1 + strlen(fileName) + 1, "loadArchive(file)");
-                strcpy(memberPath, dirName);
-                memberPath[strlen(dirName)] = '/';
-                strcpy(memberPath + strlen(dirName) + 1, fileName);
+                int memberLen = pathlen(path) + 1 + strlen(fileName) + 1;
+                memberPath = stgMallocBytes(memberLen, "loadArchive(file)");
+                pathprintf(memberPath, memberLen, WSTR("%" PATH_FMT  "/%" PATH_FMT "\0"), dirName, fileName);
 
                 member = pathopen(memberPath, WSTR("rb"));
                 if (!member)
-                    barf("loadObj: can't read `%s'", path);
+                    barf("loadObj: can't read `%" PATH_FMT "'", path);
 
                 n = fread ( image, 1, memberSize, member );
                 if (n != memberSize) {
@@ -2183,7 +2176,6 @@ static HsInt loadArchive_ (pathchar *path)
                 stgFree(pathCopy);
             }
             else
-#endif
             {
                 n = fread ( image, 1, memberSize, f );
                 if (n != memberSize) {
