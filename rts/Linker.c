@@ -3141,6 +3141,9 @@ allocateImageAndTrampolines (
 static int checkAndLoadImportLibrary( pathchar* arch_name, char* member_name, FILE* f)
 {
     char* image;
+    static HsBool load_dll_warn = HS_BOOL_FALSE;
+
+    if (load_dll_warn) { return 0; }
 
     /* Based on Import Library specification. PE Spec section 7.1 */
 
@@ -3183,8 +3186,10 @@ static int checkAndLoadImportLibrary( pathchar* arch_name, char* member_name, FI
 
     free(image);
 
-    if (result != NULL){
+    if (result != NULL) {
         errorBelch("Could not load `%ls'. Reason: %s\n", dll, result);
+        load_dll_warn = HS_BOOL_TRUE;
+
         free(dll);
         fseek(f, -(n + sizeof_COFF_import_Header), SEEK_CUR);
         return 0;
