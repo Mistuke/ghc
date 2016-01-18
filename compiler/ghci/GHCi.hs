@@ -52,10 +52,8 @@ import HscTypes
 import UniqFM
 import Panic
 import DynFlags
-#ifndef mingw32_HOST_OS
 import ErrUtils
 import Outputable
-#endif
 import Exception
 import BasicTypes
 import FastString
@@ -73,6 +71,8 @@ import System.Exit
 #ifndef mingw32_HOST_OS
 import Data.Maybe
 import System.Posix as Posix
+#else
+import GHC.IO.Handle.FD (fdToHandle)
 #endif
 import System.Process
 
@@ -397,9 +397,34 @@ handleIServFailure IServ{..} e = do
 
 startIServ :: DynFlags -> IO IServ
 #ifdef mingw32_HOST_OS
-startIServ _ = panic "startIServ"
-  -- should not be called, because we disable -fexternal-interpreter on Windows.
-  -- (see DynFlags.makeDynFlagsConsistent)
+startIServ dflags = do
+  let flavour
+        | WayProf `elem` ways dflags = "-prof"
+        | WayDyn `elem` ways dflags = "-dyn"
+        | otherwise = ""
+      prog = pgm_i dflags ++ flavour
+      opts = getOpts dflags opt_i
+  debugTraceMsg dflags 3 $ text "Starting " <> text prog
+  (rfd1, wfd1) <- createPipeInternalFd -- we read on rfd1
+  (rfd2, wfd2) <- createPipeInternalFd -- we write on wfd2
+  wfd <- c__dup wfd1
+  rfd <- c__dup rfd2  
+  c__close wfd1
+  c__close rfd2
+  rh <- fdToHandle rfd1
+  wh <- fdToHandle wfd2
+  let args = show wfd1 : show rfd2 : "-v" : opts
+  (_, _, _, ph) <- createProcess (proc prog args)
+  lo_ref <- newIORef Nothing
+  cache_ref <- newIORef emptyUFM
+  return $ IServ
+    { iservPipe = Pipe { pipeRead = rh
+                       , pipeWrite = wh
+                       , pipeLeftovers = lo_ref }
+    , iservProcess = ph
+    , iservLookupSymbolCache = cache_ref
+    , iservPendingFrees = []
+    }
 #else
 startIServ dflags = do
   let flavour
@@ -431,6 +456,12 @@ startIServ dflags = do
     }
 #endif
 
+foreign import ccall "io.h _close" c__close ::
+    CInt -> IO CInt
+    
+foreign import ccall "io.h _dup" c__dup ::
+    CInt -> IO CInt
+    
 stopIServ :: HscEnv -> IO ()
 #ifdef mingw32_HOST_OS
 stopIServ _ = return ()

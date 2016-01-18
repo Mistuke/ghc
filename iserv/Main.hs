@@ -1,4 +1,4 @@
-{-# LANGUAGE RecordWildCards, GADTs, ScopedTypeVariables, RankNTypes #-}
+{-# LANGUAGE RecordWildCards, GADTs, ScopedTypeVariables, RankNTypes, CPP #-}
 module Main (main) where
 
 import GHCi.Run
@@ -13,7 +13,15 @@ import Data.Binary
 import Data.IORef
 import System.Environment
 import System.Exit
+#ifndef mingw32_HOST_OS
 import System.Posix
+#else
+import GHC.IO.Handle.FD (mkHandleFromFD, fdToHandle)
+import qualified GHC.IO.FD as FD
+import GHC.IO.Device (IODeviceType(..))
+import GHC.IO.Handle (Handle(..))
+import qualified System.Posix.Internals as Posix
+#endif
 import Text.Printf
 
 main :: IO ()
@@ -92,3 +100,17 @@ serv verbose pipe@Pipe{..} restore = loop
       Left UserInterrupt -> return () >> discardCtrlC
       Left e -> throwIO e
       _ -> return ()
+      
+#ifdef mingw32_HOST_OSs
+-- On Windows we can't use the actual fdToHandle in GHC.IO.Handle.FD 
+-- because this only works on file descriptions. Since we know what kind
+-- of FD the pipe will be, just call mkHandleFromFD manually
+fdToHandle :: Posix.FD -> IO Handle
+fdToHandle fdint = do
+   iomode <- Posix.fdGetMode fdint
+   let fdResult = (RawDevice, 0, 0)
+   (fd,fd_type) <- FD.mkFD fdint iomode (Just fdResult) False False
+   let fd_str = "<file descriptor: " ++ show fd ++ ">"
+   mkHandleFromFD fd fd_type fd_str iomode False {-non-block-} 
+                  Nothing -- bin mode
+#endif
