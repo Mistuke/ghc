@@ -406,15 +406,16 @@ startIServ dflags = do
       opts = getOpts dflags opt_i
   debugTraceMsg dflags 3 $ text "Starting " <> text prog
   (rfd1, wfd1) <- createPipeInternalFd -- we read on rfd1
-  (rfd2, wfd2) <- createPipeInternalFd -- we write on wfd2
-  wfd <- c__dup wfd1
-  rfd <- c__dup rfd2  
-  c__close wfd1
-  c__close rfd2
+  (rfd2, wfd2) <- createPipeInternalFd -- we write on wfd2  
+  let pp = _get_osfhandle
+  wh_c <- pp wfd1
+  rh_c <- pp rfd2
+  -- c__close wfd1
+  -- c__close rfd2
+  let args = show wh_c : show rh_c : "-v" : opts
+  (_, _, _, ph) <- createProcess (proc prog args)
   rh <- fdToHandle rfd1
   wh <- fdToHandle wfd2
-  let args = show wfd1 : show rfd2 : "-v" : opts
-  (_, _, _, ph) <- createProcess (proc prog args)
   lo_ref <- newIORef Nothing
   cache_ref <- newIORef emptyUFM
   return $ IServ
@@ -461,6 +462,9 @@ foreign import ccall "io.h _close" c__close ::
     
 foreign import ccall "io.h _dup" c__dup ::
     CInt -> IO CInt
+    
+foreign import ccall unsafe "io.h _get_osfhandle"
+   _get_osfhandle :: CInt -> IO CInt
     
 stopIServ :: HscEnv -> IO ()
 #ifdef mingw32_HOST_OS

@@ -20,9 +20,12 @@ import GHC.IO.Handle.FD (mkHandleFromFD, fdToHandle)
 import qualified GHC.IO.FD as FD
 import GHC.IO.Device (IODeviceType(..))
 import GHC.IO.Handle (Handle(..))
+import Foreign.C
 import qualified System.Posix.Internals as Posix
 #endif
 import Text.Printf
+
+-- #include <fcntl.h>     /* for _O_BINARY */
 
 main :: IO ()
 main = do
@@ -35,14 +38,19 @@ main = do
   when verbose $ do
     printf "GHC iserv starting (in: %d; out: %d)\n"
       (fromIntegral rfd2 :: Int) (fromIntegral wfd1 :: Int)
-  inh <- fdToHandle rfd2
-  outh <- fdToHandle wfd1
+  rfd2' <- _open_osfhandle rfd2 0x8000 
+  wfd1' <- _open_osfhandle wfd1 0x8000 
+  inh  <- fdToHandle rfd2'
+  outh <- fdToHandle wfd1'
   installSignalHandlers
   lo_ref <- newIORef Nothing
   let pipe = Pipe{pipeRead = inh, pipeWrite = outh, pipeLeftovers = lo_ref}
   uninterruptibleMask $ serv verbose pipe
     -- we cannot allow any async exceptions while communicating, because
     -- we will lose sync in the protocol, hence uninterruptibleMask.
+     
+foreign import ccall "io.h _open_osfhandle" _open_osfhandle ::
+    CInt -> CInt -> IO CInt
 
 serv :: Bool -> Pipe -> (forall a .IO a -> IO a) -> IO ()
 serv verbose pipe@Pipe{..} restore = loop
