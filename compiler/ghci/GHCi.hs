@@ -68,11 +68,13 @@ import Foreign
 import Foreign.C
 import GHC.Stack.CCS (CostCentre,CostCentreStack)
 import System.Exit
-#ifndef mingw32_HOST_OS
 import Data.Maybe
+#ifndef mingw32_HOST_OS
 import System.Posix as Posix
 #else
+import GHC.IO.Handle.Types (Handle)
 import GHC.IO.Handle.FD (fdToHandle)
+import GHC.IO.Exception
 #endif
 import System.Process
 
@@ -396,45 +398,24 @@ handleIServFailure IServ{..} e = do
 -- Starting and stopping the iserv process
 
 startIServ :: DynFlags -> IO IServ
+startIServ dflags = do
+  let flavour
+        | WayProf `elem` ways dflags = "-prof"
+        | WayDyn `elem` ways dflags = "-dyn"
+        | otherwise = ""
+      prog = pgm_i dflags ++ flavour
+      opts = getOpts dflags opt_i
+  debugTraceMsg dflags 3 $ text "Starting " <> text prog
 #ifdef mingw32_HOST_OS
-startIServ dflags = do
-  let flavour
-        | WayProf `elem` ways dflags = "-prof"
-        | WayDyn `elem` ways dflags = "-dyn"
-        | otherwise = ""
-      prog = pgm_i dflags ++ flavour
-      opts = getOpts dflags opt_i
-  debugTraceMsg dflags 3 $ text "Starting " <> text prog
-  (rfd1, wfd1) <- createPipeInternalFd -- we read on rfd1
-  (rfd2, wfd2) <- createPipeInternalFd -- we write on wfd2  
-  let pp = _get_osfhandle
-  wh_c <- pp wfd1
-  rh_c <- pp rfd2
-  -- c__close wfd1
-  -- c__close rfd2
-  let args = show wh_c : show rh_c : "-v" : opts
+  (rfd1, wfd1) <- createPipeFD -- we read on rfd1
+  (rfd2, wfd2) <- createPipeFD -- we write on wfd2
+  wh_client    <- _get_osfhandle wfd1
+  rh_client    <- _get_osfhandle rfd2
+  let args = show wh_client : show rh_client : opts
   (_, _, _, ph) <- createProcess (proc prog args)
-  rh <- fdToHandle rfd1
-  wh <- fdToHandle wfd2
-  lo_ref <- newIORef Nothing
-  cache_ref <- newIORef emptyUFM
-  return $ IServ
-    { iservPipe = Pipe { pipeRead = rh
-                       , pipeWrite = wh
-                       , pipeLeftovers = lo_ref }
-    , iservProcess = ph
-    , iservLookupSymbolCache = cache_ref
-    , iservPendingFrees = []
-    }
+  rh <- mkHandle rfd1
+  wh <- mkHandle wfd2
 #else
-startIServ dflags = do
-  let flavour
-        | WayProf `elem` ways dflags = "-prof"
-        | WayDyn `elem` ways dflags = "-dyn"
-        | otherwise = ""
-      prog = pgm_i dflags ++ flavour
-      opts = getOpts dflags opt_i
-  debugTraceMsg dflags 3 $ text "Starting " <> text prog
   (rfd1, wfd1) <- Posix.createPipe -- we read on rfd1
   (rfd2, wfd2) <- Posix.createPipe -- we write on wfd2
   setFdOption rfd1 CloseOnExec True
@@ -445,6 +426,7 @@ startIServ dflags = do
   closeFd rfd2
   rh <- fdToHandle rfd1
   wh <- fdToHandle wfd2
+#endif  
   lo_ref <- newIORef Nothing
   cache_ref <- newIORef emptyUFM
   return $ IServ
@@ -455,21 +437,19 @@ startIServ dflags = do
     , iservLookupSymbolCache = cache_ref
     , iservPendingFrees = []
     }
-#endif
 
-foreign import ccall "io.h _close" c__close ::
-    CInt -> IO CInt
-    
-foreign import ccall "io.h _dup" c__dup ::
-    CInt -> IO CInt
+#ifdef mingw32_HOST_OS
+foreign import ccall "io.h _close" 
+   c__close :: CInt -> IO CInt
     
 foreign import ccall unsafe "io.h _get_osfhandle"
    _get_osfhandle :: CInt -> IO CInt
+   
+mkHandle :: CInt -> IO Handle
+mkHandle fd = (fdToHandle fd) `onException` (c__close fd)
+#endif
     
 stopIServ :: HscEnv -> IO ()
-#ifdef mingw32_HOST_OS
-stopIServ _ = return ()
-#else
 stopIServ HscEnv{..} =
   gmask $ \_restore -> do
     m <- takeMVar hsc_iserv
@@ -481,7 +461,6 @@ stopIServ HscEnv{..} =
     if isJust ex
        then return ()
        else iservCall iserv Shutdown
-#endif
 
 -- -----------------------------------------------------------------------------
 {- Note [External GHCi pointers]

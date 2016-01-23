@@ -13,19 +13,18 @@ import Data.Binary
 import Data.IORef
 import System.Environment
 import System.Exit
-#ifndef mingw32_HOST_OS
-import System.Posix
-#else
-import GHC.IO.Handle.FD (mkHandleFromFD, fdToHandle)
-import qualified GHC.IO.FD as FD
-import GHC.IO.Device (IODeviceType(..))
-import GHC.IO.Handle (Handle(..))
+#ifdef mingw32_HOST_OS
+import GHC.IO.Handle.FD (fdToHandle)
 import Foreign.C
-import qualified System.Posix.Internals as Posix
+#else
+import System.Posix
 #endif
 import Text.Printf
 
--- #include <fcntl.h>     /* for _O_BINARY */
+#ifdef mingw32_HOST_OS
+_O_BINARY :: CInt
+_O_BINARY = 0x8000 
+#endif
 
 main :: IO ()
 main = do
@@ -33,15 +32,17 @@ main = do
   let wfd1 = read arg0; rfd2 = read arg1
   verbose <- case rest of
     ["-v"] -> return True
-    [] -> return False
-    _ -> die "iserv: syntax: iserv <write-fd> <read-fd> [-v]"
+    []     -> return False
+    _      -> die "iserv: syntax: iserv <write-fd> <read-fd> [-v]"
   when verbose $ do
     printf "GHC iserv starting (in: %d; out: %d)\n"
       (fromIntegral rfd2 :: Int) (fromIntegral wfd1 :: Int)
-  rfd2' <- _open_osfhandle rfd2 0x8000 
-  wfd1' <- _open_osfhandle wfd1 0x8000 
-  inh  <- fdToHandle rfd2'
-  outh <- fdToHandle wfd1'
+#ifdef mingw32_HOST_OS
+  rfd2' <- _open_osfhandle rfd2 _O_BINARY 
+  wfd1' <- _open_osfhandle wfd1 _O_BINARY
+#endif
+  inh   <- fdToHandle rfd2'
+  outh  <- fdToHandle wfd1'
   installSignalHandlers
   lo_ref <- newIORef Nothing
   let pipe = Pipe{pipeRead = inh, pipeWrite = outh, pipeLeftovers = lo_ref}
@@ -49,8 +50,10 @@ main = do
     -- we cannot allow any async exceptions while communicating, because
     -- we will lose sync in the protocol, hence uninterruptibleMask.
      
+#ifdef mingw32_HOST_OS
 foreign import ccall "io.h _open_osfhandle" _open_osfhandle ::
     CInt -> CInt -> IO CInt
+#endif
 
 serv :: Bool -> Pipe -> (forall a .IO a -> IO a) -> IO ()
 serv verbose pipe@Pipe{..} restore = loop
@@ -108,17 +111,3 @@ serv verbose pipe@Pipe{..} restore = loop
       Left UserInterrupt -> return () >> discardCtrlC
       Left e -> throwIO e
       _ -> return ()
-      
-#ifdef mingw32_HOST_OSs
--- On Windows we can't use the actual fdToHandle in GHC.IO.Handle.FD 
--- because this only works on file descriptions. Since we know what kind
--- of FD the pipe will be, just call mkHandleFromFD manually
-fdToHandle :: Posix.FD -> IO Handle
-fdToHandle fdint = do
-   iomode <- Posix.fdGetMode fdint
-   let fdResult = (RawDevice, 0, 0)
-   (fd,fd_type) <- FD.mkFD fdint iomode (Just fdResult) False False
-   let fd_str = "<file descriptor: " ++ show fd ++ ">"
-   mkHandleFromFD fd fd_type fd_str iomode False {-non-block-} 
-                  Nothing -- bin mode
-#endif
