@@ -40,6 +40,9 @@ main = do
 #ifdef mingw32_HOST_OS
   rfd2' <- _open_osfhandle rfd2 _O_BINARY 
   wfd1' <- _open_osfhandle wfd1 _O_BINARY
+#else
+  let rfd2' = rfd2 
+      wfd1' = wfd1
 #endif
   inh   <- fdToHandle rfd2'
   outh  <- fdToHandle wfd1'
