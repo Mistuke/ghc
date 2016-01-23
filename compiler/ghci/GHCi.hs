@@ -74,7 +74,6 @@ import System.Posix as Posix
 #else
 import GHC.IO.Handle.Types (Handle)
 import GHC.IO.Handle.FD (fdToHandle)
-import GHC.IO.Exception
 #endif
 import System.Process
 
