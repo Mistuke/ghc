@@ -405,27 +405,7 @@ startIServ dflags = do
       prog = pgm_i dflags ++ flavour
       opts = getOpts dflags opt_i
   debugTraceMsg dflags 3 $ text "Starting " <> text prog
-#ifdef mingw32_HOST_OS
-  (rfd1, wfd1) <- createPipeFD -- we read on rfd1
-  (rfd2, wfd2) <- createPipeFD -- we write on wfd2
-  wh_client    <- _get_osfhandle wfd1
-  rh_client    <- _get_osfhandle rfd2
-  let args = show wh_client : show rh_client : opts
-  (_, _, _, ph) <- createProcess (proc prog args)
-  rh <- mkHandle rfd1
-  wh <- mkHandle wfd2
-#else
-  (rfd1, wfd1) <- Posix.createPipe -- we read on rfd1
-  (rfd2, wfd2) <- Posix.createPipe -- we write on wfd2
-  setFdOption rfd1 CloseOnExec True
-  setFdOption wfd2 CloseOnExec True
-  let args = show wfd1 : show rfd2 : opts
-  (_, _, _, ph) <- createProcess (proc prog args)
-  closeFd wfd1
-  closeFd rfd2
-  rh <- fdToHandle rfd1
-  wh <- fdToHandle wfd2
-#endif  
+  (ph, rh, wh) <- runWithPipes prog opts 
   lo_ref <- newIORef Nothing
   cache_ref <- newIORef emptyUFM
   return $ IServ
@@ -436,17 +416,6 @@ startIServ dflags = do
     , iservLookupSymbolCache = cache_ref
     , iservPendingFrees = []
     }
-
-#ifdef mingw32_HOST_OS
-foreign import ccall "io.h _close" 
-   c__close :: CInt -> IO CInt
-    
-foreign import ccall unsafe "io.h _get_osfhandle"
-   _get_osfhandle :: CInt -> IO CInt
-   
-mkHandle :: CInt -> IO Handle
-mkHandle fd = (fdToHandle fd) `onException` (c__close fd)
-#endif
     
 stopIServ :: HscEnv -> IO ()
 stopIServ HscEnv{..} =
@@ -460,6 +429,41 @@ stopIServ HscEnv{..} =
     if isJust ex
        then return ()
        else iservCall iserv Shutdown
+       
+runWithPipes :: FilePath -> [String] -> IO (ProcessHandle, Handle, Handle)
+#ifdef mingw32_HOST_OS
+foreign import ccall "io.h _close" 
+   c__close :: CInt -> IO CInt
+    
+foreign import ccall unsafe "io.h _get_osfhandle"
+   _get_osfhandle :: CInt -> IO CInt
+
+runWithPipes prog opts = do
+    (rfd1, wfd1) <- createPipeFD -- we read on rfd1
+    (rfd2, wfd2) <- createPipeFD -- we write on wfd2
+    wh_client    <- _get_osfhandle wfd1
+    rh_client    <- _get_osfhandle rfd2
+    let args = show wh_client : show rh_client : opts
+    (_, _, _, ph) <- createProcess (proc prog args)
+    rh <- mkHandle rfd1
+    wh <- mkHandle wfd2
+    return (ph, rh, wh)
+      where mkHandle :: CInt -> IO Handle
+            mkHandle fd = (fdToHandle fd) `onException` (c__close fd)
+#else
+runWithPipes prog opts = do
+    (rfd1, wfd1) <- Posix.createPipe -- we read on rfd1
+    (rfd2, wfd2) <- Posix.createPipe -- we write on wfd2
+    setFdOption rfd1 CloseOnExec True
+    setFdOption wfd2 CloseOnExec True
+    let args = show wfd1 : show rfd2 : opts
+    (_, _, _, ph) <- createProcess (proc prog args)
+    closeFd wfd1
+    closeFd rfd2
+    rh <- fdToHandle rfd1
+    wh <- fdToHandle wfd2
+    return (ph, rh, wh)
+#endif
 
 -- -----------------------------------------------------------------------------
 {- Note [External GHCi pointers]
