@@ -69,11 +69,11 @@ import Foreign.C
 import GHC.Stack.CCS (CostCentre,CostCentreStack)
 import System.Exit
 import Data.Maybe
-#ifndef mingw32_HOST_OS
-import System.Posix as Posix
-#else
 import GHC.IO.Handle.Types (Handle)
+#ifdef mingw32_HOST_OS
 import GHC.IO.Handle.FD (fdToHandle)
+#else
+import System.Posix as Posix
 #endif
 import System.Process
 
