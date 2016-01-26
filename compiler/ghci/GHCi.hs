@@ -439,8 +439,8 @@ foreign import ccall unsafe "io.h _get_osfhandle"
    _get_osfhandle :: CInt -> IO CInt
 
 runWithPipes prog opts = do
-    (rfd1, wfd1) <- createPipeFD -- we read on rfd1
-    (rfd2, wfd2) <- createPipeFD -- we write on wfd2
+    (rfd1, wfd1) <- createPipeFd -- we read on rfd1
+    (rfd2, wfd2) <- createPipeFd -- we write on wfd2
     wh_client    <- _get_osfhandle wfd1
     rh_client    <- _get_osfhandle rfd2
     let args = show wh_client : show rh_client : opts
