@@ -1,10 +1,11 @@
-{-# LANGUAGE RecordWildCards, GADTs, ScopedTypeVariables, RankNTypes, CPP #-}
+{-# LANGUAGE RecordWildCards, GADTs, ScopedTypeVariables, RankNTypes #-}
 module Main (main) where
 
 import GHCi.Run
 import GHCi.TH
 import GHCi.Message
 import GHCi.Signals
+import GHCi.Utils
 
 import Control.DeepSeq
 import Control.Exception
@@ -13,18 +14,7 @@ import Data.Binary
 import Data.IORef
 import System.Environment
 import System.Exit
-#ifdef mingw32_HOST_OS
-import GHC.IO.Handle.FD (fdToHandle)
-import Foreign.C
-#else
-import System.Posix
-#endif
 import Text.Printf
-
-#ifdef mingw32_HOST_OS
-_O_BINARY :: CInt
-_O_BINARY = 0x8000 
-#endif
 
 main :: IO ()
 main = do
@@ -37,26 +27,14 @@ main = do
   when verbose $ do
     printf "GHC iserv starting (in: %d; out: %d)\n"
       (fromIntegral rfd2 :: Int) (fromIntegral wfd1 :: Int)
-#ifdef mingw32_HOST_OS
-  rfd2' <- _open_osfhandle rfd2 _O_BINARY 
-  wfd1' <- _open_osfhandle wfd1 _O_BINARY
-#else
-  let rfd2' = rfd2 
-      wfd1' = wfd1
-#endif
-  inh   <- fdToHandle rfd2'
-  outh  <- fdToHandle wfd1'
+  inh  <- getGhcHandle rfd2
+  outh <- getGhcHandle wfd1
   installSignalHandlers
   lo_ref <- newIORef Nothing
   let pipe = Pipe{pipeRead = inh, pipeWrite = outh, pipeLeftovers = lo_ref}
   uninterruptibleMask $ serv verbose pipe
     -- we cannot allow any async exceptions while communicating, because
     -- we will lose sync in the protocol, hence uninterruptibleMask.
-     
-#ifdef mingw32_HOST_OS
-foreign import ccall "io.h _open_osfhandle" _open_osfhandle ::
-    CInt -> CInt -> IO CInt
-#endif
 
 serv :: Bool -> Pipe -> (forall a .IO a -> IO a) -> IO ()
 serv verbose pipe@Pipe{..} restore = loop
