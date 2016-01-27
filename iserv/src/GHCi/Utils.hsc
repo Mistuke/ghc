@@ -21,5 +21,5 @@ getGhcHandle handle = _open_osfhandle handle (#const _O_BINARY) >>= fdToHandle
 foreign import ccall "io.h _open_osfhandle" _open_osfhandle ::
     CInt -> CInt -> IO CInt
 #else
-getGhcHandle fd     = fdToHandle fd
+getGhcHandle fd     = fdToHandle $ Fd fd
 #endif
