@@ -6872,6 +6872,7 @@ ocGetNames_MachO(ObjectCode* oc)
                                        (void*)commonCounter, HS_BOOL_FALSE, oc);
                 oc->symbols[curSymbol++].name = nm;
                 oc->symbols[curSymbol].addr   = (void*)commonCounter;
+                oc->symbols[curSymbol].isWeak = HS_BOOL_FALSE;
 
                 commonCounter += sz;
             }
