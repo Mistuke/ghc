@@ -583,7 +583,7 @@ initLinker_ (int retain_cafs)
     initMutex(&dl_mutex);
 #endif
 #endif
-    symhash    = allocStrHashTable();
+    symhash = allocStrHashTable();
 
     /* populate the symbol table with stuff from the RTS */
     for (sym = rtsSyms; sym->lbl != NULL; sym++) {
@@ -681,7 +681,7 @@ exitLinker( void ) {
    }
 #endif
    if (linker_init_done == 1) {
-       freeHashTable(symhash   , free);
+       freeHashTable(symhash, free);
    }
 #ifdef THREADED_RTS
    closeMutex(&linker_mutex);
