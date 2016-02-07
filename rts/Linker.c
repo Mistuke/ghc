@@ -4234,9 +4234,6 @@ ocRunInit_PEi386 ( ObjectCode *oc )
             UChar *init_startC = (UChar*)(oc->image) + sectab_i->PointerToRawData;
             init_t *init_start, *init_end, *init;
             init_start = (init_t*)init_startC;
-            /* The first element is a dummy entry, we shouldn't jump to it.
-               See https://gcc.gnu.org/onlinedocs/gccint/Initialization.html */
-            init_start++;
             init_end = (init_t*)(init_startC + sectab_i->SizeOfRawData);
             // ctors are run *backwards*!
             for (init = init_end - 1; init >= init_start; init--) {
@@ -5830,9 +5827,6 @@ static int ocRunInit_ELF( ObjectCode *oc )
        && 0 == memcmp(".ctors", sh_strtab + shdr[i].sh_name, 6)) {
           char *init_startC = oc->sections[i].start;
          init_start = (init_t*)init_startC;
-         /* The first element is a dummy entry, we shouldn't jump to it.
-         See https://gcc.gnu.org/onlinedocs/gccint/Initialization.html */
-         init_start++;
          init_end = (init_t*)(init_startC + shdr[i].sh_size);
          // ctors run in reverse
          for (init = init_end - 1; init >= init_start; init--) {
