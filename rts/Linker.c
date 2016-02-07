@@ -2617,10 +2617,13 @@ int ocTryLoad (ObjectCode* oc) {
     int r;
 
     if (oc->status != OBJECT_RESOLVED && oc->loadObject == HS_BOOL_TRUE) {
-        // Check for duplicate symbols/
-        // Duplicate symbols are any symbols
-        // which do not match our 'preferred' symbols
-        // which have been stored in `symhash`.
+        /* Check for duplicate symbols.
+           Duplicate symbols are any symbols which exist
+           in different ObjectCodes that have both been loaded, or
+           are to be loaded.
+
+           Inserting an existing symbol is a no-op and is perfectly fine.
+        */
         int x;
         SymbolInfo symbol;
         for (x = 0; x < oc->n_symbols; x++) {
