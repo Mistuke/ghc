@@ -136,7 +136,49 @@ typedef struct _RtsSymbolInfo {
     HsBool weak;
 } RtsSymbolInfo;
 
-/* Hash table mapping symbol names to RtsSymbolInfo */
+/* `symhash` is a Hash table mapping symbol names to RtsSymbolInfo.
+   This hashtable will contain information on all symbols
+   that we know of, however the .o they are in may not be loaded.
+
+   Until the ObjectCode the symbol belongs to is actually
+   loaded this symbol may be replaced. So do not rely on
+   addresses of unloaded symbols.
+
+   Note [runtime-linker-phases]
+   --------------------------------------
+   Broadly the behavior of the runtime linker can be
+   split into the following four phases:
+
+   - Discovery (e.g. ocVerifyImage and ocGetNames)
+   - Loading (e.g. ocResolve and ocRunInit)
+   - Resolve (e.g. resolveObjs())
+   - Lookup (e.g. lookupSymbol)
+
+   * During Discovery we very and open the ObjectCode and
+     perform a quick scan/indexing of the ObjectCode. All the work
+     required to actually load the ObjectCode is done.
+
+     All symbols from the ObjectCode is also inserted into
+     `symhash`, where possible duplicates are handled via the semantics
+     described in `ghciInsertSymbolTable`.
+
+   * During loading we load ObjectCode, perform relocations, execute
+     static constructors etc. This phase may trigger other ObjectCodes to
+     be loaded because of the calls to lookupSymbol.
+
+   * During resolve we attempt to resolve all the symbols needed for the
+     initial link. This essentially means, that for any ObjectCode given
+     directly to the command-line we perform lookupSymbols on the required
+     symbols. lookupSymbols may trigger the loading of additional ObjectCode
+     if required.
+
+   * Lookup symbols is used to lookup any symbols required, both during initial
+     link and during statement and expression compilations in the REPL.
+     Declaration of e.g. an foreign import, will eventually call lookupSymbol
+     which will either fail (symbol unknown) or succeed (and possibly triggered a
+     load).
+
+ */
 static /*Str*/HashTable *symhash;
 
 /* List of currently loaded objects */
@@ -454,7 +496,11 @@ static int ghciInsertSymbolTable(
    }
    else if (weak)
    {
-     return 1; /* weak symbol, can't possible replace existing, throw it away */
+     return 1; /* weak symbol, because the symbol is weak and we
+                  already know of another copy throw this one away.
+
+                  This also preserves the semanics of linking against
+                  the first symbol we find. */
    }
    else if (pinfo->weak && !weak) /* weak symbol is in the table */
    {
@@ -467,10 +513,15 @@ static int ghciInsertSymbolTable(
    else if (  pinfo->owner
            && pathcmp(pinfo->owner->fileName, obj_name) == 0
            && pinfo->owner->status != OBJECT_RESOLVED) {
-            // If the other symbol hasn't been loaded and we want to
-            // explicitly load the new one, we can just swap it out
-            // and load the one that has been requested.
-            // If not, just keep the first one encountered.
+            /* If the other symbol hasn't been loaded and we want to
+               explicitly load the new one, we can just swap it out
+               and load the one that has been requested.
+               If not, just keep the first one encountered.
+
+               Because the `symHash' table consists symbols we've
+               also not loaded but found during the initial scan
+               this is safe to do. If however the existing symbol has
+               been loaded then it means we have a duplicate. */
        if (owner && owner->loadObject == HS_BOOL_TRUE) {
            ghciRemoveSymbolTable(symhash, key, pinfo->owner);
            pinfo = stgMallocBytes(sizeof(*pinfo), "ghciInsertToSymbolTable");

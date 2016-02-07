@@ -939,6 +939,12 @@ runLink dflags args = do
   runSomethingResponseFile dflags ld_filter "Linker" p args3 mb_env
   where    
     testLib lib = "-l" `isPrefixOf` lib || ".a" `isSuffixOf` lib
+    {- GHC is just blindly appending linker arguments from libraries and
+       the commandline together. This results in very problematic link orders
+       which will cause incorrect linking. Since we're changing the link
+       arguments anyway, let's just make sure libraries are last.
+       This functions moves libraries on the link all the way back
+       but keeps the order amongst them the same. -}
     argFixup []                        r = [] ++ r
     argFixup (o@(Option       opt):xs) r = if testLib opt
                                               then argFixup xs (r ++ [o])
