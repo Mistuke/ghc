@@ -577,6 +577,12 @@ static int ghciInsertSymbolTable(
    return 0;
 }
 
+/* -----------------------------------------------------------------------------
+* Looks up symbols into hash tables.
+*
+* Returns: 0 on failure and result is not set,
+*          nonzero on success and result set to nonzero pointer
+*/
 static HsBool ghciLookupSymbolInfo(HashTable *table,
     const char *key, RtsSymbolInfo **result)
 {
@@ -1267,7 +1273,7 @@ static void* lookupSymbol_ (char *lbl)
     ASSERT(symhash != NULL);
     RtsSymbolInfo *pinfo;
 
-    if (!ghciLookupSymbolInfo(symhash, lbl, &pinfo) || !pinfo) {
+    if (!ghciLookupSymbolInfo(symhash, lbl, &pinfo)) {
         IF_DEBUG(linker, debugBelch("lookupSymbol: symbol not found\n"));
 
 #       if defined(OBJFORMAT_ELF)
