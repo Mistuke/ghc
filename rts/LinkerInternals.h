@@ -11,8 +11,10 @@
 
 #include "Rts.h"
 
+/* See Linker.c Note [runtime-linker-phases] */
 typedef enum {
     OBJECT_LOADED,
+    OBJECT_NEEDED,
     OBJECT_RESOLVED,
     OBJECT_UNLOADED
 } OStatus;
@@ -169,10 +171,6 @@ typedef struct _ObjectCode {
 #endif
 
     ForeignExportStablePtr *stable_ptrs;
-
-    /* Indicates whether this object should be
-       loaded and relocations performed. */
-    HsBool loadObject;
 
 } ObjectCode;
 

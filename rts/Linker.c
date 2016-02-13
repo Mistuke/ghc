@@ -149,12 +149,12 @@ typedef struct _RtsSymbolInfo {
    Broadly the behavior of the runtime linker can be
    split into the following four phases:
 
-   - Discovery (e.g. ocVerifyImage and ocGetNames)
-   - Loading (e.g. ocResolve and ocRunInit)
+   - Indexing (e.g. ocVerifyImage and ocGetNames)
+   - Initialise (e.g. ocResolve and ocRunInit)
    - Resolve (e.g. resolveObjs())
    - Lookup (e.g. lookupSymbol)
 
-   * During Discovery we very and open the ObjectCode and
+   * During Indexing we verify and open the ObjectCode and
      perform a quick scan/indexing of the ObjectCode. All the work
      required to actually load the ObjectCode is done.
 
@@ -162,9 +162,15 @@ typedef struct _RtsSymbolInfo {
      `symhash`, where possible duplicates are handled via the semantics
      described in `ghciInsertSymbolTable`.
 
-   * During loading we load ObjectCode, perform relocations, execute
+     This phase will produce ObjectCode with status `OBJECT_LOADED` or `OBJECT_NEEDED`
+     depending on whether their archive members or not.
+
+   * During initialisation we load ObjectCode, perform relocations, execute
      static constructors etc. This phase may trigger other ObjectCodes to
      be loaded because of the calls to lookupSymbol.
+
+     This phase will produce ObjectCode with status `OBJECT_NEEDED` if the
+     previous status was `OBJECT_LOADED`.
 
    * During resolve we attempt to resolve all the symbols needed for the
      initial link. This essentially means, that for any ObjectCode given
@@ -172,11 +178,21 @@ typedef struct _RtsSymbolInfo {
      symbols. lookupSymbols may trigger the loading of additional ObjectCode
      if required.
 
+     This phase will produce ObjectCode with status `OBJECT_RESOLVED` if
+     the previous status was `OBJECT_NEEDED`.
+
    * Lookup symbols is used to lookup any symbols required, both during initial
      link and during statement and expression compilations in the REPL.
      Declaration of e.g. an foreign import, will eventually call lookupSymbol
      which will either fail (symbol unknown) or succeed (and possibly triggered a
      load).
+
+     This phase may transition an ObjectCode from `OBJECT_LOADED` to `OBJECT_RESOLVED`
+
+   When a new scope is introduced (e.g. a new module imported) GHCi does a full re-link
+   by calling unloadObj and starting over.
+   When a new declaration or statement is performed ultimately lookupSymbol is called
+   without doing a re-link.
 
  */
 static /*Str*/HashTable *symhash;
@@ -522,7 +538,7 @@ static int ghciInsertSymbolTable(
                also not loaded but found during the initial scan
                this is safe to do. If however the existing symbol has
                been loaded then it means we have a duplicate. */
-       if (owner && owner->loadObject == HS_BOOL_TRUE) {
+       if (owner && (owner->status == OBJECT_NEEDED || owner->status == OBJECT_RESOLVED)) {
            ghciRemoveSymbolTable(symhash, key, pinfo->owner);
            pinfo = stgMallocBytes(sizeof(*pinfo), "ghciInsertToSymbolTable");
            pinfo->value = data;
@@ -1289,8 +1305,8 @@ static void* lookupSymbol_ (char *lbl)
         ObjectCode* oc = pinfo->owner;
 
         // Symbol can be found during linking, but hasn't been relocated. Do so now.
-        if (oc && oc->loadObject == HS_BOOL_FALSE) {
-            oc->loadObject = HS_BOOL_TRUE;
+        if (oc && oc->status == OBJECT_LOADED) {
+            oc->status = OBJECT_NEEDED;
             IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand loaded symbol '%s'\n", lbl));
             r = ocTryLoad(oc);
 
@@ -1880,11 +1896,11 @@ mkOc( pathchar *path, char *image, int imageSize,
    if (archiveMemberName) {
        oc->archiveMemberName = stgMallocBytes( strlen(archiveMemberName)+1, "loadObj" );
        strcpy(oc->archiveMemberName, archiveMemberName);
-       oc->loadObject = HS_BOOL_FALSE;
+       oc->status = OBJECT_LOADED;
    }
    else {
        oc->archiveMemberName = NULL;
-       oc->loadObject = HS_BOOL_TRUE;
+       oc->status = OBJECT_RESOLVED;
    }
 
    oc->fileSize          = imageSize;
@@ -2616,54 +2632,56 @@ static HsInt loadOc (ObjectCode* oc)
 int ocTryLoad (ObjectCode* oc) {
     int r;
 
-    if (oc->status != OBJECT_RESOLVED && oc->loadObject == HS_BOOL_TRUE) {
-        /* Check for duplicate symbols.
-           Duplicate symbols are any symbols which exist
-           in different ObjectCodes that have both been loaded, or
-           are to be loaded.
+    if (oc->status != OBJECT_NEEDED) {
+        return 1;
+    }
 
-           Inserting an existing symbol is a no-op and is perfectly fine.
-        */
-        int x;
-        SymbolInfo symbol;
-        for (x = 0; x < oc->n_symbols; x++) {
-            symbol = oc->symbols[x];
-            if (   symbol.name
-                && symbol.addr
-                && !ghciInsertSymbolTable(oc->fileName, symhash, symbol.name, symbol.addr, symbol.isWeak, oc)){
-                return 0;
-            }
+    /* Check for duplicate symbols.
+        Duplicate symbols are any symbols which exist
+        in different ObjectCodes that have both been loaded, or
+        are to be loaded.
+
+        Inserting an existing symbol is a no-op and is perfectly fine.
+    */
+    int x;
+    SymbolInfo symbol;
+    for (x = 0; x < oc->n_symbols; x++) {
+        symbol = oc->symbols[x];
+        if (   symbol.name
+            && symbol.addr
+            && !ghciInsertSymbolTable(oc->fileName, symhash, symbol.name, symbol.addr, symbol.isWeak, oc)){
+            return 0;
         }
+    }
 
 #           if defined(OBJFORMAT_ELF)
-            r = ocResolve_ELF ( oc );
+        r = ocResolve_ELF ( oc );
 #           elif defined(OBJFORMAT_PEi386)
-            r = ocResolve_PEi386 ( oc );
+        r = ocResolve_PEi386 ( oc );
 #           elif defined(OBJFORMAT_MACHO)
-            r = ocResolve_MachO ( oc );
+        r = ocResolve_MachO ( oc );
 #           else
-        barf("ocTryLoad: not implemented on this platform");
+    barf("ocTryLoad: not implemented on this platform");
 #           endif
-            if (!r) { return r; }
+        if (!r) { return r; }
 
-            // run init/init_array/ctors/mod_init_func
+        // run init/init_array/ctors/mod_init_func
 
-            loading_obj = oc; // tells foreignExportStablePtr what to do
+        loading_obj = oc; // tells foreignExportStablePtr what to do
 #if defined(OBJFORMAT_ELF)
-            r = ocRunInit_ELF ( oc );
+        r = ocRunInit_ELF ( oc );
 #elif defined(OBJFORMAT_PEi386)
-            r = ocRunInit_PEi386 ( oc );
+        r = ocRunInit_PEi386 ( oc );
 #elif defined(OBJFORMAT_MACHO)
-            r = ocRunInit_MachO ( oc );
+        r = ocRunInit_MachO ( oc );
 #else
-        barf("ocTryLoad: initializers not implemented on this platform");
+    barf("ocTryLoad: initializers not implemented on this platform");
 #endif
-            loading_obj = NULL;
+        loading_obj = NULL;
 
-            if (!r) { return r; }
+        if (!r) { return r; }
 
-        oc->status = OBJECT_RESOLVED;
-    }
+    oc->status = OBJECT_RESOLVED;
 
     return 1;
 }
@@ -2739,7 +2757,6 @@ static HsInt unloadObj_ (pathchar *path, rtsBool just_purge)
                 oc->next = unloaded_objects;
                 unloaded_objects = oc;
                 oc->status = OBJECT_UNLOADED;
-                oc->loadObject = HS_BOOL_FALSE;
                 RELEASE_LOCK(&linker_unloaded_mutex);
                 // We do not own oc any more; it can be released at any time by
                 // the GC in checkUnload().
