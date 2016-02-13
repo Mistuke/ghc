@@ -537,24 +537,24 @@ static int ghciInsertSymbolTable(
       return 1;
    }
    else if (  pinfo->owner
-           && pathcmp(pinfo->owner->fileName, obj_name) == 0
-           && pinfo->owner->status != OBJECT_RESOLVED) {
-            /* If the other symbol hasn't been loaded and we want to
-               explicitly load the new one, we can just swap it out
-               and load the one that has been requested.
-               If not, just keep the first one encountered.
+           && pinfo->owner->status != OBJECT_RESOLVED
+           && pinfo->owner->status != OBJECT_NEEDED)
+   {
+        /* If the other symbol hasn't been loaded or will be loaded and we want to
+           explicitly load the new one, we can just swap it out and load the one
+           that has been requested. If not, just keep the first one encountered.
 
-               Because the `symHash' table consists symbols we've
-               also not loaded but found during the initial scan
-               this is safe to do. If however the existing symbol has
-               been loaded then it means we have a duplicate. */
+           Because the `symHash' table consists symbols we've also not loaded but
+           found during the initial scan this is safe to do. If however the existing
+           symbol has been loaded then it means we have a duplicate.
+
+           This is essentially emulating the behavior of a linker wherein it will always
+           link in object files that are .o file arguments, but only take object files
+           from archives as needed. */
        if (owner && (owner->status == OBJECT_NEEDED || owner->status == OBJECT_RESOLVED)) {
-           ghciRemoveSymbolTable(symhash, key, pinfo->owner);
-           pinfo = stgMallocBytes(sizeof(*pinfo), "ghciInsertToSymbolTable");
            pinfo->value = data;
            pinfo->owner = owner;
-           pinfo->weak = weak;
-           insertStrHashTable(table, key, pinfo);
+           pinfo->weak  = weak;
        }
             return 1;
     }
