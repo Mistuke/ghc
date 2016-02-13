@@ -6911,9 +6911,10 @@ ocGetNames_MachO(ObjectCode* oc)
                                                  , HS_BOOL_FALSE
                                                  , oc);
 
-                            oc->symbols[curSymbol++].name = nm;
+                            oc->symbols[curSymbol].name = nm;
                             oc->symbols[curSymbol].addr   = addr;
                             oc->symbols[curSymbol].isWeak = HS_BOOL_FALSE;
+                            curSymbol++;
                     }
                 }
                 else
@@ -6945,9 +6946,10 @@ ocGetNames_MachO(ObjectCode* oc)
                 IF_DEBUG(linker, debugBelch("ocGetNames_MachO: inserting common symbol: %s\n", nm));
                 ghciInsertSymbolTable(oc->fileName, symhash, nm,
                                        (void*)commonCounter, HS_BOOL_FALSE, oc);
-                oc->symbols[curSymbol++].name = nm;
+                oc->symbols[curSymbol].name = nm;
                 oc->symbols[curSymbol].addr   = (void*)commonCounter;
                 oc->symbols[curSymbol].isWeak = HS_BOOL_FALSE;
+                curSymbol++;
 
                 commonCounter += sz;
             }
