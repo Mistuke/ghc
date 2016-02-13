@@ -1310,7 +1310,8 @@ static void* lookupSymbol_ (char *lbl)
         int r;
         ObjectCode* oc = pinfo->owner;
 
-        // Symbol can be found during linking, but hasn't been relocated. Do so now.
+        /* Symbol can be found during linking, but hasn't been relocated. Do so now.
+           See Note [runtime-linker-phases] */
         if (oc && oc->status == OBJECT_LOADED) {
             oc->status = OBJECT_NEEDED;
             IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand loaded symbol '%s'\n", lbl));
