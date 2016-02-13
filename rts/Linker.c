@@ -1894,6 +1894,17 @@ void freeObjectCode (ObjectCode *oc)
     stgFree(oc);
 }
 
+/* -----------------------------------------------------------------------------
+* Sets the initial status of a fresh ObjectCode
+*/
+static void setOcInitialStatus(ObjectCode* oc) {
+    if (oc->archiveMemberName == NULL) {
+        oc->status = OBJECT_NEEDED;
+    }
+    else {
+        oc->status = OBJECT_LOADED;
+    }
+}
 
 static ObjectCode*
 mkOc( pathchar *path, char *image, int imageSize,
@@ -1920,12 +1931,11 @@ mkOc( pathchar *path, char *image, int imageSize,
    if (archiveMemberName) {
        oc->archiveMemberName = stgMallocBytes( strlen(archiveMemberName)+1, "loadObj" );
        strcpy(oc->archiveMemberName, archiveMemberName);
-       oc->status = OBJECT_LOADED;
-   }
-   else {
+   } else {
        oc->archiveMemberName = NULL;
-       oc->status = OBJECT_RESOLVED;
    }
+
+   setOcInitialStatus( oc );
 
    oc->fileSize          = imageSize;
    oc->symbols           = NULL;
@@ -2641,8 +2651,8 @@ static HsInt loadOc (ObjectCode* oc)
        return r;
    }
 
-   /* loaded, but not resolved yet */
-   oc->status = OBJECT_LOADED;
+   /* loaded, but not resolved yet, ensure the OC is in a consistent state */
+   setOcInitialStatus( oc );
    IF_DEBUG(linker, debugBelch("loadOc: done.\n"));
 
    return 1;
