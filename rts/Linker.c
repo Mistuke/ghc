@@ -561,9 +561,15 @@ static int ghciInsertSymbolTable(
     }
     else if (pinfo->owner == owner)
     {
-       /* If it's the same symbol, ignore. This makes ghciInsertSymbolTable
-          idempotent */
+       /* If it's the same symbol, ignore. This makes ghciInsertSymbolTable idempotent */
        return 1;
+    }
+    else if (owner && owner->status == OBJECT_LOADED)
+    {
+        /* If the duplicate symbol is just in state OBJECT_LOADED it means we're in discovery of an
+           member. It's not a real duplicate yet. If the Oc Becomes OBJECT_NEEDED then ocTryLoad will
+           call this function again to trigger the duplicate error. */
+        return 1;
     }
 
    pathchar* archiveName = NULL;
