@@ -2643,12 +2643,13 @@ int ocTryLoad (ObjectCode* oc) {
         return 1;
     }
 
-    /* Check for duplicate symbols.
+    /*  Check for duplicate symbols by looking into `symhash`.
         Duplicate symbols are any symbols which exist
         in different ObjectCodes that have both been loaded, or
-        are to be loaded.
+        are to be loaded by this call.
 
-        Inserting an existing symbol is a no-op and is perfectly fine.
+        This call is intended to have no side-effects when a non-duplicate
+        symbol is re-inserted.
     */
     int x;
     SymbolInfo symbol;
@@ -4300,9 +4301,12 @@ ocRunInit_PEi386 ( ObjectCode *oc )
     getProgArgv(&argc, &argv);
     getProgEnvv(&envc, &envv);
 
-    /* This part is just looking for .ctors section. This can be optimized
-       and should for function sections. The index of the .ctor section can
-       be saved in ObjectCode from ocGetNames so this loop isn't needed. */
+    /* TODO: This part is just looking for .ctors section. This can be optimized
+       and should for objects compiled with function sections as these produce a
+       large amount of sections.
+
+       This can be done by saving the index of the .ctor section in the ObjectCode
+       from ocGetNames. Then this loop isn't needed. */
     for (i = 0; i < hdr->NumberOfSections; i++) {
         COFF_section* sectab_i
             = (COFF_section*)
