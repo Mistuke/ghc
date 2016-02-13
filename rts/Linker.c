@@ -510,7 +510,7 @@ static int ghciInsertSymbolTable(
       insertStrHashTable(table, key, pinfo);
       return 1;
    }
-   else if (weak && data && pinfo->weak && !pinfo->data)
+   else if (weak && data && pinfo->weak && !pinfo->value)
    {
        /* Replace the weak symbol with a zero value in the new
           weak symbol with a nonzero value. */
@@ -556,7 +556,14 @@ static int ghciInsertSymbolTable(
            pinfo->owner = owner;
            pinfo->weak  = weak;
        }
-            return 1;
+
+       return 1;
+    }
+    else if (pinfo->owner == owner)
+    {
+       /* If it's the same symbol, ignore. This makes ghciInsertSymbolTable
+          idempotent */
+       return 1;
     }
 
    pathchar* archiveName = NULL;
