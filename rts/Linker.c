@@ -510,13 +510,23 @@ static int ghciInsertSymbolTable(
       insertStrHashTable(table, key, pinfo);
       return 1;
    }
+   else if (weak && data && pinfo->weak && !pinfo->data)
+   {
+       /* Replace the weak symbol with a zero value in the new
+          weak symbol with a nonzero value. */
+       pinfo->value = data;
+       pinfo->owner = owner;
+       return 1;
+   }
    else if (weak)
    {
-     return 1; /* weak symbol, because the symbol is weak and we
-                  already know of another copy throw this one away.
+       return 1; /* weak symbol, because the symbol is weak, data = 0 and we
+                 already know of another copy throw this one away.
 
-                  This also preserves the semanics of linking against
-                  the first symbol we find. */
+                 or both weak symbols have a nonzero value. Keep the existing one.
+
+                 This also preserves the semantics of linking against
+                 the first symbol we find. */
    }
    else if (pinfo->weak && !weak) /* weak symbol is in the table */
    {
