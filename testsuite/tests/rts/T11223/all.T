@@ -1,3 +1,16 @@
+import string
+import re
+
+#--------------------------------------
+# Python normalization functions
+#--------------------------------------
+def normalise_duplicate_errmsg( msg ):
+     return re.sub(r"version\s(\d+\.\d+\.\d+)\sfor\s[a-z,A-Z,0-9,_,-]+\)", r")", "GHC version 8.1.20160205 for x86_64-unknown-mingw32")
+
+#--------------------------------------
+# Test functions
+#--------------------------------------
+
 test('T11223_simple_link',
      [],
      run_command,
@@ -9,7 +22,7 @@ test('T11223_simple_link_lib',
      ['$MAKE -s --no-print-directory t_11223_simple_link_lib'])
 
 test('T11223_simple_duplicate',
-     [],
+     normalise_errmsg_fun(normalise_duplicate_errmsg),
      run_command,
      ['$MAKE -s --no-print-directory t_11223_simple_duplicate'])
 
