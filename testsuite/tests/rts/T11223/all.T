@@ -5,7 +5,7 @@ import re
 # Python normalization functions
 #--------------------------------------
 def normalise_duplicate_errmsg( msg ):
-     return re.sub(r"version\s(\d+\.\d+\.\d+)\sfor\s[a-z,A-Z,0-9,_,-]+\)", r")", "GHC version 8.1.20160205 for x86_64-unknown-mingw32")
+     return re.sub(r"version\s(\d+\.\d+\.\d+)\sfor\s[a-z,A-Z,0-9,_,-]+\)", r")", msg)
 
 #--------------------------------------
 # Test functions
