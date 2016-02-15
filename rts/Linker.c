@@ -615,7 +615,7 @@ static HsBool ghciLookupSymbolInfo(HashTable *table,
         return HS_BOOL_FALSE;
     }
     if (pinfo->weak)
-        IF_DEBUG(linker, debugBelch("lookup: promoting %s\n", key));
+        IF_DEBUG(linker, debugBelch("lookupSymbolInfo: promoting %s\n", key));
     /* Once it's looked up, it can no longer be overridden */
     pinfo->weak = HS_BOOL_FALSE;
 
@@ -3311,6 +3311,7 @@ typedef
 #define MYIMAGE_SYM_CLASS_EXTERNAL          2
 #define MYIMAGE_SYM_CLASS_STATIC            3
 #define MYIMAGE_SYM_UNDEFINED               0
+#define MYIMAGE_SYM_CLASS_WEAK_EXTERNAL     105
 
 /* From PE spec doc, section 3.1 */
 #define MYIMAGE_SCN_CNT_CODE                0x00000020
@@ -3952,7 +3953,6 @@ ocGetNames_PEi386 ( ObjectCode* oc )
                  myindex ( sizeof_COFF_symbol, symtab, i );
 
       addr  = NULL;
-
       HsBool isWeak = HS_BOOL_FALSE;
       if (symtab_i->SectionNumber != MYIMAGE_SYM_UNDEFINED) {
          /* This symbol is global and defined, viz, exported */
@@ -3965,7 +3965,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
             = (COFF_section*) myindex ( sizeof_COFF_section,
                                         sectab,
                                         symtab_i->SectionNumber-1 );
-         if (symtab_i->StorageClass == MYIMAGE_SYM_CLASS_EXTERNAL
+         if (  symtab_i->StorageClass == MYIMAGE_SYM_CLASS_EXTERNAL
             || (   symtab_i->StorageClass == MYIMAGE_SYM_CLASS_STATIC
                 && sectabent->Characteristics & MYIMAGE_SCN_LNK_COMDAT)
             ) {
@@ -3977,9 +3977,11 @@ ocGetNames_PEi386 ( ObjectCode* oc )
               }
          }
       }
-      else
-      if (symtab_i->SectionNumber == MYIMAGE_SYM_UNDEFINED
-          && symtab_i->Value > 0) {
+      else if (symtab_i->StorageClass == MYIMAGE_SYM_CLASS_WEAK_EXTERNAL) {
+          isWeak = HS_BOOL_TRUE;
+      }
+      else if (  symtab_i->SectionNumber == MYIMAGE_SYM_UNDEFINED
+              && symtab_i->Value > 0) {
          /* This symbol isn't in any section at all, ie, global bss.
             Allocate zeroed space for it from the BSS section */
           addr = bss;
@@ -3987,7 +3989,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
           IF_DEBUG(linker, debugBelch("bss symbol @ %p %u\n", addr, symtab_i->Value));
       }
 
-      if (addr != NULL ) {
+      if (addr != NULL || isWeak == HS_BOOL_TRUE) {
         sname = cstring_from_COFF_symbol_name(symtab_i->Name, strtab);
 
          /* debugBelch("addSymbol %p `%s' Weak:%lld \n", addr, sname, isWeak); */
