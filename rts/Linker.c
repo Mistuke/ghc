@@ -5061,10 +5061,10 @@ ocGetNames_ELF ( ObjectCode* oc )
       // ie we should use j = shdr[i].sh_info
       for (j = 0; j < nent; j++) {
 
-         char  isLocal = FALSE; /* avoids uninit-var warning */
-         HsBool isWeak = HS_BOOL_FALSE;
-         char* ad      = NULL;
-         char* nm      = strtab + stab[j].st_name;
+         char  isLocal     = FALSE; /* avoids uninit-var warning */
+         HsBool isWeak     = HS_BOOL_FALSE;
+         unsigned char* ad = NULL;
+         char* nm          = strtab + stab[j].st_name;
          unsigned short shndx = stab[j].st_shndx;
          Elf_Word secno;
 
@@ -5143,6 +5143,7 @@ ocGetNames_ELF ( ObjectCode* oc )
 
          /* And the decision is ... */
 
+         oc->symbols[j].name = nm;
          if (ad != NULL) {
             ASSERT(nm != NULL);
             /* Acquire! */
@@ -5153,7 +5154,6 @@ ocGetNames_ELF ( ObjectCode* oc )
                                             nm, ad, isWeak, oc)) {
                     goto fail;
                 }
-                oc->symbols[j].name   = nm;
                 oc->symbols[j].addr   = ad;
                 oc->symbols[j].isWeak = isWeak;
             }
@@ -5170,7 +5170,7 @@ ocGetNames_ELF ( ObjectCode* oc )
                     strtab + stab[j].st_name
                    );
             */
-            oc->symbols[j] = NULL;
+            oc->symbols[j].addr = NULL;
          }
 
       }
