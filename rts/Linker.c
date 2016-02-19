@@ -2009,7 +2009,7 @@ static HsInt loadArchive_ (pathchar *path)
     size_t thisFileNameSize;
     char *fileName;
     size_t fileNameSize;
-    int isObject, isGnuIndex, isThin;
+    int isObject, isGnuIndex, isThin, isImportLib;
     char tmp[20];
     char *gnuFileIndex;
     int gnuFileIndexSize;
@@ -2056,10 +2056,11 @@ static HsInt loadArchive_ (pathchar *path)
     fileName = stgMallocBytes(fileNameSize, "loadArchive(fileName)");
 
     isThin = 0;
+    isImportLib = 0;
 
     f = pathopen(path, WSTR("rb"));
     if (!f)
-        barf("loadObj: can't read `%s'", path);
+        barf("loadObj: can't read `%" PATH_FMT "'", path);
 
     /* Check if this is an archive by looking for the magic "!<arch>\n"
      * string.  Usually, if this fails, we barf and quit.  On Darwin however,
@@ -2082,7 +2083,7 @@ static HsInt loadArchive_ (pathchar *path)
 
     n = fread ( tmp, 1, 8, f );
     if (n != 8)
-        barf("loadArchive: Failed reading header from `%s'", path);
+        barf("loadArchive: Failed reading header from `%" PATH_FMT "'", path);
     if (strncmp(tmp, "!<arch>\n", 8) == 0) {}
 #if !defined(mingw32_HOST_OS)
     /* See Note [thin archives on Windows] */
@@ -3285,6 +3286,7 @@ ocFlushInstructionCache( ObjectCode *oc )
 
 typedef unsigned char          UChar;
 typedef unsigned short         UInt16;
+typedef short                  Int16;
 typedef unsigned int           UInt32;
 typedef          int           Int32;
 typedef unsigned long long int UInt64;
@@ -3304,6 +3306,21 @@ typedef
 
 #define sizeof_COFF_header 20
 
+/* Section 7.1 PE Specification */
+typedef
+   struct {
+       UInt16 Sig1;
+       UInt16 Sig2;
+       UInt16 Version;
+       UInt16 Machine;
+       UInt32 TimeDateStamp;
+       UInt32 SizeOfData;
+       UInt16 Ordinal;
+       UInt16 Type_NameType_Reserved;
+   }
+   COFF_import_header;
+
+#define sizeof_COFF_import_Header 20
 
 typedef
    struct {
