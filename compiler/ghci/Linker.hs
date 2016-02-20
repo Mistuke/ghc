@@ -1233,14 +1233,15 @@ linkPackage hsc_env pkg
         mapM_ (loadObj hsc_env) objs
         mapM_ (loadArchive hsc_env) archs
 
+        maybePutStr dflags "linking ... "
+        ok <- resolveObjs hsc_env
+
         -- DLLs are loaded, reset the search paths
         -- Import libraries will be loaded via loadArchive so only
         -- reset the DLL search path after all archives are loaded
         -- as well.
         mapM_ (removeLibrarySearchPath hsc_env) $ reverse pathCache
-
-        maybePutStr dflags "linking ... "
-        ok <- resolveObjs hsc_env
+        
         if succeeded ok
            then maybePutStrLn dflags "done."
            else let errmsg = "unable to load package `"

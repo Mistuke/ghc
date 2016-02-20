@@ -1305,6 +1305,13 @@ HsInt insertSymbol(pathchar* obj_name, char* key, void* data)
     return ghciInsertSymbolTable(obj_name, symhash, key, data, HS_BOOL_FALSE, NULL);
 }
 
+/* string utility function */
+HsBool endsWith (char* base, char* str) {
+    int blen = strlen(base);
+    int slen = strlen(str);
+    return (blen >= slen) && (0 == strcmp(base + blen - slen, str));
+}
+
 /* -----------------------------------------------------------------------------
  * lookup a symbol in the hash table
  */
@@ -1356,8 +1363,20 @@ static void* lookupSymbol_ (char *lbl)
            See Note [runtime-linker-phases] */
         if (oc && oc->status == OBJECT_LOADED) {
             oc->status = OBJECT_NEEDED;
-            IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand loaded symbol '%s'\n", lbl));
+            IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand loading symbol '%s'\n", lbl));
             r = ocTryLoad(oc);
+            /* If the symbol is refering to a dll import name, load the dll */
+            if (endsWith(lbl, "_dll_iname")) {
+                IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand '%s' => `%s'\n", lbl, val));
+                pathchar* dll = mkPath(val); 
+                const char* result = addDLL(dll);
+                stgFree(dll);
+                
+                if (result != NULL) {
+                    errorBelch("Could not load `%s'. Reason: %s\n", val, result);
+                    return NULL;
+                }
+            }
 
             if (!r) {
                 errorBelch("Could not on-demand load symbol '%s'\n", lbl);
@@ -3344,7 +3363,7 @@ typedef
    struct {
       UChar  Name[8];
       UInt32 Value;
-      UInt16 SectionNumber;
+      Int16  SectionNumber;
       UInt16 Type;
       UChar  StorageClass;
       UChar  NumberOfAuxSymbols;
@@ -3394,6 +3413,7 @@ typedef
 
 /* From PE spec doc, section 5.2.1 */
 #define MYIMAGE_REL_I386_DIR32              0x0006
+#define MYIMAGE_REL_I386_DIR32NB            0x0007
 #define MYIMAGE_REL_I386_REL32              0x0014
 
 static int verifyCOFFHeader ( COFF_header *hdr, pathchar *filename);
@@ -4057,7 +4077,8 @@ ocGetNames_PEi386 ( ObjectCode* oc )
        symtab_i = (COFF_symbol*)
            myindex ( sizeof_COFF_symbol, symtab, i );
        if (symtab_i->SectionNumber == MYIMAGE_SYM_UNDEFINED
-           && symtab_i->Value > 0) {
+           && symtab_i->Value > 0 
+           && symtab_i->StorageClass != MYIMAGE_SYM_CLASS_SECTION) {
            globalBssSize += symtab_i->Value;
        }
        i += symtab_i->NumberOfAuxSymbols;
@@ -4085,7 +4106,8 @@ ocGetNames_PEi386 ( ObjectCode* oc )
 
       addr  = NULL;
       HsBool isWeak = HS_BOOL_FALSE;
-      if (symtab_i->SectionNumber != MYIMAGE_SYM_UNDEFINED) {
+      if (   symtab_i->SectionNumber != MYIMAGE_SYM_UNDEFINED
+          && symtab_i->SectionNumber > 0) {
          /* This symbol is global and defined, viz, exported */
          /* for MYIMAGE_SYMCLASS_EXTERNAL
                 && !MYIMAGE_SYM_UNDEFINED,
@@ -4339,6 +4361,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
          switch (reltab_j->Type) {
 #if defined(i386_HOST_ARCH)
             case MYIMAGE_REL_I386_DIR32:
+            case MYIMAGE_REL_I386_DIR32NB:
                *(UInt32 *)pP = ((UInt32)S) + A;
                break;
             case MYIMAGE_REL_I386_REL32:
@@ -4417,7 +4440,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
                }
 #endif
             default:
-               debugBelch("%" PATH_FMT ": unhandled PEi386 relocation type %d",
+               debugBelch("%" PATH_FMT ": unhandled PEi386 relocation type %d\n",
                      oc->fileName, reltab_j->Type);
                return 0;
          }
