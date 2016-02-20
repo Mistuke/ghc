@@ -52,6 +52,10 @@ Library
         GHC.PrimopWrappers
         GHC.Tuple
         GHC.Types
+        
+    -- OS Specific
+    if os(windows)
+        extra-libraries: User32, mingw32, mingwex
 
     if flag(include-ghc-prim)
         exposed-modules: GHC.Prim
