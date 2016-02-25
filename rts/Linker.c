@@ -235,6 +235,9 @@ static ObjectCode* mkOc( pathchar *path, char *image, int imageSize,
 #define struct_stat struct _stat
 #define open wopen
 #define WSTR(s) L##s
+#define pathprintf swprintf
+#define pathsplit _wsplitpath_s
+#define pathsize sizeof(wchar_t)
 #else
 #define pathcmp strcmp
 #define pathlen strlen
@@ -242,6 +245,9 @@ static ObjectCode* mkOc( pathchar *path, char *image, int imageSize,
 #define pathstat stat
 #define struct_stat struct stat
 #define WSTR(s) s
+#define pathprintf snprintf
+#define pathsplit _splitpath_s
+#define pathsize sizeof(char)
 #endif
 
 static pathchar* pathdup(pathchar *path)
@@ -266,7 +272,7 @@ static pathchar* mkPath(char* path)
     {
         barf("mkPath failed converting char* to wchar_t*");
     }
-
+    ret[required] = '\0';
     return ret;
 #else
     return pathdup(path);
@@ -1306,7 +1312,7 @@ HsInt insertSymbol(pathchar* obj_name, char* key, void* data)
 }
 
 /* string utility function */
-HsBool endsWith (char* base, char* str) {
+static HsBool endsWith (char* base, char* str) {
     int blen = strlen(base);
     int slen = strlen(str);
     return (blen >= slen) && (0 == strcmp(base + blen - slen, str));
@@ -1367,13 +1373,18 @@ static void* lookupSymbol_ (char *lbl)
             r = ocTryLoad(oc);
             /* If the symbol is refering to a dll import name, load the dll */
             if (endsWith(lbl, "_dll_iname")) {
-                IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand '%s' => `%s'\n", lbl, val));
-                pathchar* dll = mkPath(val); 
+                IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand '%s' => `%s'\n", lbl, (char*)val));
+                pathchar* dirName = stgMallocBytes(pathsize * pathlen(oc->fileName), "lookupSymbol(label)");
+                pathsplit(oc->fileName, NULL, 0, dirName, pathsize * pathlen(oc->fileName), NULL, 0, NULL, 0);
+                HsPtr token = addLibrarySearchPath(dirName);
+                pathchar* dll = mkPath(val);
+                removeLibrarySearchPath(token);
+
                 const char* result = addDLL(dll);
                 stgFree(dll);
                 
                 if (result != NULL) {
-                    errorBelch("Could not load `%s'. Reason: %s\n", val, result);
+                    errorBelch("Could not load `%s'. Reason: %s\n", (char*)val, result);
                     return NULL;
                 }
             }
