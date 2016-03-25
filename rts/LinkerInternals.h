@@ -16,7 +16,8 @@ typedef enum {
     OBJECT_LOADED,
     OBJECT_NEEDED,
     OBJECT_RESOLVED,
-    OBJECT_UNLOADED
+    OBJECT_UNLOADED,
+    OBJECT_DONT_RESOLVE
 } OStatus;
 
 /* Indication of section kinds for loaded objects.  Needed by
@@ -171,6 +172,11 @@ typedef struct _ObjectCode {
 #endif
 
     ForeignExportStablePtr *stable_ptrs;
+
+    /* Indicates whether if the .o file comes from
+       an import library. In which case we shouldn't
+       execute code from it. */
+    HsBool isImportLib;
 
 } ObjectCode;
 

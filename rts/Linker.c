@@ -279,6 +279,20 @@ static pathchar* mkPath(char* path)
 #endif
 }
 
+
+/* string utility function */
+static HsBool endsWith(char* base, char* str) {
+    int blen = strlen(base);
+    int slen = strlen(str);
+    return (blen >= slen) && (0 == strcmp(base + blen - slen, str));
+}
+
+static HsBool endsWithPath(pathchar* base, pathchar* str) {
+    int blen = pathlen(base);
+    int slen = pathlen(str);
+    return (blen >= slen) && (0 == pathcmp(base + blen - slen, str));
+}
+
 /* Generic wrapper function to try and Resolve and RunInit oc files */
 int ocTryLoad( ObjectCode* oc );
 
@@ -1311,13 +1325,6 @@ HsInt insertSymbol(pathchar* obj_name, char* key, void* data)
     return ghciInsertSymbolTable(obj_name, symhash, key, data, HS_BOOL_FALSE, NULL);
 }
 
-/* string utility function */
-static HsBool endsWith (char* base, char* str) {
-    int blen = strlen(base);
-    int slen = strlen(str);
-    return (blen >= slen) && (0 == strcmp(base + blen - slen, str));
-}
-
 /* -----------------------------------------------------------------------------
  * lookup a symbol in the hash table
  */
@@ -1371,6 +1378,13 @@ static void* lookupSymbol_ (char *lbl)
             oc->status = OBJECT_NEEDED;
             IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand loading symbol '%s'\n", lbl));
             r = ocTryLoad(oc);
+
+            if (!r) {
+                errorBelch("Could not on-demand load symbol '%s'\n", lbl);
+                return NULL;
+            }
+        } else if (oc && oc->status == OBJECT_DONT_RESOLVE && oc->isImportLib == HS_BOOL_TRUE) {
+#if defined(OBJFORMAT_PEi386)
             /* If the symbol is refering to a dll import name, load the dll */
             if (endsWith(lbl, "_dll_iname")) {
                 IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand '%s' => `%s'\n", lbl, (char*)val));
@@ -1382,17 +1396,61 @@ static void* lookupSymbol_ (char *lbl)
 
                 const char* result = addDLL(dll);
                 stgFree(dll);
-                
+
                 if (result != NULL) {
                     errorBelch("Could not load `%s'. Reason: %s\n", (char*)val, result);
                     return NULL;
                 }
-            }
+            } else {
+                /* If a normal symbol was requested, then read the actual symbol name from idata$5 and return that */
 
-            if (!r) {
-                errorBelch("Could not on-demand load symbol '%s'\n", lbl);
-                return NULL;
+                COFF_header*  hdr;
+                COFF_section* sectab;
+                COFF_symbol*  symtab;
+                UChar*        strtab;
+
+                hdr = (COFF_header*)(oc->image);
+                sectab = (COFF_section*)(
+                    ((UChar*)(oc->image))
+                    + sizeof_COFF_header + hdr->SizeOfOptionalHeader
+                    );
+
+                symtab = (COFF_symbol*)(
+                    ((UChar*)(oc->image))
+                    + hdr->PointerToSymbolTable
+                    );
+
+                strtab = ((UChar*)symtab)
+                    + hdr->NumberOfSymbols * sizeof_COFF_symbol;
+
+                int x;
+                for (x = 0; x < oc->n_sections; x++) {
+                    COFF_section* sectab_i
+                        = (COFF_section*)myindex(sizeof_COFF_section, sectab, x);
+
+                    char *secname = cstring_from_section_name(sectab_i->Name, strtab);
+
+                    if (strcmp(secname, "idata$5") == 0) {
+                        Section section = oc->sections[x];
+
+                        char* symName = (char*)section->start;
+
+                        /* See Note [mingw-w64 name decoration scheme] */
+#ifndef x86_64_HOST_ARCH
+                        zapTrailingAtSign((unsigned char*)symName);
+#endif
+                        val = lookupSymbolInDLLs((unsigned char*)symName);
+                        oc->value = val;
+                        oc->status = OBJECT_LOADED; // We've loaded the symbol so no need for this anymore.
+
+                        IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand '%s' ~> `%s' => `%s'\n", lbl, (char*)symName, (char*)val));
+                        break;
+                    }
+
+                    stgFree(secname);
+                }
             }
+#endif
         }
 
         return val;
@@ -1953,10 +2011,11 @@ void freeObjectCode (ObjectCode *oc)
 * Sets the initial status of a fresh ObjectCode
 */
 static void setOcInitialStatus(ObjectCode* oc) {
-    if (oc->archiveMemberName == NULL) {
+    if (oc->isImportLib == HS_BOOL_TRUE) {
+        oc->status = OBJECT_DONT_RESOLVE;
+    } else if (oc->archiveMemberName == NULL) {
         oc->status = OBJECT_NEEDED;
-    }
-    else {
+    } else {
         oc->status = OBJECT_LOADED;
     }
 }
@@ -2343,7 +2402,7 @@ static HsInt loadArchive_ (pathchar *path)
         * The PE coff format doesn't specify any specific file name
         * for sections. So on windows, just try to load it all.
         *
-        * Linker members (e.g. filenme / are skipped since they are not needed)
+        * Linker members (e.g. filename / are skipped since they are not needed)
         */
         isImportLib = (thisFileNameSize >= 4 &&
                        fileName[thisFileNameSize - 4] == '.' &&
@@ -2437,6 +2496,8 @@ static HsInt loadArchive_ (pathchar *path)
 
             oc = mkOc(path, image, memberSize, rtsFalse, archiveMemberName
                      , misalignment);
+
+            oc->isImportLib = endsWithPath(path, WSTR(".dll.a"));
 
             stgFree(archiveMemberName);
 
@@ -4088,7 +4149,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
        symtab_i = (COFF_symbol*)
            myindex ( sizeof_COFF_symbol, symtab, i );
        if (symtab_i->SectionNumber == MYIMAGE_SYM_UNDEFINED
-           && symtab_i->Value > 0 
+           && symtab_i->Value > 0
            && symtab_i->StorageClass != MYIMAGE_SYM_CLASS_SECTION) {
            globalBssSize += symtab_i->Value;
        }
