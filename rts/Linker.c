@@ -350,6 +350,17 @@ static int checkAndLoadImportLibrary(
     char* member_name,
     FILE* f);
 
+static UChar *myindex(
+    int scale,
+    void* base,
+    int index);
+static UChar *cstring_from_COFF_symbol_name(
+    UChar* name,
+    UChar* strtab);
+static char *cstring_from_section_name(
+    UChar* name,
+    UChar* strtab);
+
 
 /* Add ld symbol for PE image base. */
 #if defined(__GNUC__)
@@ -1402,7 +1413,14 @@ static void* lookupSymbol_ (char *lbl)
                     return NULL;
                 }
             } else {
-                /* If a normal symbol was requested, then read the actual symbol name from idata$5 and return that */
+                /* If a normal symbol was requested, then read the actual symbol name from idata$6 and return that */
+
+                r = ocTryLoad(oc);
+
+                if (!r) {
+                    errorBelch("Could not on-demand load symbol '%s'\n", lbl);
+                    return NULL;
+                }
 
                 COFF_header*  hdr;
                 COFF_section* sectab;
@@ -1423,34 +1441,65 @@ static void* lookupSymbol_ (char *lbl)
                 strtab = ((UChar*)symtab)
                     + hdr->NumberOfSymbols * sizeof_COFF_symbol;
 
-                int x;
+                int x, idata6 = -1, idata7 = -1;
                 for (x = 0; x < oc->n_sections; x++) {
                     COFF_section* sectab_i
                         = (COFF_section*)myindex(sizeof_COFF_section, sectab, x);
 
                     char *secname = cstring_from_section_name(sectab_i->Name, strtab);
 
-                    if (strcmp(secname, "idata$5") == 0) {
-                        Section section = oc->sections[x];
-
-                        char* symName = (char*)section->start;
-
-                        /* See Note [mingw-w64 name decoration scheme] */
-#ifndef x86_64_HOST_ARCH
-                        zapTrailingAtSign((unsigned char*)symName);
-#endif
-                        val = lookupSymbolInDLLs((unsigned char*)symName);
-                        oc->value = val;
-                        oc->status = OBJECT_LOADED; // We've loaded the symbol so no need for this anymore.
-
-                        IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand '%s' ~> `%s' => `%s'\n", lbl, (char*)symName, (char*)val));
-                        break;
+                    if (strcmp(secname, ".idata$6") == 0) {
+                        idata6 = x;
+                    } else if (strcmp(secname, ".idata$7") == 0) {
+                        idata7 = x;
                     }
 
                     stgFree(secname);
                 }
+
+                /* If the sections are not found, abort. */
+                if (idata6 == idata7){
+                    return NULL;
+                }
+
+                DebugBreak();
+
+                /* First load the containing DLL if not loaded. */
+                Section section = oc->sections[idata7];
+
+                pathchar* dirName = stgMallocBytes(pathsize * pathlen(oc->fileName), "lookupSymbol(label)");
+                pathsplit(oc->fileName, NULL, 0, dirName, pathsize * pathlen(oc->fileName), NULL, 0, NULL, 0);
+                HsPtr token = addLibrarySearchPath(dirName);
+                char* dllName = (char*)section.start + 2;
+                val = lookupSymbol_(dllName);
+                pathchar* dll = mkPath(val);
+                removeLibrarySearchPath(token);
+
+                const char* result = addDLL(dll);
+                stgFree(dll);
+
+                if (result != NULL) {
+                    errorBelch("Could not load `%s'. Reason: %s\n", (char*)val, result);
+                    return NULL;
+                }
+
+                /* lookup the actual symbol. */
+                section = oc->sections[idata6];
+
+                char* symName = (char*)section.start + 2;
+
+                /* See Note [mingw-w64 name decoration scheme] */
+#ifndef x86_64_HOST_ARCH
+                zapTrailingAtSign((unsigned char*)symName);
+#endif /* x86_64_HOST_ARCH */
+                val = lookupSymbolInDLLs((unsigned char*)symName);
+                pinfo->value = val;
+                oc->status = OBJECT_LOADED; // We've loaded the symbol so no need for this anymore.
+
+                IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand '%s' ~> `%s' => `%s'\n", lbl, (char*)symName, (char*)val));
             }
-#endif
+
+#endif /* OBJFORMAT_PEi386 */
         }
 
         return val;
@@ -3372,121 +3421,6 @@ ocFlushInstructionCache( ObjectCode *oc )
 
 
 #if defined(OBJFORMAT_PEi386)
-
-
-
-typedef unsigned char          UChar;
-typedef unsigned short         UInt16;
-typedef short                  Int16;
-typedef unsigned int           UInt32;
-typedef          int           Int32;
-typedef unsigned long long int UInt64;
-
-
-typedef
-   struct {
-      UInt16 Machine;
-      UInt16 NumberOfSections;
-      UInt32 TimeDateStamp;
-      UInt32 PointerToSymbolTable;
-      UInt32 NumberOfSymbols;
-      UInt16 SizeOfOptionalHeader;
-      UInt16 Characteristics;
-   }
-   COFF_header;
-
-#define sizeof_COFF_header 20
-
-/* Section 7.1 PE Specification */
-typedef
-   struct {
-       UInt16 Sig1;
-       UInt16 Sig2;
-       UInt16 Version;
-       UInt16 Machine;
-       UInt32 TimeDateStamp;
-       UInt32 SizeOfData;
-       UInt16 Ordinal;
-       UInt16 Type_NameType_Reserved;
-   }
-   COFF_import_header;
-
-#define sizeof_COFF_import_Header 20
-
-typedef
-   struct {
-      UChar  Name[8];
-      UInt32 VirtualSize;
-      UInt32 VirtualAddress;
-      UInt32 SizeOfRawData;
-      UInt32 PointerToRawData;
-      UInt32 PointerToRelocations;
-      UInt32 PointerToLinenumbers;
-      UInt16 NumberOfRelocations;
-      UInt16 NumberOfLineNumbers;
-      UInt32 Characteristics;
-   }
-   COFF_section;
-
-#define sizeof_COFF_section 40
-
-
-typedef
-   struct {
-      UChar  Name[8];
-      UInt32 Value;
-      Int16  SectionNumber;
-      UInt16 Type;
-      UChar  StorageClass;
-      UChar  NumberOfAuxSymbols;
-   }
-   COFF_symbol;
-
-#define sizeof_COFF_symbol 18
-
-
-typedef
-   struct {
-      UInt32 VirtualAddress;
-      UInt32 SymbolTableIndex;
-      UInt16 Type;
-   }
-   COFF_reloc;
-
-#define sizeof_COFF_reloc 10
-
-/* From PE spec doc, section 3.3.2 */
-/* Note use of MYIMAGE_* since IMAGE_* are already defined in
-   windows.h -- for the same purpose, but I want to know what I'm
-   getting, here. */
-#define MYIMAGE_FILE_RELOCS_STRIPPED        0x0001
-#define MYIMAGE_FILE_EXECUTABLE_IMAGE       0x0002
-#define MYIMAGE_FILE_DLL                    0x2000
-#define MYIMAGE_FILE_SYSTEM                 0x1000
-#define MYIMAGE_FILE_BYTES_REVERSED_HI      0x8000
-#define MYIMAGE_FILE_BYTES_REVERSED_LO      0x0080
-#define MYIMAGE_FILE_32BIT_MACHINE          0x0100
-
-/* From PE spec doc, section 5.4.2 and 5.4.4 */
-#define MYIMAGE_SYM_CLASS_EXTERNAL          2
-#define MYIMAGE_SYM_CLASS_STATIC            3
-#define MYIMAGE_SYM_UNDEFINED               0
-#define MYIMAGE_SYM_CLASS_SECTION           104
-#define MYIMAGE_SYM_CLASS_WEAK_EXTERNAL     105
-
-/* From PE spec doc, section 3.1 */
-#define MYIMAGE_SCN_CNT_CODE                0x00000020
-#define MYIMAGE_SCN_CNT_INITIALIZED_DATA    0x00000040
-#define MYIMAGE_SCN_CNT_UNINITIALIZED_DATA  0x00000080
-#define MYIMAGE_SCN_LNK_COMDAT              0x00001000
-#define MYIMAGE_SCN_LNK_NRELOC_OVFL         0x01000000
-#define MYIMAGE_SCN_LNK_REMOVE              0x00000800
-#define MYIMAGE_SCN_MEM_DISCARDABLE         0x02000000
-
-/* From PE spec doc, section 5.2.1 */
-#define MYIMAGE_REL_I386_DIR32              0x0006
-#define MYIMAGE_REL_I386_DIR32NB            0x0007
-#define MYIMAGE_REL_I386_REL32              0x0014
 
 static int verifyCOFFHeader ( COFF_header *hdr, pathchar *filename);
 
