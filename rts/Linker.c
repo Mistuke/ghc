@@ -1396,7 +1396,7 @@ static void* lookupSymbol_ (char *lbl)
             }
         } else if (oc && oc->status == OBJECT_DONT_RESOLVE && oc->isImportLib == HS_BOOL_TRUE) {
 #if defined(OBJFORMAT_PEi386)
-            /* If the symbol is refering to a dll import name, load the dll */
+            /* If the symbol is referring to a dll import name, load the dll */
             if (endsWith(lbl, "_dll_iname")) {
                 IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand '%s' => `%s'\n", lbl, (char*)val));
                 pathchar* dirName = stgMallocBytes(pathsize * pathlen(oc->fileName), "lookupSymbol(label)");
