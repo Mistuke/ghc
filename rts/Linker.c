@@ -150,7 +150,7 @@ typedef struct _RtsSymbolInfo {
    split into the following four phases:
 
    - Indexing (e.g. ocVerifyImage and ocGetNames)
-   - Initialise (e.g. ocResolve and ocRunInit)
+   - Initialization (e.g. ocResolve and ocRunInit)
    - Resolve (e.g. resolveObjs())
    - Lookup (e.g. lookupSymbol)
 
@@ -163,9 +163,9 @@ typedef struct _RtsSymbolInfo {
      described in `ghciInsertSymbolTable`.
 
      This phase will produce ObjectCode with status `OBJECT_LOADED` or `OBJECT_NEEDED`
-     depending on whether their archive members or not.
+     depending on whether they are an archive members or not.
 
-   * During initialisation we load ObjectCode, perform relocations, execute
+   * During initialization we load ObjectCode, perform relocations, execute
      static constructors etc. This phase may trigger other ObjectCodes to
      be loaded because of the calls to lookupSymbol.
 
@@ -512,8 +512,7 @@ static int ghciInsertSymbolTable(
    }
    else if (weak && data && pinfo->weak && !pinfo->value)
    {
-       /* Replace the weak symbol with a zero value in the new
-          weak symbol with a nonzero value. */
+       /* The existing symbol is weak with a zero value; replace it with the new symbol. */
        pinfo->value = data;
        pinfo->owner = owner;
        return 1;
