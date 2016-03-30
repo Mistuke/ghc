@@ -364,6 +364,21 @@ foreign import ccall unsafe "HsBase.h __hscore_fstat"
 foreign import ccall unsafe "HsBase.h __hscore_lstat"
    lstat :: CFilePath -> Ptr CStat -> IO CInt
 
+{- Note: Win32 POSIX functions
+Functions that are not part of the POSIX standards were
+at some point deprecated by Microsoft. This deprecation
+was performed by renaming the functions according to the
+C++ ABI Section 17.6.4.3.2b. This was done to free up the
+namespace of normal Windows programs since Windows isn't
+POSIX compliant anyway.
+
+These were working before since the RTS was re-exporting
+these symbols under the undeprecated names. This is no longer
+being done. See #11223
+
+See https://msdn.microsoft.com/en-us/library/ms235384.aspx
+for more.
+-}
 #if defined(mingw32_HOST_OS)
 foreign import ccall unsafe "io.h _lseeki64"
    c_lseek :: CInt -> Int64 -> CInt -> IO Int64
