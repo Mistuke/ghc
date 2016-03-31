@@ -491,7 +491,22 @@ static void ghciRemoveSymbolTable(HashTable *table, const char *key,
  *
  * Returns: 0 on failure, nonzero on success
  */
+/*
+ Note [weak-symbols-support]
+ -------------------------------------
+ While ghciInsertSymbolTable does implement extensive
+ logic for weak symbol support, weak symbols are not currently
+ fully supported by the RTS. This code is mostly here for COMDAT
+ support which uses the weak symbols support.
 
+ Linking weak symbols defined purely in C code with other C code
+ should also work, probably. Observing weak symbols in Haskell
+ won't.
+
+ Some test have been written for weak symbols but have been disabled
+ mostly because it's unsure how the weak symbols support should look.
+ See Trac #11223
+ */
 static int ghciInsertSymbolTable(
    pathchar* obj_name,
    HashTable *table,

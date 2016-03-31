@@ -60,6 +60,7 @@ test('T11223_link_order_b_a_2_succeed',
      ['$MAKE -s --no-print-directory t_11223_link_order_b_a_2_succeed'])
 
 # Weak Symbols are not currently implemented. So Disable all the tests
+# See Note [weak-symbols-support] in Linker.c
 
 test('T11223_weak_only_link_fail',
      [when(ghc_dynamic(), skip), expect_broken(11223)],
