@@ -281,12 +281,6 @@ static pathchar* mkPath(char* path)
 
 
 /* string utility function */
-static HsBool endsWith(char* base, char* str) {
-    int blen = strlen(base);
-    int slen = strlen(str);
-    return (blen >= slen) && (0 == strcmp(base + blen - slen, str));
-}
-
 static HsBool endsWithPath(pathchar* base, pathchar* str) {
     int blen = pathlen(base);
     int slen = pathlen(str);
@@ -349,6 +343,10 @@ static int checkAndLoadImportLibrary(
     pathchar* arch_name,
     char* member_name,
     FILE* f);
+
+static int findAndLoadImportLibrary(
+    ObjectCode* oc
+    );
 
 static UChar *myindex(
     int scale,
@@ -1394,112 +1392,6 @@ static void* lookupSymbol_ (char *lbl)
                 errorBelch("Could not on-demand load symbol '%s'\n", lbl);
                 return NULL;
             }
-        } else if (oc && oc->status == OBJECT_DONT_RESOLVE && oc->isImportLib == HS_BOOL_TRUE) {
-#if defined(OBJFORMAT_PEi386)
-            /* If the symbol is referring to a dll import name, load the dll */
-            if (endsWith(lbl, "_dll_iname")) {
-                IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand '%s' => `%s'\n", lbl, (char*)val));
-                pathchar* dirName = stgMallocBytes(pathsize * pathlen(oc->fileName), "lookupSymbol(label)");
-                pathsplit(oc->fileName, NULL, 0, dirName, pathsize * pathlen(oc->fileName), NULL, 0, NULL, 0);
-                HsPtr token = addLibrarySearchPath(dirName);
-                pathchar* dll = mkPath(val);
-                removeLibrarySearchPath(token);
-
-                const char* result = addDLL(dll);
-                stgFree(dll);
-
-                if (result != NULL) {
-                    errorBelch("Could not load `%s'. Reason: %s\n", (char*)val, result);
-                    return NULL;
-                }
-            } else {
-                /* If a normal symbol was requested, then read the actual symbol name from idata$6 and return that */
-
-                r = ocTryLoad(oc);
-
-                if (!r) {
-                    errorBelch("Could not on-demand load symbol '%s'\n", lbl);
-                    return NULL;
-                }
-
-                COFF_header*  hdr;
-                COFF_section* sectab;
-                COFF_symbol*  symtab;
-                UChar*        strtab;
-
-                hdr = (COFF_header*)(oc->image);
-                sectab = (COFF_section*)(
-                    ((UChar*)(oc->image))
-                    + sizeof_COFF_header + hdr->SizeOfOptionalHeader
-                    );
-
-                symtab = (COFF_symbol*)(
-                    ((UChar*)(oc->image))
-                    + hdr->PointerToSymbolTable
-                    );
-
-                strtab = ((UChar*)symtab)
-                    + hdr->NumberOfSymbols * sizeof_COFF_symbol;
-
-                int x, idata6 = -1, idata7 = -1;
-                for (x = 0; x < oc->n_sections; x++) {
-                    COFF_section* sectab_i
-                        = (COFF_section*)myindex(sizeof_COFF_section, sectab, x);
-
-                    char *secname = cstring_from_section_name(sectab_i->Name, strtab);
-
-                    if (strcmp(secname, ".idata$6") == 0) {
-                        idata6 = x;
-                    } else if (strcmp(secname, ".idata$7") == 0) {
-                        idata7 = x;
-                    }
-
-                    stgFree(secname);
-                }
-
-                /* If the sections are not found, abort. */
-                if (idata6 == idata7){
-                    return NULL;
-                }
-
-                DebugBreak();
-
-                /* First load the containing DLL if not loaded. */
-                Section section = oc->sections[idata7];
-
-                pathchar* dirName = stgMallocBytes(pathsize * pathlen(oc->fileName), "lookupSymbol(label)");
-                pathsplit(oc->fileName, NULL, 0, dirName, pathsize * pathlen(oc->fileName), NULL, 0, NULL, 0);
-                HsPtr token = addLibrarySearchPath(dirName);
-                char* dllName = (char*)section.start + 2;
-                val = lookupSymbol_(dllName);
-                pathchar* dll = mkPath(val);
-                removeLibrarySearchPath(token);
-
-                const char* result = addDLL(dll);
-                stgFree(dll);
-
-                if (result != NULL) {
-                    errorBelch("Could not load `%s'. Reason: %s\n", (char*)val, result);
-                    return NULL;
-                }
-
-                /* lookup the actual symbol. */
-                section = oc->sections[idata6];
-
-                char* symName = (char*)section.start + 2;
-
-                /* See Note [mingw-w64 name decoration scheme] */
-#ifndef x86_64_HOST_ARCH
-                zapTrailingAtSign((unsigned char*)symName);
-#endif /* x86_64_HOST_ARCH */
-                val = lookupSymbolInDLLs((unsigned char*)symName);
-                pinfo->value = val;
-                oc->status = OBJECT_LOADED; // We've loaded the symbol so no need for this anymore.
-
-                IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand '%s' ~> `%s' => `%s'\n", lbl, (char*)symName, (char*)val));
-            }
-
-#endif /* OBJFORMAT_PEi386 */
         }
 
         return val;
@@ -2458,6 +2350,16 @@ static HsInt loadArchive_ (pathchar *path)
                        fileName[thisFileNameSize - 3] == 'd' &&
                        fileName[thisFileNameSize - 2] == 'l' &&
                        fileName[thisFileNameSize - 1] == 'l');
+
+        /*
+         * Note [GCC import files (ext .dll.a)]
+         * GCC stores import information in the same binary format
+         * as the object file normally has. The only difference is that
+         * all the information are put in .idata sections. The only real
+         * way to tell if we're dealing with an import lib is by looking
+         * at the file extension.
+         */
+        isImportLib = isImportLib || endsWithPath(path, WSTR(".dll.a"));
 #endif // windows
 
         IF_DEBUG(linker, debugBelch("loadArchive: \tthisFileNameSize = %d\n", (int)thisFileNameSize));
@@ -2546,8 +2448,6 @@ static HsInt loadArchive_ (pathchar *path)
             oc = mkOc(path, image, memberSize, rtsFalse, archiveMemberName
                      , misalignment);
 
-            oc->isImportLib = endsWithPath(path, WSTR(".dll.a"));
-
             stgFree(archiveMemberName);
 
             if (0 == loadOc(oc)) {
@@ -2555,8 +2455,16 @@ static HsInt loadArchive_ (pathchar *path)
                 fclose(f);
                 return 0;
             } else {
-                oc->next = objects;
-                objects = oc;
+                if (isImportLib)
+                {
+                    findAndLoadImportLibrary(oc);
+                    stgFree(oc);
+                    oc = NULL;
+                    break;
+                } else {
+                    oc->next = objects;
+                    objects = oc;
+                }
             }
         }
         else if (isGnuIndex) {
@@ -3477,6 +3385,75 @@ allocateImageAndTrampolines (
    }
 
    return image + PEi386_IMAGE_OFFSET;
+}
+
+static int findAndLoadImportLibrary(ObjectCode* oc)
+{
+#if defined(OBJFORMAT_PEi386)
+    int i;
+
+    COFF_header*  hdr;
+    COFF_section* sectab;
+    COFF_symbol*  symtab;
+    UChar*        strtab;
+
+    hdr = (COFF_header*)(oc->image);
+    sectab = (COFF_section*)(
+        ((UChar*)(oc->image))
+        + sizeof_COFF_header + hdr->SizeOfOptionalHeader
+        );
+
+    symtab = (COFF_symbol*)(
+        ((UChar*)(oc->image))
+        + hdr->PointerToSymbolTable
+        );
+
+    strtab = ((UChar*)symtab)
+        + hdr->NumberOfSymbols * sizeof_COFF_symbol;
+
+    for (i = 0; i < oc->n_sections; i++)
+    {
+        COFF_section* sectab_i
+            = (COFF_section*)myindex(sizeof_COFF_section, sectab, i);
+
+        char *secname = cstring_from_section_name(sectab_i->Name, strtab);
+
+        // Find the first entry containing a valid .idata$7 section.
+        if (strcmp(secname, ".idata$7") == 0) {
+            /* First load the containing DLL if not loaded. */
+            Section section = oc->sections[i];
+
+            pathchar* dirName = stgMallocBytes(pathsize * pathlen(oc->fileName), "findAndLoadImportLibrary(oc)");
+            pathsplit(oc->fileName, NULL, 0, dirName, pathsize * pathlen(oc->fileName), NULL, 0, NULL, 0);
+            HsPtr token = addLibrarySearchPath(dirName);
+            char* dllName = (char*)section.start;
+
+            if (strlen(dllName) == 0 || dllName[0] == ' ')
+            {
+                continue;
+            }
+
+            IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand '%ls' => `%s'\n", oc->fileName, dllName));
+
+            pathchar* dll = mkPath(dllName);
+            removeLibrarySearchPath(token);
+
+            const char* result = addDLL(dll);
+            stgFree(dll);
+
+            if (result != NULL) {
+                errorBelch("Could not load `%s'. Reason: %s\n", (char*)dllName, result);
+                return NULL;
+            }
+
+            break;
+        }
+
+        stgFree(secname);
+    }
+#endif /* OBJFORMAT_PEi386 */
+
+    return 1;
 }
 
 static int checkAndLoadImportLibrary( pathchar* arch_name, char* member_name, FILE* f)
