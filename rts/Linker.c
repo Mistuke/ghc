@@ -2324,15 +2324,8 @@ static HsInt loadArchive_ (pathchar *path)
         IF_DEBUG(linker,
                  debugBelch("loadArchive: Found member file `%s'\n", fileName));
 
-        isObject =
-               (thisFileNameSize >= 2 &&
-                fileName[thisFileNameSize - 2] == '.' &&
-                fileName[thisFileNameSize - 1] == 'o')
-            || (thisFileNameSize >= 4 &&
-                fileName[thisFileNameSize - 4] == '.' &&
-                fileName[thisFileNameSize - 3] == 'p' &&
-                fileName[thisFileNameSize - 2] == '_' &&
-                fileName[thisFileNameSize - 1] == 'o');
+        isObject = (thisFileNameSize >= 2 && strncmp(fileName + thisFileNameSize - 2, ".o"  , 2) == 0)
+                || (thisFileNameSize >= 4 && strncmp(fileName + thisFileNameSize - 4, ".p_o", 4) == 0);
 
 #if defined(mingw32_HOST_OS)
         /*
@@ -2345,11 +2338,7 @@ static HsInt loadArchive_ (pathchar *path)
         *
         * Linker members (e.g. filename / are skipped since they are not needed)
         */
-        isImportLib = (thisFileNameSize >= 4 &&
-                       fileName[thisFileNameSize - 4] == '.' &&
-                       fileName[thisFileNameSize - 3] == 'd' &&
-                       fileName[thisFileNameSize - 2] == 'l' &&
-                       fileName[thisFileNameSize - 1] == 'l');
+        isImportLib = thisFileNameSize >= 4 && strncmp(fileName + thisFileNameSize - 4, ".dll", 4) == 0;
 
         /*
          * Note [GCC import files (ext .dll.a)]
