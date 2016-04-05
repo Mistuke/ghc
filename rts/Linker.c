@@ -279,14 +279,6 @@ static pathchar* mkPath(char* path)
 #endif
 }
 
-
-/* string utility function */
-static HsBool endsWithPath(pathchar* base, pathchar* str) {
-    int blen = pathlen(base);
-    int slen = pathlen(str);
-    return (blen >= slen) && (0 == pathcmp(base + blen - slen, str));
-}
-
 /* Generic wrapper function to try and Resolve and RunInit oc files */
 int ocTryLoad( ObjectCode* oc );
 
@@ -339,6 +331,13 @@ static void machoInitSymbolsWithoutUnderscore( void );
 #endif
 
 #if defined(OBJFORMAT_PEi386)
+/* string utility function */
+static HsBool endsWithPath(pathchar* base, pathchar* str) {
+    int blen = pathlen(base);
+    int slen = pathlen(str);
+    return (blen >= slen) && (0 == pathcmp(base + blen - slen, str));
+}
+
 static int checkAndLoadImportLibrary(
     pathchar* arch_name,
     char* member_name,
@@ -2327,13 +2326,13 @@ static HsInt loadArchive_ (pathchar *path)
         isObject = (thisFileNameSize >= 2 && strncmp(fileName + thisFileNameSize - 2, ".o"  , 2) == 0)
                 || (thisFileNameSize >= 4 && strncmp(fileName + thisFileNameSize - 4, ".p_o", 4) == 0);
 
-#if defined(mingw32_HOST_OS)
+#if defined(OBJFORMAT_PEi386)
         /*
         * Note [MSVC import files (ext .lib)]
         * MSVC compilers store the object files in
         * the import libraries with extension .dll
         * so on Windows we should look for those too.
-        * The PE coff format doesn't specify any specific file name
+        * The PE COFF format doesn't specify any specific file name
         * for sections. So on windows, just try to load it all.
         *
         * Linker members (e.g. filename / are skipped since they are not needed)
@@ -2444,6 +2443,7 @@ static HsInt loadArchive_ (pathchar *path)
                 fclose(f);
                 return 0;
             } else {
+#if defined(OBJFORMAT_PEi386)
                 if (isImportLib)
                 {
                     findAndLoadImportLibrary(oc);
@@ -2451,9 +2451,12 @@ static HsInt loadArchive_ (pathchar *path)
                     oc = NULL;
                     break;
                 } else {
+#endif
                     oc->next = objects;
                     objects = oc;
+#if defined(OBJFORMAT_PEi386)
                 }
+#endif
             }
         }
         else if (isGnuIndex) {
@@ -3378,7 +3381,6 @@ allocateImageAndTrampolines (
 
 static int findAndLoadImportLibrary(ObjectCode* oc)
 {
-#if defined(OBJFORMAT_PEi386)
     int i;
 
     COFF_header*  hdr;
@@ -3432,7 +3434,7 @@ static int findAndLoadImportLibrary(ObjectCode* oc)
 
             if (result != NULL) {
                 errorBelch("Could not load `%s'. Reason: %s\n", (char*)dllName, result);
-                return NULL;
+                return 0;
             }
 
             break;
@@ -3440,7 +3442,6 @@ static int findAndLoadImportLibrary(ObjectCode* oc)
 
         stgFree(secname);
     }
-#endif /* OBJFORMAT_PEi386 */
 
     return 1;
 }
