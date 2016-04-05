@@ -2115,12 +2115,9 @@ static HsInt loadArchive_ (pathchar *path)
     if (n != 8)
         barf("loadArchive: Failed reading header from `%" PATH_FMT "'", path);
     if (strncmp(tmp, "!<arch>\n", 8) == 0) {}
-#if !defined(mingw32_HOST_OS)
-    /* See Note [thin archives on Windows] */
     else if (strncmp(tmp, "!<thin>\n", 8) == 0) {
         isThin = 1;
     }
-#endif
 #if defined(darwin_HOST_OS)
     /* Not a standard archive, look for a fat archive magic number: */
     else if (ntohl(*(uint32_t *)tmp) == FAT_MAGIC) {
@@ -2393,7 +2390,7 @@ static HsInt loadArchive_ (pathchar *path)
 #endif
             if (isThin) {
                 FILE *member;
-                pathchar *pathCopy, *dirName, *memberPath;
+                pathchar *pathCopy, *dirName, *memberPath, *objFileName;
 
                 /* Allocate and setup the dirname of the archive.  We'll need
                     this to locate the thin member */
@@ -2404,8 +2401,10 @@ static HsInt loadArchive_ (pathchar *path)
                 /* Append the relative member name to the dirname.  This should be
                    be the full path to the actual thin member. */
                 int memberLen = pathlen(path) + 1 + strlen(fileName) + 1;
-                memberPath = stgMallocBytes(memberLen, "loadArchive(file)");
-                pathprintf(memberPath, memberLen, WSTR("%" PATH_FMT  "/%" PATH_FMT "\0"), dirName, fileName);
+                memberPath = stgMallocBytes(pathsize * memberLen, "loadArchive(file)");
+                objFileName = mkPath(fileName);
+                pathprintf(memberPath, memberLen, WSTR("%" PATH_FMT  "/%" PATH_FMT "\0"), dirName, objFileName);
+                stgFree(objFileName);
 
                 member = pathopen(memberPath, WSTR("rb"));
                 if (!member)

@@ -333,3 +333,6 @@ test('T10728', [extra_run_opts('+RTS -maxN3 -RTS'), only_ways(['threaded2'])],
 
 test('T9405', [extra_clean(['T9405.ticky'])],
               run_command, ['$MAKE -s --no-print-directory T9405'])
+
+test('T11788', [extra_clean(['T11788.o', 'T11788.hi'])],
+              run_command, ['$MAKE -s --no-print-directory T11788'])

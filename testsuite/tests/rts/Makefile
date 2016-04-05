@@ -2,6 +2,8 @@ TOP=../..
 include $(TOP)/mk/boilerplate.mk
 include $(TOP)/mk/test.mk
 
+GCC=gcc
+
 outofmem-prep::
 	'$(TEST_HC)' $(TEST_HC_OPTS) -v0 --make -fforce-recomp outofmem.hs -o outofmem
 
@@ -156,3 +158,11 @@ linker_error3:
 	"$(TEST_HC)" -c linker_error3.c -o linker_error3_o.o
 	"$(TEST_HC)" linker_error3.o -o linker_error3 -no-hs-main -optc-g -debug -threaded
 	./linker_error3 linker_error3_o.o
+    
+ .PHONY: T11788
+T11788:
+	$(RM) -f T11788.o T11788.hi T11788.o libT11788.a
+	"$(GCC)" -c T11788.c -o T11788.o
+	"$(AR)" rsT libT11788.a T11788.o 2> /dev/null
+	$(RM) -f T11788.o
+	echo main | "$(TEST_HC)" --interactive -v0 $(filter-out -rtsopts, $(TEST_HC_OPTS)) T11788.hs -lT11788 -L"$(PWD)"
