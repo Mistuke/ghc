@@ -1493,6 +1493,10 @@ getBaseDir = try_size 2048 -- plenty, PATH_MAX is 512 under Win32.
                                return $ (Just . rootDir . sanitize . maybe path id) real
             | otherwise  -> try_size (size * 2)
 
+    -- getFinalPath returns paths in full raw form.
+    -- Unfortunately GHC isn't set up to handle these
+    -- So if the call succeeded, we need to drop the
+    -- \\?\ prefix.
     sanitize s = if "\\\\?\\" `isPrefixOf` s
                     then drop 4 s
                     else s
@@ -1516,6 +1520,8 @@ foreign import WINDOWS_CCONV unsafe "windows.h GetModuleFileNameW"
   
 type GetFinalPath = HANDLE -> LPTSTR -> DWORD -> DWORD -> IO DWORD
 
+-- Attempt to resolve symlinks in order to find the actual location GHC
+-- is located at. See Trac #11759.
 getFinalPath :: FilePath -> IO (Maybe FilePath)
 getFinalPath name = do
     dllHwnd <- failIfNull "LoadLibray"     $ loadLibrary "kernel32.dll"
