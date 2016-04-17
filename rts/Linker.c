@@ -551,7 +551,7 @@ static void setWeakSymbol(ObjectCode *owner, void *value)
             owner->weakSymbols = allocStrHashTable();
         }
 
-        insertStrHashTable(owner->weakSymbols, value, HS_BOOL_TRUE);
+        insertStrHashTable(owner->weakSymbols, value, (void*)HS_BOOL_TRUE);
     }
 }
 
@@ -1485,7 +1485,7 @@ StgStablePtr foreignExportStablePtr (StgPtr p)
  * Debugging aid: look in GHCi's object symbol tables for symbols
  * within DELTA bytes of the specified address, and show their names.
  */
-#ifdef 1 //DEBUG
+#ifdef DEBUG
 void ghci_enquire ( char* addr );
 
 void ghci_enquire ( char* addr )
