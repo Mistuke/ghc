@@ -531,6 +531,7 @@ static HsBool isSymbolWeak(ObjectCode *owner, void *value)
         && owner->weakSymbols
         && lookupStrHashTable(owner->weakSymbols, value) != NULL)
     {
+        debugBelch("return weak: %s\n", (char*)value);
         return HS_BOOL_TRUE;
     }
 
@@ -551,6 +552,7 @@ static void setWeakSymbol(ObjectCode *owner, void *value)
             owner->weakSymbols = allocStrHashTable();
         }
 
+        debugBelch("Marking weak: %s\n", (char*)value);
         insertStrHashTable(owner->weakSymbols, value, (void*)HS_BOOL_TRUE);
     }
 }
@@ -5327,13 +5329,13 @@ ocGetNames_ELF ( ObjectCode* oc )
             if (isLocal) {
                /* Ignore entirely. */
             } else {
+                if (isWeak == HS_BOOL_TRUE) {
+                    setWeakSymbol(oc, nm);
+                }
+
                 if (! ghciInsertSymbolTable(oc->fileName, symhash,
                                             nm, ad, isWeak, oc)) {
                     goto fail;
-                }
-
-                if (isWeak == HS_BOOL_TRUE) {
-                    setWeakSymbol(oc, nm);
                 }
             }
          } else {
