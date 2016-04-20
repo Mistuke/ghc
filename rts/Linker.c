@@ -5326,7 +5326,8 @@ ocGetNames_ELF ( ObjectCode* oc )
             ASSERT(nm != NULL);
             /* Acquire! */
             if (isLocal) {
-               /* Ignore entirely. */
+                /* Ignore entirely. */
+                setWeakSymbol(oc, nm);
             } else {
 
                 if (isWeak == HS_BOOL_TRUE) {
