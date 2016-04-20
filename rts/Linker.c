@@ -531,7 +531,6 @@ static HsBool isSymbolWeak(ObjectCode *owner, void *value)
         && owner->weakSymbols
         && lookupStrHashTable(owner->weakSymbols, value) != NULL)
     {
-        debugBelch("return weak: %s\n", (char*)value);
         return HS_BOOL_TRUE;
     }
 
@@ -552,7 +551,6 @@ static void setWeakSymbol(ObjectCode *owner, void *value)
             owner->weakSymbols = allocStrHashTable();
         }
 
-        debugBelch("Marking weak: %s\n", (char*)value);
         insertStrHashTable(owner->weakSymbols, value, (void*)HS_BOOL_TRUE);
     }
 }
@@ -5323,12 +5321,14 @@ ocGetNames_ELF ( ObjectCode* oc )
          /* And the decision is ... */
 
          oc->symbols[j] = nm;
+
          if (ad != NULL) {
             ASSERT(nm != NULL);
             /* Acquire! */
             if (isLocal) {
                /* Ignore entirely. */
             } else {
+
                 if (isWeak == HS_BOOL_TRUE) {
                     setWeakSymbol(oc, nm);
                 }
@@ -5342,6 +5342,12 @@ ocGetNames_ELF ( ObjectCode* oc )
             /* Skip. */
             IF_DEBUG(linker,debugBelch( "skipping `%s'\n",
                                    strtab + stab[j].st_name ));
+            /* We're skipping the symbol, but we ever load this
+               object file we'll want to skip it then too.
+               Since we don't have the address available, we'll
+               mark the symbol as weak so it's skipped then. */
+            setWeakSymbol(oc, nm);
+
             /*
             debugBelch(
                     "skipping   bind = %d,  type = %d,  secno = %d   `%s'\n",
