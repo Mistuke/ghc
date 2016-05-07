@@ -1905,7 +1905,7 @@ void freeObjectCode (ObjectCode *oc)
     }
 
     if (oc->extraInfos != NULL) {
-        freeHashTable(oc->extraInfos, stgFree);
+        freeHashTable(oc->extraInfos, NULL);
         oc->extraInfos = NULL;
     }
 
