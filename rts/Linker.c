@@ -1904,9 +1904,9 @@ void freeObjectCode (ObjectCode *oc)
         oc->symbols = NULL;
     }
 
-    if (oc->weakSymbols != NULL) {
-        freeHashTable(oc->weakSymbols, NULL);
-        oc->weakSymbols = NULL;
+    if (oc->extraInfos != NULL) {
+        freeHashTable(oc->extraInfos, stgFree);
+        oc->extraInfos = NULL;
     }
 
     if (oc->sections != NULL) {
@@ -1953,10 +1953,6 @@ void freeObjectCode (ObjectCode *oc)
 
     stgFree(oc->fileName);
     stgFree(oc->archiveMemberName);
-
-    if (oc->extraInfos != NULL) {
-        freeHashTable(oc->extraInfos, stgFree);
-    }
 
     stgFree(oc);
 }
@@ -2017,7 +2013,7 @@ mkOc( pathchar *path, char *image, int imageSize,
    oc->imageMapped       = mapped;
 
    oc->misalignment      = misalignment;
-   oc->weakSymbols       = NULL;
+   oc->extraInfos        = NULL;
 
    /* chain it onto the list of objects */
    oc->next              = NULL;
@@ -4130,8 +4126,8 @@ ocGetNames_PEi386 ( ObjectCode* oc )
           IF_DEBUG(linker, debugBelch("bss symbol @ %p %u\n", addr, symtab_i->Value));
       }
 
+      sname = cstring_from_COFF_symbol_name(symtab_i->Name, strtab);
       if (addr != NULL || isWeak == HS_BOOL_TRUE) {
-        sname = cstring_from_COFF_symbol_name(symtab_i->Name, strtab);
 
          /* debugBelch("addSymbol %p `%s' Weak:%lld \n", addr, sname, isWeak); */
          IF_DEBUG(linker, debugBelch("addSymbol %p `%s'\n", addr,sname);)
@@ -4149,7 +4145,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
       } else {
           /* We're skipping the symbol, but if we ever load this
           object file we'll want to skip it then too. */
-          setSymbolIsEmpty(oc, nm);
+          setSymbolIsEmpty(oc, sname);
 
 #        if 0
          debugBelch(

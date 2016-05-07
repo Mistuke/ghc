@@ -13,8 +13,9 @@
 #include "HsFFI.h"
 
 #include "Hash.h"
+#include "RtsUtils.h"
 
-struct _SymbolInfo {
+typedef struct _SymbolInfo {
     /* Determines if the
        symbol is weak */
     HsBool isWeak;
