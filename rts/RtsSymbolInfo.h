@@ -11,7 +11,10 @@
 
 #include "LinkerInternals.h"
 
-HsBool isSymbolWeak(ObjectCode *owner, void *value);
-void setWeakSymbol(ObjectCode *owner, void *value);
+HsBool isSymbolWeak(ObjectCode *owner, void *label);
+void setWeakSymbol(ObjectCode *owner, void *label);
+
+HsBool isSymbolEmpty(ObjectCode *owner, void *label);
+void setSymbolIsEmpty(ObjectCode *owner, void *label);
 
 #endif /* RTS_SYMBOLINFO_H */

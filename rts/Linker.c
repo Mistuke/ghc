@@ -1953,6 +1953,11 @@ void freeObjectCode (ObjectCode *oc)
 
     stgFree(oc->fileName);
     stgFree(oc->archiveMemberName);
+
+    if (oc->extraInfos != NULL) {
+        freeHashTable(oc->extraInfos, stgFree);
+    }
+
     stgFree(oc);
 }
 
@@ -2796,6 +2801,7 @@ int ocTryLoad (ObjectCode* oc) {
     for (x = 0; x < oc->n_symbols; x++) {
         symbol = oc->symbols[x];
         if (   symbol
+            && !isSymbolEmpty(oc, symbol)
             && !ghciInsertSymbolTable(oc->fileName, symhash, symbol, NULL, isSymbolWeak(oc, symbol), oc)) {
             return 0;
         }
@@ -4141,6 +4147,10 @@ ocGetNames_PEi386 ( ObjectCode* oc )
              return 0;
          }
       } else {
+          /* We're skipping the symbol, but if we ever load this
+          object file we'll want to skip it then too. */
+          setSymbolIsEmpty(oc, nm);
+
 #        if 0
          debugBelch(
                    "IGNORING symbol %d\n"
@@ -5288,7 +5298,7 @@ ocGetNames_ELF ( ObjectCode* oc )
             /* Acquire! */
             if (isLocal) {
                 /* Ignore entirely. */
-                setWeakSymbol(oc, nm);
+                setSymbolIsEmpty(oc, nm);
             } else {
 
                 if (isWeak == HS_BOOL_TRUE) {
@@ -5304,11 +5314,9 @@ ocGetNames_ELF ( ObjectCode* oc )
             /* Skip. */
             IF_DEBUG(linker,debugBelch( "skipping `%s'\n",
                                    strtab + stab[j].st_name ));
-            /* We're skipping the symbol, but we ever load this
-               object file we'll want to skip it then too.
-               Since we don't have the address available, we'll
-               mark the symbol as weak so it's skipped then. */
-            setWeakSymbol(oc, nm);
+            /* We're skipping the symbol, but if we ever load this
+               object file we'll want to skip it then too. */
+            setSymbolIsEmpty(oc, nm);
 
             /*
             debugBelch(

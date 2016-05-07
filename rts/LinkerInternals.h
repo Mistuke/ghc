@@ -166,8 +166,8 @@ typedef struct _ObjectCode {
     HsBool isImportLib;
 
     /* Holds the list of symbols in the .o file which
-       are weak symbols.*/
-    HashTable *weakSymbols;
+       require extra information.*/
+    HashTable *extraInfos;
 
 } ObjectCode;
 

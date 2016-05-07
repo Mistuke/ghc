@@ -14,20 +14,51 @@
 
 #include "Hash.h"
 
+struct _SymbolInfo {
+    /* Determines if the
+       symbol is weak */
+    HsBool isWeak;
+
+    /* Determines if the value
+       of the symbol is > 0 */
+    HsBool hasValue;
+} SymbolInfo;
+
 /* -----------------------------------------------------------------------------
 * Performs a check to see if the symbol at the given address
-* a weak symbol or not.
+* is a weak symbol or not.
 *
 * Returns: HS_BOOL_TRUE on symbol being weak, else HS_BOOL_FALSE
 */
-HsBool isSymbolWeak(ObjectCode *owner, void *value)
+HsBool isSymbolWeak(ObjectCode *owner, void *label)
 {
+    SymbolInfo *info;
     if (owner
-        && value
-        && owner->weakSymbols
-        && lookupStrHashTable(owner->weakSymbols, value) != NULL)
+        && label
+        && owner->extraInfos
+        && (info = lookupStrHashTable(owner->extraInfos, label)) != NULL)
     {
-        return HS_BOOL_TRUE;
+        return info->isWeak;
+    }
+
+    return HS_BOOL_FALSE;
+}
+
+/* -----------------------------------------------------------------------------
+* Performs a check to see if the symbol at the given address
+* has a non-zero value or not.
+*
+* Returns: HS_BOOL_TRUE on symbol has a non-zero value, else HS_BOOL_FALSE
+*/
+HsBool isSymbolEmpty(ObjectCode *owner, void *label)
+{
+    SymbolInfo *info;
+    if (owner
+        && label
+        && owner->extraInfos
+        && (info = lookupStrHashTable(owner->extraInfos, label)) != NULL)
+    {
+        return info->hasValue;
     }
 
     return HS_BOOL_FALSE;
@@ -35,18 +66,51 @@ HsBool isSymbolWeak(ObjectCode *owner, void *value)
 
 /* -----------------------------------------------------------------------------
 * Marks the symbol at the given address as weak or not.
-* If the weak symbols table has not been initialized
+* If the extra symbol infos table has not been initialized
 * yet this will create and allocate a new Hashtable
 */
-void setWeakSymbol(ObjectCode *owner, void *value)
+void setWeakSymbol(ObjectCode *owner, void *label)
 {
-    if (owner && value)
+    SymbolInfo *info;
+    if (owner && label)
     {
-        if (!owner->weakSymbols)
+        if (!owner->extraInfos)
         {
-            owner->weakSymbols = allocStrHashTable();
+            owner->extraInfos = allocStrHashTable();
+            info = stgMallocBytes(sizeof(SymbolInfo), "setWeakSymbol");
+        }
+        else {
+            info = lookupStrHashTable(owner->extraInfos, label);
         }
 
-        insertStrHashTable(owner->weakSymbols, value, (void*)HS_BOOL_TRUE);
+        info->isWeak = HS_BOOL_TRUE;
+
+        insertStrHashTable(owner->extraInfos, label, info);
+    }
+}
+
+
+/* -----------------------------------------------------------------------------
+* Marks the symbol at the given address as having a zero value.
+* If the extra symbol infos table has not been initialized
+* yet this will create and allocate a new Hashtable
+*/
+void setSymbolIsEmpty(ObjectCode *owner, void *label)
+{
+    SymbolInfo *info;
+    if (owner && label)
+    {
+        if (!owner->extraInfos)
+        {
+            owner->extraInfos = allocStrHashTable();
+            info = stgMallocBytes(sizeof(SymbolInfo), "setSymbolIsEmpty");
+        }
+        else {
+            info = lookupStrHashTable(owner->extraInfos, label);
+        }
+
+        info->hasValue = HS_BOOL_TRUE;
+
+        insertStrHashTable(owner->extraInfos, label, info);
     }
 }
