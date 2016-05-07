@@ -24,6 +24,7 @@
 #include "GetEnv.h"
 #include "Stable.h"
 #include "RtsSymbols.h"
+#include "RtsSymbolInfo.h"
 #include "Profiling.h"
 
 #if !defined(mingw32_HOST_OS)
@@ -126,9 +127,6 @@ typedef struct _RtsSymbolInfo {
     ObjectCode *owner;
     HsBool weak;
 } RtsSymbolInfo;
-
-static HsBool isSymbolWeak(ObjectCode *owner, void *value);
-static void setWeakSymbol(ObjectCode *owner, void *value);
 
 /* `symhash` is a Hash table mapping symbol names to RtsSymbolInfo.
    This hashtable will contain information on all symbols
@@ -517,43 +515,6 @@ static void *mmap_32bit_base = (void *)MMAP_32BIT_BASE_DEFAULT;
 #if !defined(MAP_ANONYMOUS) && defined(MAP_ANON)
 #define MAP_ANONYMOUS MAP_ANON
 #endif
-
-/* -----------------------------------------------------------------------------
-* Performs a check to see if the symbol at the given address
-* a weak symbol or not.
-*
-* Returns: HS_BOOL_TRUE on symbol being weak, else HS_BOOL_FALSE
-*/
-static HsBool isSymbolWeak(ObjectCode *owner, void *value)
-{
-    if (   owner
-        && value
-        && owner->weakSymbols
-        && lookupStrHashTable(owner->weakSymbols, value) != NULL)
-    {
-        return HS_BOOL_TRUE;
-    }
-
-    return HS_BOOL_FALSE;
-}
-
-/* -----------------------------------------------------------------------------
-* Marks the symbol at the given address as weak or not.
-* If the weak symbols table has not been initialized
-* yet this will create and allocate a new Hashtable
-*/
-static void setWeakSymbol(ObjectCode *owner, void *value)
-{
-    if (owner && value)
-    {
-        if (!owner->weakSymbols)
-        {
-            owner->weakSymbols = allocStrHashTable();
-        }
-
-        insertStrHashTable(owner->weakSymbols, value, (void*)HS_BOOL_TRUE);
-    }
-}
 
 static void ghciRemoveSymbolTable(HashTable *table, const char *key,
     ObjectCode *owner)
