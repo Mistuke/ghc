@@ -78,10 +78,13 @@ void setWeakSymbol(ObjectCode *owner, void *label)
         if (!owner->extraInfos)
         {
             owner->extraInfos = allocStrHashTable();
-            info = stgMallocBytes(sizeof(SymbolInfo), "setWeakSymbol");
         }
         else {
             info = lookupStrHashTable(owner->extraInfos, label);
+        }
+
+        if (!info){
+            info = stgMallocBytes(sizeof(SymbolInfo), "setWeakSymbol");
         }
 
         info->isWeak = HS_BOOL_TRUE;
@@ -104,10 +107,13 @@ void setSymbolIsEmpty(ObjectCode *owner, void *label)
         if (!owner->extraInfos)
         {
             owner->extraInfos = allocStrHashTable();
-            info = stgMallocBytes(sizeof(SymbolInfo), "setSymbolIsEmpty");
         }
         else {
             info = lookupStrHashTable(owner->extraInfos, label);
+        }
+
+        if (!info) {
+            info = stgMallocBytes(sizeof(SymbolInfo), "setSymbolIsEmpty");
         }
 
         info->hasValue = HS_BOOL_TRUE;
