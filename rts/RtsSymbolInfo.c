@@ -75,6 +75,7 @@ void setWeakSymbol(ObjectCode *owner, void *label)
     SymbolInfo *info;
     if (owner && label)
     {
+        info = NULL;
         if (!owner->extraInfos)
         {
             owner->extraInfos = allocStrHashTable();
@@ -104,6 +105,7 @@ void setSymbolIsEmpty(ObjectCode *owner, void *label)
     SymbolInfo *info;
     if (owner && label)
     {
+        info = NULL;
         if (!owner->extraInfos)
         {
             owner->extraInfos = allocStrHashTable();
