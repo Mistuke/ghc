@@ -1905,7 +1905,7 @@ void freeObjectCode (ObjectCode *oc)
     }
 
     if (oc->extraInfos != NULL) {
-        freeHashTable(oc->extraInfos, stgFree);
+        freeHashTable(oc->extraInfos, NULL);
         oc->extraInfos = NULL;
     }
 
@@ -5309,7 +5309,8 @@ ocGetNames_ELF ( ObjectCode* oc )
          } else {
             /* Skip. */
             IF_DEBUG(linker,debugBelch( "skipping `%s'\n",
-                                   strtab + stab[j].st_name ));
+                                   nm ));
+
             /* We're skipping the symbol, but if we ever load this
                object file we'll want to skip it then too. */
             setSymbolIsEmpty(oc, nm);
@@ -5320,7 +5321,7 @@ ocGetNames_ELF ( ObjectCode* oc )
                     (int)ELF_ST_BIND(stab[j].st_info),
                     (int)ELF_ST_TYPE(stab[j].st_info),
                     (int)secno,
-                    strtab + stab[j].st_name
+                    nm
                    );
             */
          }
