@@ -2797,7 +2797,6 @@ int ocTryLoad (ObjectCode* oc) {
     for (x = 0; x < oc->n_symbols; x++) {
         symbol = oc->symbols[x];
         if (   symbol
-            && !isSymbolEmpty(oc, symbol)
             && !ghciInsertSymbolTable(oc->fileName, symhash, symbol, NULL, isSymbolWeak(oc, symbol), oc)) {
             return 0;
         }
@@ -4145,7 +4144,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
       } else {
           /* We're skipping the symbol, but if we ever load this
           object file we'll want to skip it then too. */
-          setSymbolIsEmpty(oc, sname);
+          oc->symbols[i] = NULL;
 
 #        if 0
          debugBelch(
@@ -5294,7 +5293,7 @@ ocGetNames_ELF ( ObjectCode* oc )
             /* Acquire! */
             if (isLocal) {
                 /* Ignore entirely. */
-                setSymbolIsEmpty(oc, nm);
+                oc->symbols[j] = NULL;
             } else {
 
                 if (isWeak == HS_BOOL_TRUE) {
@@ -5313,7 +5312,7 @@ ocGetNames_ELF ( ObjectCode* oc )
 
             /* We're skipping the symbol, but if we ever load this
                object file we'll want to skip it then too. */
-            setSymbolIsEmpty(oc, nm);
+            oc->symbols[j] = NULL;
 
             /*
             debugBelch(
