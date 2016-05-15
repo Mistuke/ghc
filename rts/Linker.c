@@ -118,9 +118,14 @@
 /* SymbolInfo tracks a symbol's address, the object code from which
    it originated, and whether or not it's weak.
 
-   Refactoring idea: For the sake of memory efficiency it might be worthwhile
-   dropping the `weak` field, instead keeping a list of weak symbols in
-   ObjectCode. This is task #11816.
+   RtsSymbolInfo is used to track the state of the symbols currently
+   loaded or to be loaded by the Linker.
+
+   Where the information in the `ObjectCode` is used to track the
+   original status of the symbol inside the `ObjectCode`.
+
+   A weak symbol that has been used will still be marked as weak
+   in the `ObjectCode` but in the `RtsSymbolInfo` it won't be.
 */
 typedef struct _RtsSymbolInfo {
     void *value;
