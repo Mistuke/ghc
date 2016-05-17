@@ -128,7 +128,7 @@
    in the `ObjectCode` but in the `RtsSymbolInfo` it won't be.
 */
 typedef struct _RtsSymbolInfo {
-    void *value;
+    SymbolAddr value;
     ObjectCode *owner;
     HsBool weak;
 } RtsSymbolInfo;
@@ -521,7 +521,7 @@ static void *mmap_32bit_base = (void *)MMAP_32BIT_BASE_DEFAULT;
 #define MAP_ANONYMOUS MAP_ANON
 #endif
 
-static void ghciRemoveSymbolTable(HashTable *table, const char *key,
+static void ghciRemoveSymbolTable(HashTable *table, const SymbolName key,
     ObjectCode *owner)
 {
     RtsSymbolInfo *pinfo = lookupStrHashTable(table, key);
@@ -554,8 +554,8 @@ static void ghciRemoveSymbolTable(HashTable *table, const char *key,
 static int ghciInsertSymbolTable(
    pathchar* obj_name,
    HashTable *table,
-   const char* key,
-   void *data,
+   const SymbolName key,
+   SymbolAddr data,
    HsBool weak,
    ObjectCode *owner)
 {
@@ -665,7 +665,7 @@ static int ghciInsertSymbolTable(
 *          nonzero on success and result set to nonzero pointer
 */
 static HsBool ghciLookupSymbolInfo(HashTable *table,
-    const char *key, RtsSymbolInfo **result)
+    const SymbolName key, RtsSymbolInfo **result)
 {
     RtsSymbolInfo *pinfo = lookupStrHashTable(table, key);
     if (!pinfo) {
@@ -879,7 +879,7 @@ static OpenedDLL* opened_dlls = NULL;
 /* A record for storing indirectly linked functions from DLLs. */
 typedef
    struct _IndirectAddr {
-      void*                 addr;
+      SymbolAddr            addr;
       struct _IndirectAddr* next;
    }
    IndirectAddr;
@@ -1339,7 +1339,7 @@ HsBool removeLibrarySearchPath(HsPtr dll_path_index)
  *
  * Returns: 0 on failure, nozero on success
  */
-HsInt insertSymbol(pathchar* obj_name, char* key, void* data)
+HsInt insertSymbol(pathchar* obj_name, SymbolName key, SymbolAddr data)
 {
     return ghciInsertSymbolTable(obj_name, symhash, key, data, HS_BOOL_FALSE, NULL);
 }
@@ -1347,7 +1347,7 @@ HsInt insertSymbol(pathchar* obj_name, char* key, void* data)
 /* -----------------------------------------------------------------------------
  * lookup a symbol in the hash table
  */
-static void* lookupSymbol_ (char *lbl)
+static SymbolAddr lookupSymbol_ (SymbolName lbl)
 {
     IF_DEBUG(linker, debugBelch("lookupSymbol: looking up %s\n", lbl));
 
@@ -1371,7 +1371,7 @@ static void* lookupSymbol_ (char *lbl)
         ASSERT(lbl[0] == '_');
         return internal_dlsym(lbl + 1);
 #       elif defined(OBJFORMAT_PEi386)
-        void* sym;
+        SymbolAddr sym;
 
 /* See Note [mingw-w64 name decoration scheme] */
 #ifndef x86_64_HOST_ARCH
@@ -1385,7 +1385,7 @@ static void* lookupSymbol_ (char *lbl)
         return NULL;
 #       endif
     } else {
-        void *val = pinfo->value;
+        SymbolAddr val = pinfo->value;
         IF_DEBUG(linker, debugBelch("lookupSymbol: value of %s is %p\n", lbl, val));
 
         int r;
@@ -1408,10 +1408,10 @@ static void* lookupSymbol_ (char *lbl)
     }
 }
 
-void* lookupSymbol( char *lbl )
+SymbolAddr lookupSymbol( SymbolName lbl )
 {
     ACQUIRE_LOCK(&linker_mutex);
-    char *r = lookupSymbol_(lbl);
+    SymbolAddr r = lookupSymbol_(lbl);
     RELEASE_LOCK(&linker_mutex);
     return r;
 }
@@ -1452,12 +1452,12 @@ StgStablePtr foreignExportStablePtr (StgPtr p)
  * within DELTA bytes of the specified address, and show their names.
  */
 #ifdef DEBUG
-void ghci_enquire ( char* addr );
+void ghci_enquire ( SymbolAddr addr );
 
-void ghci_enquire ( char* addr )
+void ghci_enquire(SymbolAddr addr)
 {
    int   i;
-   char* sym;
+   SymbolName sym;
    RtsSymbolInfo* a;
    const int DELTA = 64;
    ObjectCode* oc;
@@ -1474,9 +1474,9 @@ void ghci_enquire ( char* addr )
              // debugBelch("ghci_enquire: can't find %s\n", sym);
          }
          else if (   a->value
-                  && addr-DELTA <= (char*)a->value
-                  && (char*)a->value <= addr+DELTA) {
-             debugBelch("%p + %3d  ==  `%s'\n", addr, (int)((char*)a->value - addr), sym);
+                  && (char*)addr-DELTA <= (char*)a->value
+                  && (char*)a->value <= (char*)addr+DELTA) {
+             debugBelch("%p + %3d  ==  `%s'\n", addr, (int)((char*)a->value - (char*)addr), sym);
          }
       }
    }
@@ -2798,7 +2798,7 @@ int ocTryLoad (ObjectCode* oc) {
         symbols. Duplicate symbols are distinguished by name and oc.
     */
     int x;
-    char* symbol;
+    SymbolName symbol;
     for (x = 0; x < oc->n_symbols; x++) {
         symbol = oc->symbols[x];
         if (   symbol
@@ -3665,11 +3665,11 @@ zapTrailingAtSign ( UChar* sym )
   See #9218
 */
 
-static void *
+static SymbolAddr
 lookupSymbolInDLLs ( UChar *lbl )
 {
     OpenedDLL* o_dll;
-    void *sym;
+    SymbolAddr sym;
 
     for (o_dll = opened_dlls; o_dll != NULL; o_dll = o_dll->next) {
         /* debugBelch("look in %ls for %s\n", o_dll->name, lbl); */
@@ -3931,9 +3931,9 @@ ocGetNames_PEi386 ( ObjectCode* oc )
    COFF_symbol*  symtab;
    UChar*        strtab;
 
-   UChar* sname;
-   void*  addr;
-   int    i;
+   UChar*     sname;
+   SymbolAddr addr;
+   int        i;
 
    hdr = (COFF_header*)(oc->image);
    sectab = (COFF_section*) (
@@ -4055,7 +4055,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
    /* Copy exported symbols into the ObjectCode. */
 
    oc->n_symbols = hdr->NumberOfSymbols;
-   oc->symbols   = stgCallocBytes(sizeof(char*), oc->n_symbols,
+   oc->symbols   = stgCallocBytes(sizeof(SymbolName), oc->n_symbols,
                                   "ocGetNames_PEi386(oc->symbols)");
 
    /* Work out the size of the global BSS section */
@@ -4073,7 +4073,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
    }
 
    /* Allocate BSS space */
-   void *bss = NULL;
+   SymbolAddr bss = NULL;
    if (globalBssSize > 0) {
        bss = stgCallocBytes(1, globalBssSize,
                             "ocGetNames_PEi386(non-anonymous bss)");
@@ -4126,7 +4126,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
          /* This symbol isn't in any section at all, ie, global bss.
             Allocate zeroed space for it from the BSS section */
           addr = bss;
-          bss = (void *)((StgWord)bss + (StgWord)symtab_i->Value);
+          bss = (SymbolAddr)((StgWord)bss + (StgWord)symtab_i->Value);
           IF_DEBUG(linker, debugBelch("bss symbol @ %p %u\n", addr, symtab_i->Value));
       }
 
@@ -4137,12 +4137,12 @@ ocGetNames_PEi386 ( ObjectCode* oc )
          IF_DEBUG(linker, debugBelch("addSymbol %p `%s'\n", addr,sname);)
          ASSERT(i >= 0 && i < oc->n_symbols);
          /* cstring_from_COFF_symbol_name always succeeds. */
-         oc->symbols[i] = (char*)sname;
+         oc->symbols[i] = (SymbolName)sname;
          if (isWeak == HS_BOOL_TRUE) {
              setWeakSymbol(oc, sname);
          }
 
-         if (! ghciInsertSymbolTable(oc->fileName, symhash, (char*)sname, addr,
+         if (! ghciInsertSymbolTable(oc->fileName, symhash, (SymbolName)sname, addr,
                                      isWeak, oc)) {
              return 0;
          }
@@ -4231,7 +4231,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
 
    UInt32        A;
    size_t        S;
-   void *        pP;
+   SymbolAddr    pP;
 
    int i;
    UInt32 j, noRelocs;
@@ -5198,7 +5198,7 @@ ocGetNames_ELF ( ObjectCode* oc )
       nent = shdr[i].sh_size / sizeof(Elf_Sym);
 
       oc->n_symbols = nent;
-      oc->symbols = stgCallocBytes(oc->n_symbols, sizeof(char*),
+      oc->symbols = stgCallocBytes(oc->n_symbols, sizeof(SymbolName),
                                    "ocGetNames_ELF(oc->symbols)");
       // Note calloc: if we fail partway through initializing symbols, we need
       // to undo the additions to the symbol table so far. We know which ones
@@ -5209,10 +5209,10 @@ ocGetNames_ELF ( ObjectCode* oc )
       // ie we should use j = shdr[i].sh_info
       for (j = 0; j < nent; j++) {
 
-         char  isLocal     = FALSE; /* avoids uninit-var warning */
-         HsBool isWeak     = HS_BOOL_FALSE;
-         unsigned char* ad = NULL;
-         char* nm          = strtab + stab[j].st_name;
+         char  isLocal  = FALSE; /* avoids uninit-var warning */
+         HsBool isWeak  = HS_BOOL_FALSE;
+         SymbolAddr ad  = NULL;
+         SymbolName nm  = strtab + stab[j].st_name;
          unsigned short shndx = stab[j].st_shndx;
          Elf_Word secno;
 
@@ -5269,7 +5269,7 @@ ocGetNames_ELF ( ObjectCode* oc )
                                stab[j].st_size, stab[j].st_value, nm);
             }
             */
-            ad = (void*)((intptr_t)sections[secno].start +
+            ad = (SymbolAddr)((intptr_t)sections[secno].start +
                          (intptr_t)stab[j].st_value);
             if (ELF_ST_BIND(stab[j].st_info)==STB_LOCAL) {
                isLocal = TRUE;
@@ -5280,7 +5280,7 @@ ocGetNames_ELF ( ObjectCode* oc )
                 * descriptors, so to be consistent we store function descriptors
                 * in the symbol table */
                if (ELF_ST_TYPE(stab[j].st_info) == STT_FUNC)
-                   ad = (char *)allocateFunctionDesc((Elf_Addr)ad);
+                   ad = (SymbolAddr)allocateFunctionDesc((Elf_Addr)ad);
 #endif
                IF_DEBUG(linker,debugBelch( "addOTabName(GLOB): %10p  %s %s\n",
                                       ad, oc->fileName, nm ));
@@ -5367,7 +5367,7 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
                          Elf_Shdr* shdr, int shnum )
 {
    int j;
-   char *symbol;
+   SymbolName symbol;
    Elf_Word* targ;
    Elf_Rel*  rtab = (Elf_Rel*) (ehdrC + shdr[shnum].sh_offset);
    Elf_Sym*  stab;
@@ -5684,7 +5684,7 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
                           Elf_Shdr* shdr, int shnum )
 {
    int j;
-   char *symbol = NULL;
+   SymbolName symbol = NULL;
    Elf_Rela* rtab = (Elf_Rela*) (ehdrC + shdr[shnum].sh_offset);
    Elf_Sym*  stab;
    char*     strtab;
@@ -6328,14 +6328,14 @@ resolveImports(
     {
         // according to otool, reserved1 contains the first index into the indirect symbol table
         struct nlist *symbol = &nlist[indirectSyms[sect->reserved1+i]];
-        char *nm = image + symLC->stroff + symbol->n_un.n_strx;
-        void *addr = NULL;
+        SymbolName nm = image + symLC->stroff + symbol->n_un.n_strx;
+        SymbolAddr addr = NULL;
 
         IF_DEBUG(linker, debugBelch("resolveImports: resolving %s\n", nm));
 
         if ((symbol->n_type & N_TYPE) == N_UNDF
             && (symbol->n_type & N_EXT) && (symbol->n_value != 0)) {
-            addr = (void*) (symbol->n_value);
+            addr = (SymbolAddr) (symbol->n_value);
             IF_DEBUG(linker, debugBelch("resolveImports: undefined external %s has value %p\n", nm, addr));
         } else {
             addr = lookupSymbol_(nm);
@@ -6356,7 +6356,7 @@ resolveImports(
 
             *(image + sect->offset + i * itemSize) = 0xe9; // jmp opcode
             *(unsigned*)(image + sect->offset + i*itemSize + 1)
-                = (char*)addr - (image + sect->offset + i*itemSize + 5);
+                = (SymbolAddr)addr - (image + sect->offset + i*itemSize + 5);
         }
         else
 #endif
@@ -6478,8 +6478,8 @@ relocateSection(
          || type == X86_64_RELOC_GOT_LOAD)
         {
             struct nlist *symbol = &nlist[reloc->r_symbolnum];
-            char *nm = image + symLC->stroff + symbol->n_un.n_strx;
-            void *addr = NULL;
+            SymbolName nm = image + symLC->stroff + symbol->n_un.n_strx;
+            SymbolAddr addr = NULL;
 
             IF_DEBUG(linker, debugBelch("relocateSection: making jump island for %s, extern = %d, X86_64_RELOC_GOT\n", nm, reloc->r_extern));
 
@@ -6531,8 +6531,8 @@ relocateSection(
         else if (reloc->r_extern)
         {
             struct nlist *symbol = &nlist[reloc->r_symbolnum];
-            char *nm = image + symLC->stroff + symbol->n_un.n_strx;
-            void *addr = NULL;
+            SymbolName nm = image + symLC->stroff + symbol->n_un.n_strx;
+            SymbolAddr addr = NULL;
 
             IF_DEBUG(linker, debugBelch("relocateSection: looking up external symbol %s\n", nm));
             IF_DEBUG(linker, debugBelch("               : type  = %d\n", symbol->n_type));
@@ -6970,7 +6970,7 @@ ocGetNames_MachO(ObjectCode* oc)
     struct symtab_command *symLC = NULL;
     struct nlist *nlist;
     unsigned long commonSize = 0;
-    char    *commonStorage = NULL;
+    SymbolAddr commonStorage = NULL;
     unsigned long commonCounter;
 
     IF_DEBUG(linker,debugBelch("ocGetNames_MachO: start\n"));
@@ -7072,7 +7072,7 @@ ocGetNames_MachO(ObjectCode* oc)
         }
     }
     IF_DEBUG(linker, debugBelch("ocGetNames_MachO: %d external symbols\n", oc->n_symbols));
-    oc->symbols = stgMallocBytes(oc->n_symbols * sizeof(char*),
+    oc->symbols = stgMallocBytes(oc->n_symbols * sizeof(SymbolName),
                                    "ocGetNames_MachO(oc->symbols)");
 
     if(symLC)
@@ -7085,7 +7085,7 @@ ocGetNames_MachO(ObjectCode* oc)
             {
                 if(nlist[i].n_type & N_EXT)
                 {
-                    char *nm = image + symLC->stroff + nlist[i].n_un.n_strx;
+                    SymbolName nm = image + symLC->stroff + nlist[i].n_un.n_strx;
                     if ((nlist[i].n_desc & N_WEAK_DEF) && lookupSymbol_(nm)) {
                         // weak definition, and we already have a definition
                         IF_DEBUG(linker, debugBelch("    weak: %s\n", nm));
@@ -7093,7 +7093,7 @@ ocGetNames_MachO(ObjectCode* oc)
                     else
                     {
                             IF_DEBUG(linker, debugBelch("ocGetNames_MachO: inserting %s\n", nm));
-                            void* addr = image
+                            SymbolAddr addr = image
                                        + sections[nlist[i].n_sect - 1].offset
                                        - sections[nlist[i].n_sect - 1].addr
                                        + nlist[i].n_value;
@@ -7130,7 +7130,7 @@ ocGetNames_MachO(ObjectCode* oc)
              && (nlist[i].n_type & N_EXT)
              && (nlist[i].n_value != 0)) {
 
-                char *nm = image + symLC->stroff + nlist[i].n_un.n_strx;
+                SymbolName nm = image + symLC->stroff + nlist[i].n_un.n_strx;
                 unsigned long sz = nlist[i].n_value;
 
                 nlist[i].n_value = commonCounter;
