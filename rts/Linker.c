@@ -3525,6 +3525,7 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
       COFF_section* sectab_i
          = (COFF_section*)
            myindex ( sizeof_COFF_section, sectab, i );
+      Section section = oc->sections[i];
       debugBelch(
                 "\n"
                 "section %d\n"
@@ -3537,17 +3538,17 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
                 "    vsize %d\n"
                 "    vaddr %d\n"
                 "  data sz %d\n"
-                " data off %d\n"
+                " data off %zd\n"
                 "  num rel %d\n"
                 "  off rel %d\n"
-                "  ptr raw 0x%x\n",
+                "  ptr raw 0x%zx\n",
                 sectab_i->VirtualSize,
                 sectab_i->VirtualAddress,
                 sectab_i->SizeOfRawData,
-                sectab_i->PointerToRawData,
+                section.secPointerToRawData,
                 sectab_i->NumberOfRelocations,
                 sectab_i->PointerToRelocations,
-                sectab_i->PointerToRawData
+                section.secPointerToRawData
               );
       reltab = (COFF_reloc*) (
                   ((UChar*)(oc->image)) + sectab_i->PointerToRelocations
@@ -3655,6 +3656,14 @@ ocGetNames_PEi386 ( ObjectCode* oc )
             + hdr->PointerToSymbolTable
             + hdr->NumberOfSymbols * sizeof_COFF_symbol;
 
+   Section *sections;
+   sections = (Section*)stgCallocBytes(
+       sizeof(Section),
+       hdr->NumberOfSections + 1, /* +1 for the global BSS section see below */
+       "ocGetNames_PEi386(sections)");
+   oc->sections = sections;
+   oc->n_sections = hdr->NumberOfSections + 1;
+
    /* Allocate space for any (local, anonymous) .bss sections. */
 
    for (i = 0; i < hdr->NumberOfSections; i++) {
@@ -3667,6 +3676,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
       char *secname = cstring_from_section_name(sectab_i->Name, strtab);
 
       if (0 != strcmp(secname, ".bss")) {
+          sections[i].secPointerToRawData = sectab_i->PointerToRawData;
           stgFree(secname);
           continue;
       }
@@ -3696,18 +3706,10 @@ ocGetNames_PEi386 ( ObjectCode* oc )
       bss_sz = sectab_i->VirtualSize;
       if ( bss_sz < sectab_i->SizeOfRawData) { bss_sz = sectab_i->SizeOfRawData; }
       zspace = stgCallocBytes(1, bss_sz, "ocGetNames_PEi386(anonymous bss)");
-      sectab_i->PointerToRawData = ((UChar*)zspace) - ((UChar*)(oc->image));
+      sections[i].secPointerToRawData = ((UChar*)zspace) - ((UChar*)(oc->image));
       addProddableBlock(oc, zspace, bss_sz);
       /* debugBelch("BSS anon section at 0x%x\n", zspace); */
    }
-
-   Section *sections;
-   sections = (Section*)stgCallocBytes(
-       sizeof(Section),
-       hdr->NumberOfSections + 1, /* +1 for the global BSS section see below */
-       "ocGetNames_PEi386(sections)");
-   oc->sections = sections;
-   oc->n_sections = hdr->NumberOfSections + 1;
 
    /* Copy section information into the ObjectCode. */
 
@@ -3722,6 +3724,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
       COFF_section* sectab_i
          = (COFF_section*)
            myindex ( sizeof_COFF_section, sectab, i );
+      Section section = oc->sections[i];
 
       char *secname = cstring_from_section_name(sectab_i->Name, strtab);
 
@@ -3748,7 +3751,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
       sz = sectab_i->SizeOfRawData;
       if (sz < sectab_i->VirtualSize) sz = sectab_i->VirtualSize;
 
-      start = ((UChar*)(oc->image)) + sectab_i->PointerToRawData;
+      start = ((UChar*)(oc->image)) + section.secPointerToRawData;
       end   = start + sz - 1;
 
       if (kind != SECTIONKIND_OTHER && end >= start) {
@@ -3818,8 +3821,8 @@ ocGetNames_PEi386 ( ObjectCode* oc )
                 && sectabent->Characteristics & MYIMAGE_SCN_LNK_COMDAT)
             ) {
                  addr = ((UChar*)(oc->image))
-                        + (sectabent->PointerToRawData
-                           + symtab_i->Value);
+                      + (sections[symtab_i->SectionNumber-1].secPointerToRawData
+                      +  symtab_i->Value);
                  if (sectabent->Characteristics & MYIMAGE_SCN_LNK_COMDAT) {
                     isWeak = HS_BOOL_TRUE;
               }
@@ -3969,6 +3972,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
          = (COFF_reloc*) (
               ((UChar*)(oc->image)) + sectab_i->PointerToRelocations
            );
+      Section section = oc->sections[i];
 
       char *secname = cstring_from_section_name(sectab_i->Name, strtab);
 
@@ -4022,9 +4026,9 @@ ocResolve_PEi386 ( ObjectCode* oc )
          /* the location to patch */
          pP = (
                  ((UChar*)(oc->image))
-                 + (sectab_i->PointerToRawData
-                    + reltab_j->VirtualAddress
-                    - sectab_i->VirtualAddress )
+                 + (section.secPointerToRawData
+                 + reltab_j->VirtualAddress
+                 - sectab_i->VirtualAddress )
               );
          /* the existing contents of pP */
          A = *(UInt32*)pP;
@@ -4043,10 +4047,9 @@ ocResolve_PEi386 ( ObjectCode* oc )
                             debugBelch("'\n" ));
 
          if (sym->StorageClass == MYIMAGE_SYM_CLASS_STATIC) {
-            COFF_section* section_sym
-              = (COFF_section*) myindex ( sizeof_COFF_section, sectab, sym->SectionNumber-1 );
+            Section section = oc->sections[sym->SectionNumber-1];
             S = ((size_t)(oc->image))
-              + ((size_t)(section_sym->PointerToRawData))
+              + ((size_t)(section.secPointerToRawData))
               + ((size_t)(sym->Value));
          } else {
             copyName ( sym->Name, strtab, symbol, 1000-1 );
@@ -4201,9 +4204,10 @@ ocRunInit_PEi386 ( ObjectCode *oc )
         COFF_section* sectab_i
             = (COFF_section*)
                 myindex ( sizeof_COFF_section, sectab, i );
+        Section section = oc->sections[i];
         char *secname = cstring_from_section_name(sectab_i->Name, strtab);
         if (0 == strcmp(".ctors", (char*)secname)) {
-            UChar *init_startC = (UChar*)(oc->image) + sectab_i->PointerToRawData;
+            UChar *init_startC = (UChar*)(oc->image) + section.secPointerToRawData;
             init_t *init_start, *init_end, *init;
             init_start = (init_t*)init_startC;
             init_end = (init_t*)(init_startC + sectab_i->SizeOfRawData);

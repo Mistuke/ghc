@@ -54,6 +54,15 @@ typedef
       StgWord mapped_offset;      /* offset from the image of mapped_start */
       void* mapped_start;         /* start of mmap() block */
       StgWord mapped_size;        /* size of mmap() block */
+
+
+#if defined(mingw32_HOST_OS)
+      /* PointerToRawData in the COFF_Header is a 32-bit unsigned
+      integer, however for some relocations in x86_64 we need a
+      64-bit value. So instead we use this field which should
+      supersede the one in COFF_Header */
+      size_t secPointerToRawData;
+#endif
    }
    Section;
 
@@ -235,6 +244,9 @@ struct {
     UInt32 VirtualSize;
     UInt32 VirtualAddress;
     UInt32 SizeOfRawData;
+    /* See secPointerToRawData in Section struct.
+       Don't use this value directly as it may be
+       wrong in x86_64.*/
     UInt32 PointerToRawData;
     UInt32 PointerToRelocations;
     UInt32 PointerToLinenumbers;
