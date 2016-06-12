@@ -42,7 +42,7 @@ module DynFlags (
         FlagSpec(..),
         HasDynFlags(..), ContainsDynFlags(..),
         OverridingBool(..), overrideWith,
-        RtsOptsEnabled(..),
+        RtsOptsEnabled(..), SxSResolveMode(..),
         HscTarget(..), isObjectTarget, defaultObjectTarget,
         targetRetainsAllBindings,
         GhcMode(..), isOneShot,
@@ -1262,6 +1262,15 @@ overrideWith :: Bool -> OverridingBool -> Bool
 overrideWith b Auto   = b
 overrideWith _ Always = True
 overrideWith _ Never  = False
+
+-- | Windows Side By Side Assembly configuration modes.
+data SxSResolveMode = SxSDefault   -- ^ Default mode means load boot libraries from
+                                   --   SxS Cache and user libs via normal search path
+                    | SxSRelative  -- ^ Relative mode uses SxS activations but with an added
+                                   --   probing entry to search for activations elsewhere.
+                                   --   Windows limits this to 9 extra directories currently.
+                    | SxSCache     -- ^ Use activation context and load everything from Cache.
+  deriving (Show)
 
 -----------------------------------------------------------------------------
 -- Ways

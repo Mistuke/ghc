@@ -17,7 +17,7 @@
 rts_dist_HC = $(GHC_STAGE1)
 
 rts_INSTALL_INFO = rts
-rts_VERSION = 1.0
+rts_VERSION = 1.0.0.0
 
 # Minimum supported Windows version.
 # These numbers can be found at:
@@ -89,14 +89,14 @@ rts/dist/libs.depend : $$(ghc-pkg_INPLACE) | $$(dir $$@)/.
 	"$(ghc-pkg_INPLACE)" --simple-output field rts library-dirs \
 	  | sed -e 's/\([^ ][^ ]*\)/-L\1/g' >> $@
 
-
 # ----------------------------------------------------------------------------
 # On Windows, as the RTS and base libraries have recursive imports,
 # 	we have to break the loop with "import libraries".
 # 	These are made from rts/win32/libHS*.def which contain lists of
 # 	all the symbols in those libraries used by the RTS.
-#
-ifeq "$(HostOS_CPP)" "mingw32" 
+# TODO: We really need to find out why and break this dependency.
+#       It's quite fragile
+ifeq "$(HostOS_CPP)" "mingw32"
 
 ALL_RTS_DEF_LIBNAMES 	= base ghc-prim
 ALL_RTS_DEF_LIBS	= \
@@ -120,7 +120,7 @@ endif
 
 ifneq "$(BINDIST)" "YES"
 ifneq "$(UseSystemLibFFI)" "YES"
-ifeq "$(HostOS_CPP)" "mingw32" 
+ifeq "$(HostOS_CPP)" "mingw32"
 rts/dist/build/$(LIBFFI_DLL): libffi/build/inst/bin/$(LIBFFI_DLL)
 	cp $< $@
 else
@@ -202,16 +202,26 @@ else
 rts_dist_FFI_SO =
 endif
 
-# Making a shared library for the RTS.
 ifneq "$$(findstring dyn, $1)" ""
-ifeq "$$(HostOS_CPP)" "mingw32" 
-$$(rts_$1_LIB) : $$(rts_$1_OBJS) $$(ALL_RTS_DEF_LIBS) rts/dist/libs.depend rts/dist/build/$$(LIBFFI_DLL)
+ifeq "$$(HostOS_CPP)" "mingw32"
+$$(rts_$1_LIB) : $$(rts_$1_OBJS) $(ALL_RTS_DEF_LIBS) rts/dist/libs.depend rts/dist/build/$$(LIBFFI_DLL)
 	"$$(RM)" $$(RM_OPTS) $$@
-	"$$(rts_dist_HC)" -this-unit-id rts -shared -dynamic -dynload deploy \
-	  -no-auto-link-packages -Lrts/dist/build -l$$(LIBFFI_NAME) \
-         `cat rts/dist/libs.depend` $$(rts_$1_OBJS) $$(ALL_RTS_DEF_LIBS) \
-         $$(rts_dist_$1_GHC_LD_OPTS) \
-         -o $$@
+	# Call out to the shell script to decide how to build the dll.
+	# Making a shared library for the RTS.
+	# $1 = dir
+	# $2 = distdir
+	# $3 = way
+	# $4 = extra flags
+	# $5 = object files to link
+	# $6 = output filename
+	# $7 = indicated whether the dll should be delay loaded
+	rules/build-dll-win32.sh link "rts/dist/build" "rts/dist/build" "" "" "$$(rts_$1_OBJS)" "$$@" "$$(rts_dist_HC) -this-unit-id rts -shared -dynamic -dynload deploy \
+         -no-auto-link-packages -Lrts/dist/build -l$$(LIBFFI_NAME) \
+         `cat rts/dist/libs.depend | tr '\n' ' '` \
+         $$(ALL_RTS_DEF_LIBS) \
+         $$(rts_dist_$1_GHC_LD_OPTS)" "NO" \
+         "$(rts_INSTALL_INFO)-$(subst dyn,,$(subst _dyn,,$(subst v,,$1)))" "$(ProjectVersion)"
+
 else
 ifneq "$$(UseSystemLibFFI)" "YES"
 LIBFFI_LIBS = -Lrts/dist/build -l$$(LIBFFI_NAME)

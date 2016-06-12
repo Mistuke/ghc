@@ -229,12 +229,11 @@ if windows or darwin:
                 path = re.sub('^"(.*)"$', '\\1', path)
                 path = re.sub('\\\\(.)', '\\1', path)
             if windows:
-                if config.cygwin:
-                    # On cygwin we can't put "c:\foo" in $PATH, as : is a
-                    # field separator. So convert to /cygdrive/c/foo instead.
-                    # Other pythons use ; as the separator, so no problem.
-                    path = re.sub('([a-zA-Z]):', '/cygdrive/\\1', path)
-                    path = re.sub('\\\\', '/', path)
+                # On Msys2 we can't put "c:\foo" in $PATH, as : is a
+                # field separator. So convert to /c/foo instead.
+                # Msys2 is the only supported test environment for Windows.
+                path = re.sub('([a-zA-Z]):', '/\\1', path)
+                path = re.sub('\\\\', '/', path)
                 os.environ['PATH'] = os.pathsep.join([path, os.environ.get("PATH", "")])
             else:
                 # darwin

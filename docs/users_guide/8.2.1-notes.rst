@@ -112,6 +112,14 @@ Compiler
   :ghc-flag:`-Wmissing-methods` will now warn that ``_Bar`` is not implemented
   in the ``Foo Int`` instance.
 
+- ``mkManifest`` can now generate Side-By-Side assemblies for inclusion in the
+  Windows SxS Cache. (see :ghc-ticket:`10352`).
+
+- Dynamic Compilation is now supported again on Windows. Use the ``-dynamic`` flag
+  to compile a dynamic version of a Windows executable. In order for this program
+  to run on other machines you will need to install the GHC 8.2.1 Redistributables.
+  (see :ghc-ticket:`5987`).
+
 GHCi
 ~~~~
 

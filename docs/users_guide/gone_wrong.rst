@@ -136,3 +136,9 @@ see :ref:`sooner-faster-quicker`).
     reported as an exception by the operating system (depending on the
     platform). Divide-by-zero *may* cause an untrapped exception (please
     report it if it does).
+
+"Accessing a corrupted shared library"
+    This error is given when Windows fails to create a Side-By-Side activation
+    context for your application. Usually this means a dependency was not found.
+
+    To diagnose this problem use the Windows ``sxstrace.exe`` utility.

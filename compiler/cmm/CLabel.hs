@@ -480,6 +480,8 @@ mkEntryLabel name           c     = IdLabel name c Entry
 mkClosureTableLabel name    c     = IdLabel name c ClosureTable
 mkLocalConInfoTableLabel    c con = IdLabel con c ConInfoTable
 mkLocalConEntryLabel        c con = IdLabel con c ConEntry
+mkLocalStaticInfoTableLabel c con = IdLabel con c StaticInfoTable
+mkLocalStaticConEntryLabel  c con = IdLabel con c StaticConEntry
 mkConInfoTableLabel name    c     = IdLabel name c ConInfoTable
 
 mkConEntryLabel       :: Name -> CafInfo -> CLabel
