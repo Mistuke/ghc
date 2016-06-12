@@ -65,6 +65,7 @@ import Platform
 import Util
 import DynFlags
 import Exception
+import {-# SOURCE #-} Manifest
 
 import LlvmCodeGen.Base (llvmVersionStr, supportedLlvmVersion)
 
@@ -1641,6 +1642,8 @@ linkDynLib dflags0 o_files dep_packages
                             Just s -> s
                             Nothing -> "HSdll.dll"
 
+            resource_objs <- mkManifest dflags pkgs output_fn
+
             runLink dflags (
                     map Option verbFlags
                  ++ [ Option "-o"
@@ -1659,6 +1662,7 @@ linkDynLib dflags0 o_files dep_packages
                  ++ extra_ld_inputs
                  ++ map Option (
                     lib_path_opts
+                 ++ resource_objs
                  ++ pkg_lib_path_opts
                  ++ pkg_link_opts
                 ))

@@ -230,27 +230,31 @@ endif
 
 $1/$2/build/tmp/$$($1_$2_PROG)-inplace-wrapper.c: driver/utils/dynwrapper.c | $$$$(dir $$$$@)/.
 	$$(call removeFiles,$$@)
+	echo '#define WINVER 0x06000100' >> $$@
+	echo '#define UNICODE 1' >> $$@
 	echo '#include <Windows.h>' >> $$@
 	echo '#include "Rts.h"' >> $$@
-	echo 'LPTSTR path_dirs[] = {' >> $$@
-	$$(foreach d,$$($1_$2_DEP_LIB_REL_DIRS),$$(call make-command,echo '    TEXT("/../../$$d")$$(comma)' >> $$@))
-	echo '    TEXT("/../../$1/$2/build/tmp/"),' >> $$@
+	echo 'LPWSTR path_dirs[] = {' >> $$@
+	$$(foreach d,$$($1_$2_DEP_LIB_REL_DIRS),$$(call make-command,echo '    TEXT("../../$$d")$$(comma)' >> $$@))
+	echo '    TEXT("../../$1/$2/build/tmp/"),' >> $$@
 	echo '    NULL};' >> $$@
-	echo 'LPTSTR progDll = TEXT("../../$1/$2/build/tmp/$$($1_$2_PROG).dll");' >> $$@
-	echo 'LPTSTR rtsDll = TEXT("$$($$(WINDOWS_DYN_PROG_RTS))");' >> $$@
+	echo 'LPWSTR progDll = TEXT("$$($1_$2_PROG).dll");' >> $$@
+	echo 'LPWSTR rtsDll = TEXT("$$($$(WINDOWS_DYN_PROG_RTS))");' >> $$@
 	echo 'int rtsOpts = $$($1_$2_RTS_OPTS);' >> $$@
 	cat driver/utils/dynwrapper.c >> $$@
 
 $1/$2/build/tmp/$$($1_$2_PROG)-wrapper.c: driver/utils/dynwrapper.c | $$$$(dir $$$$@)/.
 	$$(call removeFiles,$$@)
+	echo '#define WINVER 0x06000100' >> $$@
+	echo '#define UNICODE 1' >> $$@
 	echo '#include <Windows.h>' >> $$@
 	echo '#include "Rts.h"' >> $$@
-	echo 'LPTSTR path_dirs[] = {' >> $$@
-	$$(foreach p,$$($1_$2_TRANSITIVE_DEP_COMPONENT_IDS),$$(call make-command,echo '    TEXT("/../lib/$$p")$$(comma)' >> $$@))
-	echo '    TEXT("/../lib/"),' >> $$@
+	echo 'LPWSTR path_dirs[] = {' >> $$@
+	$$(foreach p,$$($1_$2_TRANSITIVE_DEP_COMPONENT_IDS),$$(call make-command,echo '    TEXT("../lib/$$p")$$(comma)' >> $$@))
+	echo '    TEXT("../lib/"),' >> $$@
 	echo '    NULL};' >> $$@
-	echo 'LPTSTR progDll = TEXT("../lib/$$($1_$2_PROG).dll");' >> $$@
-	echo 'LPTSTR rtsDll = TEXT("$$($$(WINDOWS_DYN_PROG_RTS))");' >> $$@
+	echo 'LPWSTR progDll = TEXT("$$($1_$2_PROG).dll");' >> $$@
+	echo 'LPWSTR rtsDll = TEXT("$$($$(WINDOWS_DYN_PROG_RTS))");' >> $$@
 	echo 'int rtsOpts = $$($1_$2_RTS_OPTS);' >> $$@
 	cat driver/utils/dynwrapper.c >> $$@
 

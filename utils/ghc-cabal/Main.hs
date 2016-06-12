@@ -321,7 +321,7 @@ generate directory distdir dll0Modules config_args
              let ipid = mkUnitId (display (packageId pd))
              let installedPkgInfo = inplaceInstalledPackageInfo cwd distdir
                                         pd (mkAbiHash "inplace") lib lbi clbi
-                 final_ipi = mangleIPI directory distdir lbi $ installedPkgInfo {
+                 final_ipi = installedPkgInfo {
                                  Installed.installedUnitId = ipid,
                                  Installed.compatPackageKey = display (packageId pd),
                                  Installed.haddockHTMLs = []
