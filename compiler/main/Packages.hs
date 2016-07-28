@@ -1500,8 +1500,16 @@ collectRtsLibraryPaths dflags rts_tag pkgConfig
 -- | Find all the link options in these and the preload packages,
 -- returning (package hs lib options, extra library options, other flags)
 getPackageLinkOpts :: DynFlags -> [PreloadUnitId] -> IO ([String], [String], [String])
-getPackageLinkOpts dflags pkgs =
-  collectLinkOpts dflags `fmap` getPreloadPackagesAnd dflags pkgs
+getPackageLinkOpts dflags pkgs = do
+  pkg_configs <- getPreloadPackagesAnd dflags pkgs
+  let (hs, extra, other) = collectLinkOpts dflags pkg_configs
+  -- The Dynamic and the Static RTS files are in the same folder and have the
+  -- same names. So we want to help ld pick the right one depending on if we're
+  -- linking statically or dynamically.
+  -- This is especially important on Windows since otherwise we would always
+  -- use the dynamically linked variant.
+  let rtsLdOptions = nub $ concat $ (collectRtsLinkOpts dflags) `map` pkg_configs
+  return (hs, extra, other ++ rtsLdOptions)
 
 collectLinkOpts :: DynFlags -> [PackageConfig] -> ([String], [String], [String])
 collectLinkOpts dflags ps =
