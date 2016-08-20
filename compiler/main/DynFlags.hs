@@ -1528,8 +1528,8 @@ defaultDynFlags mySettings =
         rtsOptsSuggestions      = True,
 
         sxsResolveMode          = SxSCache,
-        sharedABIName           = Nothing,
-        sharedABIVersion        = Nothing,
+        sharedLibABIName        = Nothing,
+        sharedLibABIVersion     = Nothing,
 
         hpcDir                  = ".hpc",
 
@@ -4711,10 +4711,10 @@ setSxSResolveMode arg  = upd $ \ d -> d {sxsResolveMode = arg}
 -- Shared ABI opts
 
 setSharedABIName :: String -> DynP ()
-setSharedABIName arg  = upd $ \ d -> d {sharedABIName = Just arg}
+setSharedABIName arg  = upd $ \ d -> d {sharedLibABIName = Just arg}
 
 setSharedABIVersion :: String -> DynP ()
-setSharedABIVersion arg  = upd $ \ d -> d {sharedABIVersion = Just arg}
+setSharedABIVersion arg  = upd $ \ d -> d {sharedLibABIVersion = Just arg}
 
 -----------------------------------------------------------------------------
 -- Hpc stuff
