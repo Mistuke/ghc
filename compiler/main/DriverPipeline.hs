@@ -1846,7 +1846,7 @@ linkBinary' staticLink dflags o_files dep_packages = do
                else ["-lpthread"]
          | otherwise               = []
 
-    rc_objs <- maybeCreateManifest dflags output_fn
+    resource_objs <- mkManifest dflags pkgs output_fn
 
     let link = if staticLink
                    then SysTools.runLibtool
