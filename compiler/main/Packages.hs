@@ -1490,9 +1490,9 @@ collectLibraryPaths ps = nub (filter notNull (concatMap libraryDirs ps))
 
 collectRtsLibraryPaths :: DynFlags -> String -> PackageConfig -> Maybe [FilePath]
 collectRtsLibraryPaths dflags rts_tag pkgConfig
-  = case packageConfigId pkgConfig of
-      rtsUnitId -> Just $ map mkPath $ libraryDirs pkgConfig
-      _         -> Nothing
+  = if packageConfigId pkgConfig == rtsUnitId
+       then map mkPath $ libraryDirs pkgConfig -- This produces lots of directories that don't exist.
+       else []
   where mkPath :: FilePath -> FilePath
         mkPath base = base FilePath.</> "rts"
                            FilePath.</> ("ghc" ++ projectVersion dflags)
@@ -1519,6 +1519,14 @@ collectLinkOpts dflags ps =
         concatMap (map ("-l" ++) . extraLibraries) ps,
         concatMap ldOptions ps
     )
+
+collectRtsLinkOpts :: DynFlags -> PackageConfig -> [String]
+collectRtsLinkOpts dflags pkgConfig
+  = if packageConfigId pkgConfig == rtsUnitId && WayDyn `notElem` ways dflags
+      -- If we're statically linking packages then
+      -- tell the linker so we also statically link the RTS
+      then ["-Wl,-static"]
+      else []
 
 packageHsLibs :: DynFlags -> PackageConfig -> [String]
 packageHsLibs dflags p = map (mkDynName . addSuffix) (hsLibraries p)
