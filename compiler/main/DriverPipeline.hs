@@ -1636,7 +1636,6 @@ mkExtraObjToLinkIntoBinary dflags = do
       text "extern StgClosure ZCMain_main_closure;",
       text "int main(int argc, char *argv[])",
       char '{',
-      text " rtsSupportsBoundThreads();",
       text " RtsConfig __conf = defaultRtsConfig;",
       text " __conf.rts_opts_enabled = "
           <> text (show (rtsOptsEnabled dflags)) <> semi,
