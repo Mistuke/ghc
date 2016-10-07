@@ -1746,13 +1746,11 @@ linkBinary :: DynFlags -> [FilePath] -> [InstalledUnitId] -> IO ()
 linkBinary = linkBinary' False
 
 linkBinary' :: Bool -> DynFlags -> [FilePath] -> [InstalledUnitId] -> IO ()
-linkBinary' staticLink dflags o_files dep_packages_all = do
-    let platform     = targetPlatform dflags
-        mySettings   = settings dflags
-        verbFlags    = getVerbFlags dflags
-        output_fn    = exeFileName staticLink dflags
-        dep_packages = filter (/=rtsUnitId) dep_packages_all
-        rts_packages = filter (==rtsUnitId) dep_packages_all
+linkBinary' staticLink dflags o_files dep_packages = do
+    let platform = targetPlatform dflags
+        mySettings = settings dflags
+        verbFlags = getVerbFlags dflags
+        output_fn = exeFileName staticLink dflags
 
     -- get the full list of packages to link with, by combining the
     -- explicit packages with the auto packages and all of their

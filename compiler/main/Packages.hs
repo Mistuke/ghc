@@ -1460,57 +1460,17 @@ collectIncludeDirs ps = nub (filter notNull (concatMap includeDirs ps))
 
 -- | Find all the library paths in these and the preload packages
 getPackageLibraryPath :: DynFlags -> [PreloadUnitId] -> IO [String]
-getPackageLibraryPath dflags pkgs = do
-  pkg_configs <- getPreloadPackagesAnd dflags pkgs
-  let pkg_paths = collectLibraryPaths pkg_configs
-
-      -- For the rts package we have to now correct and point the build
-      -- system to the proper location of the libraries
-      ways0 = ways dflags
-
-      ways1 = filter (/= WayDyn) ways0
-      -- the name of a shared library is libHSfoo-ghc<version>.so
-      -- except for the RTS libs, which follow the naming scheme
-      -- rts/ghc<version>/<way>/libHSrts.so)
-      -- we leave out the _dyn, because it is superfluous
-
-      -- debug RTS includes support for -eventlog
-      ways2 | WayDebug `elem` ways1
-            = filter (/= WayEventLog) ways1
-            | otherwise
-            = ways1
-
-      rts_tag = mkBuildTag ways2
-
-      rts_paths = concat $ (collectRtsLibraryPaths dflags rts_tag) `mapMaybe` pkg_configs
-  return $ pkg_paths ++ rts_paths
+getPackageLibraryPath dflags pkgs =
+  collectLibraryPaths `fmap` getPreloadPackagesAnd dflags pkgs
 
 collectLibraryPaths :: [PackageConfig] -> [FilePath]
 collectLibraryPaths ps = nub (filter notNull (concatMap libraryDirs ps))
 
-collectRtsLibraryPaths :: DynFlags -> String -> PackageConfig -> Maybe [FilePath]
-collectRtsLibraryPaths dflags rts_tag pkgConfig
-  = if packageConfigId pkgConfig == rtsUnitId
-       then map mkPath $ libraryDirs pkgConfig -- This produces lots of directories that don't exist.
-       else []
-  where mkPath :: FilePath -> FilePath
-        mkPath base = base FilePath.</> "rts"
-                           FilePath.</> ("ghc" ++ projectVersion dflags)
-                           FilePath.</> rts_tag
-
 -- | Find all the link options in these and the preload packages,
 -- returning (package hs lib options, extra library options, other flags)
 getPackageLinkOpts :: DynFlags -> [PreloadUnitId] -> IO ([String], [String], [String])
-getPackageLinkOpts dflags pkgs = do
-  pkg_configs <- getPreloadPackagesAnd dflags pkgs
-  let (hs, extra, other) = collectLinkOpts dflags pkg_configs
-  -- The Dynamic and the Static RTS files are in the same folder and have the
-  -- same names. So we want to help ld pick the right one depending on if we're
-  -- linking statically or dynamically.
-  -- This is especially important on Windows since otherwise we would always
-  -- use the dynamically linked variant.
-  let rtsLdOptions = nub $ concat $ (collectRtsLinkOpts dflags) `map` pkg_configs
-  return (hs, extra, other ++ rtsLdOptions)
+getPackageLinkOpts dflags pkgs =
+  collectLinkOpts dflags `fmap` getPreloadPackagesAnd dflags pkgs
 
 collectLinkOpts :: DynFlags -> [PackageConfig] -> ([String], [String], [String])
 collectLinkOpts dflags ps =
@@ -1539,9 +1499,20 @@ collectRtsLinkOpts dflags pkgConfig
 packageHsLibs :: DynFlags -> PackageConfig -> [String]
 packageHsLibs dflags p = map (mkDynName . addSuffix) (hsLibraries p)
   where
-        ways0   = filterRtsWays $ ways dflags
-        tag     = mkBuildTag (filter (not . wayRTSOnly) ways0)
-        rts_tag = mkBuildTag ways0
+        ways0 = ways dflags
+
+        ways1 = filter (/= WayDyn) ways0
+        -- the name of a shared library is libHSfoo-ghc<version>.so
+        -- we leave out the _dyn, because it is superfluous
+
+        -- debug and profiled RTSs include support for -eventlog
+        ways2 | WayDebug `elem` ways1 || WayProf `elem` ways1
+              = filter (/= WayEventLog) ways1
+              | otherwise
+              = ways1
+
+        tag     = mkBuildTag (filter (not . wayRTSOnly) ways2)
+        rts_tag = mkBuildTag ways2
 
         mkDynName x
          | WayDyn `notElem` ways dflags = x
