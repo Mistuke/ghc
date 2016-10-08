@@ -221,6 +221,7 @@ $$(rts_$1_LIB) : $$(rts_$1_OBJS) $(ALL_RTS_DEF_LIBS) rts/dist/libs.depend rts/di
          $$(ALL_RTS_DEF_LIBS) \
          $$(rts_dist_$1_GHC_LD_OPTS)" "NO" \
          "$(rts_INSTALL_INFO)-$(subst dyn,,$(subst _dyn,,$(subst v,,$1)))" "$(ProjectVersion)"
+
 else
 ifneq "$$(UseSystemLibFFI)" "YES"
 LIBFFI_LIBS = -Lrts/dist/build -l$$(LIBFFI_NAME)
@@ -262,12 +263,6 @@ endef
 
 # And expand the above for each way:
 $(foreach way,$(rts_WAYS),$(eval $(call build-rts-way,$(way))))
-
-# On Windows we have to copy the DLLs centrally
-ifeq "$$(HostOS_CPP)" "mingw32"
-    # Now copy the resulting dll(s)
-	"$$(CP)" -vf rts/dist/build/*$$(soext) "$(INPLACE_BIN)"
-endif
 
 $(eval $(call distdir-opts,rts,dist,1))
 
