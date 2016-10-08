@@ -28,7 +28,7 @@ import Data.Version
 import Data.Maybe
 
 import System.FilePath
-import System.Directory (findFile)
+import System.Directory (findFile, removeFile)
 
 -- | Manifest file required fields
 data ManifestFile = ManifestFile { name          :: String
@@ -191,6 +191,9 @@ mkManifest dflags pkgs assembly
                     "--output-format=coff"]
                    -- no FileOptions here: windres doesn't like seeing
                    -- backslashes, apparently
+
+             -- Manifest was embedded. Remove it the external one.
+             removeFile manifest_filename
 
              return [rc_obj_filename]
  | otherwise = return []

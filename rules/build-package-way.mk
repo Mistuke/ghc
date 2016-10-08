@@ -149,5 +149,8 @@ rules/build-dll-win32.sh link "$1" "$2" "$3" "$4" "$5" "$6" "$(call cmd,$1_$2_HC
            $(addprefix -l,$($1_$2_EXTRA_LIBRARIES)) \
            -no-auto-link-packages" $7 \
            $8 $9
+
+# Now copy the resulting dll(s)
+"$(CP)" -vf $(basename $6)*.dll "$(INPLACE_BIN)"
 endef
 
