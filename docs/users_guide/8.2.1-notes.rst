@@ -85,22 +85,9 @@ Runtime system
   threads to all cores in systems which have multiple processor groups.
   (e.g. > 64 cores, see :ghc-ticket:`11054`)
 
-- The different runtime libraries are no longer named differently from eachother.
-  All runtime are now named ``libHSrts.<suffix>`` and are distinguished internally
-  by an ABI name. e.g. ``rts-dyn``, ``rts-thr`` etc. The different flavors are put inside
-  different folders corresponding to their flavor to distinguish them on the file system.
-  (see :ghc-ticket:`10352`).
-
 - On Windows core dynamic libraries now contain SxS manifest entried and can be installed in
   the side-by-side assembly cache. This allows multiple versions of the runtime to co-exist.
   (see :ghc-ticket:`10352`).
-
-- On Linux the ``rts`` now has a default ``rts`` linked against for dynamic libraries.
-  An ``SONAME`` is being used to internally determine the ABI to use for picking the ``rts``.
-  ``dlopen()`` can now be used to open a dynamicly compiled Haskell library without needing to
-  first make sure an ``rts`` is loaded as we default to the RTS specified during linking.
-  ALternate ``rts`` can still be used by using ``LD_PRELOAD``.
- (see :ghc-ticket:`10352`).
 
 Build system
 ~~~~~~~~~~~~
