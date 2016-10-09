@@ -57,7 +57,7 @@ static HINSTANCE GetNonNullModuleHandle(LPWSTR dll) {
     return h;
 }
 
-DLL_DIRECTORY_COOKIE* setSearchPath(void) {
+DLL_DIRECTORY_COOKIE* setSearchPath (int *len) {
     HMODULE hDLL = (HMODULE)LoadLibraryW(L"Kernel32.DLL");
     LPAddDLLDirectory AddDllDirectory = (LPAddDLLDirectory)GetNonNullProcAddress(hDLL, "AddDllDirectory");
 
@@ -109,7 +109,24 @@ DLL_DIRECTORY_COOKIE* setSearchPath(void) {
         free(path);
     }
 
+    *len = entries;
     return cookies;
+}
+
+void cleanSearchPath (DLL_DIRECTORY_COOKIE* cookies, int len) {
+    if (cookies){
+        HMODULE hDLL = (HMODULE)LoadLibraryW(L"Kernel32.DLL");
+        LPAddDLLDirectory RemoveDllDirectory = (LPAddDLLDirectory)GetNonNullProcAddress(hDLL, "RemoveDllDirectory");
+
+        for (int x = 0; x < len; x++) {
+            if (cookies[x]) {
+                RemoveDllDirectory(cookies[x]);
+                cookies[x] = NULL;
+            }
+        }
+
+        free(cookies);
+    }
 }
 
 HINSTANCE loadDll(LPWSTR dll) {
@@ -166,22 +183,33 @@ exit:
 typedef int (*hs_main_t)(int , char **, StgClosure *, RtsConfig);
 
 int main(int argc, char *argv[]) {
-    void *p;
     HINSTANCE hRtsDll, hProgDll;
 
     StgClosure *main_p;
     RtsConfig rts_config;
     hs_main_t hs_main_p;
 
-    setSearchPath();
+    int count = 0;
+
+    DLL_DIRECTORY_COOKIE* cookies = setSearchPath(&count);
     hProgDll = loadDll(progDll);
     hRtsDll = GetNonNullModuleHandle(rtsDll);
 
-    hs_main_p    = GetNonNullProcAddress(hRtsDll,  "hs_main");
-    main_p       = GetNonNullProcAddress(hProgDll, "ZCMain_main_closure");
-    rts_config.rts_opts_enabled = rtsOpts;
-    rts_config.rts_opts = NULL;
+    /* Do some default initializations.
+       These should mirror those done for mkExtraObjToLinkIntoBinary
+       in compiler/main/DriverPipeline.hs or bad things will happen.  */
 
-    return hs_main_p(argc, argv, main_p, rts_config);
+    hs_main_p    = GetNonNullProcAddress(hRtsDll, "hs_main");
+    main_p       = GetNonNullProcAddress(hProgDll, "ZCMain_main_closure");
+    rts_config   = *(RtsConfig*)GetNonNullProcAddress(hRtsDll, "defaultRtsConfig");
+    rts_config.rts_opts_enabled     = rtsOpts;
+    rts_config.rts_opts_suggestions = rtsFalse;
+    rts_config.rts_hs_main          = rtsTrue;
+
+    int hs_exit_code = hs_main_p(argc, argv, main_p, rts_config);
+
+    cleanSearchPath(cookies, count);
+
+    return hs_exit_code;
 }
 
