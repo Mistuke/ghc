@@ -1226,6 +1226,7 @@ HsPtr addLibrarySearchPath(pathchar* dll_path)
     }
     else if (wResult > init_buf_size) {
         abs_path = realloc(abs_path, sizeof(WCHAR) * wResult);
+        bufsize = wResult;
         if (!GetFullPathNameW(dll_path, bufsize, abs_path, NULL)) {
             sysErrorBelch("addLibrarySearchPath[GetFullPathNameW]: %" PATH_FMT " (Win32 error %lu)", dll_path, GetLastError());
         }
