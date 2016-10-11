@@ -105,9 +105,10 @@ createManifestDefinition dflags pkgs assembly = do
   let isBinary = case ghcLink dflags of
                     LinkBinary -> True
                     LinkDynLib -> False
-                    _          -> error "Link mode nor supported for assembly generation"
+                    _          -> False -- Probably something weird, don't make depencies
 
-  deps <- if WayDyn `elem` ways dflags 
+  deps <- if   WayDyn `elem` ways dflags
+            && gopt Opt_GenSxSManifest dflags
              then genDependencies pkgs
              else return []
 

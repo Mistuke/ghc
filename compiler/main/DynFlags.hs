@@ -1234,8 +1234,14 @@ data DynLibLoader
 
 data RtsOptsEnabled = RtsOptsNone | RtsOptsSafeOnly | RtsOptsAll
   deriving (Show)
-  
-data SxSResolveMode = SxSRelative | SxSAbsolute | SxSCache
+
+-- | Windows Side By Side Assembly configuration modes.
+data SxSResolveMode = SxSDefault   -- ^ Default mode means load boot libraries from
+                                   --   SxS Cache and user libs via normal search path
+                    | SxSRelative  -- ^ Relative mode uses SxS activations but with an added
+                                   --   probing entry to search for activations elsewhere.
+                                   --   Windows limits this to 9 extra directories currently.
+                    | SxSCache     -- ^ Use activation context and load everything from Cache.
   deriving (Show)
 
 -----------------------------------------------------------------------------
@@ -1527,7 +1533,7 @@ defaultDynFlags mySettings =
         rtsOptsEnabled          = RtsOptsSafeOnly,
         rtsOptsSuggestions      = True,
 
-        sxsResolveMode          = SxSCache,
+        sxsResolveMode          = SxSDefault,
         sharedLibABIName        = Nothing,
         sharedLibABIVersion     = Nothing,
 
@@ -2588,11 +2594,11 @@ dynamic_flags_deps = [
   , make_ord_flag defGhcFlag "no-rtsopts-suggestions"
       (noArg (\d -> d {rtsOptsSuggestions = False}))
   , make_ord_flag defGhcFlag "fgen-sxs-assembly"
-        (NoArg (setSxSResolveMode SxSCache))
+        (NoArg (setSxSResolveMode SxSDefault))
   , make_ord_flag defGhcFlag "fgen-sxs-assembly=cache"
         (NoArg (setSxSResolveMode SxSCache))
-  , make_ord_flag defGhcFlag "fgen-sxs-assembly=absolute"
-        (NoArg (setSxSResolveMode SxSAbsolute))
+  , make_ord_flag defGhcFlag "fgen-sxs-assembly=default"
+        (NoArg (setSxSResolveMode SxSDefault))
   , make_ord_flag defGhcFlag "fgen-sxs-assembly=relative"
         (NoArg (setSxSResolveMode SxSRelative))
   , make_ord_flag defGhcFlag "dylib-abi-name"
@@ -3423,7 +3429,7 @@ fFlagsDeps = [
   flagSpec "full-laziness"                    Opt_FullLaziness,
   flagSpec "fun-to-thunk"                     Opt_FunToThunk,
   flagSpec "gen-manifest"                     Opt_GenManifest,
-  flagSpec "fgen-sxs-assembly"                Opt_GenSxSManifest,
+  flagSpec "gen-sxs-assembly"                 Opt_GenSxSManifest,
   flagSpec "ghci-history"                     Opt_GhciHistory,
   flagGhciSpec "local-ghci-history"           Opt_LocalGhciHistory,
   flagSpec "ghci-sandbox"                     Opt_GhciSandbox,
@@ -3714,6 +3720,7 @@ defaultFlags settings
 -- See Note [Updating flag description in the User's Guide]
   = [ Opt_AutoLinkPackages,
       Opt_EmbedManifest,
+      Opt_GenSxSManifest,
       Opt_FlatCache,
       Opt_GenManifest,
       Opt_GhciHistory,
