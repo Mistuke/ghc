@@ -137,7 +137,7 @@ createManifestDefinition dflags pkgs assembly = do
               debugTraceMsg dflags 2 (text $ "Processing reference to `" ++ (fromJust fullPkgPath) ++ "'.")
 
               let manifest = ManifestFile { name          = modName
-                                          , version       = showVersion $ packageVersion dep
+                                          , version       = showVersion $ correctVersion $ packageVersion dep
                                           , architecture  = getTargetArchitecture
                                           , isApplication = False
                                           , fullname      = case sxsResolveMode dflags of
@@ -148,6 +148,15 @@ createManifestDefinition dflags pkgs assembly = do
                                           }
               rest <- genDependencies xs
               return (manifest : rest)
+
+-- | SxS requires that the version fields contain exactly 4 digits
+--   and be in the form x.y.z.m, so we have to padd the version number
+--   if needed. This is only internally used.
+correctVersion :: Version -> Version
+correctVersion ver
+  = let nums   = versionBranch ver
+        branch = nums ++ replicate (4-length nums) 0
+    in ver{versionBranch=branch}
 
 -- | Generate the appropriate Manifest file for program inclusion.
 --   This function can create both manifests for DLLs and EXEs as well
