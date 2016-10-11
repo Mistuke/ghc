@@ -26,6 +26,7 @@ import Outputable (text,hcat,SDoc)
 
 import Data.Version
 import Data.Maybe
+import Data.List
 
 import System.FilePath
 import System.Directory (findFile, removeFile)
@@ -111,7 +112,7 @@ createManifestDefinition dflags pkgs assembly = do
              else return []
 
   return ManifestFile { name          = maybe (dropExtension $ takeFileName assembly) id (sharedLibABIName    dflags)
-                      , version       = maybe "1.0.0.0"  id (sharedLibABIVersion dflags)
+                      , version       = maybe "1.0.0.0"  correctVersion (sharedLibABIVersion dflags)
                       , architecture  = getTargetArchitecture
                       , isApplication = isBinary
                       , fullname      = ""
@@ -137,7 +138,7 @@ createManifestDefinition dflags pkgs assembly = do
               debugTraceMsg dflags 2 (text $ "Processing reference to `" ++ (fromJust fullPkgPath) ++ "'.")
 
               let manifest = ManifestFile { name          = modName
-                                          , version       = showVersion $ correctVersion $ packageVersion dep
+                                          , version       = correctVersion $ showVersion $ packageVersion dep
                                           , architecture  = getTargetArchitecture
                                           , isApplication = False
                                           , fullname      = case sxsResolveMode dflags of
@@ -152,11 +153,17 @@ createManifestDefinition dflags pkgs assembly = do
 -- | SxS requires that the version fields contain exactly 4 digits
 --   and be in the form x.y.z.m, so we have to padd the version number
 --   if needed. This is only internally used.
-correctVersion :: Version -> Version
+correctVersion :: String -> String
+correctVersion [] = "1.0.0.0"
 correctVersion ver
-  = let nums   = versionBranch ver
-        branch = nums ++ replicate (4-length nums) 0
-    in ver{versionBranch=branch}
+  = let nums   = map read $ split '.' ver
+        branch = take 4 $ nums ++ replicate (4-length nums) (0 :: Int)
+    in intercalate "." $ map show branch
+  where split :: Char -> String -> [String]
+        split = split' []
+          where split' b _     [] = [b]
+                split' b c (x:xs) | c == x    = b : split' [] c xs
+                                  | otherwise = split' (b ++ [x]) c xs
 
 -- | Generate the appropriate Manifest file for program inclusion.
 --   This function can create both manifests for DLLs and EXEs as well
