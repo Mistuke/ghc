@@ -142,10 +142,7 @@ createManifestDefinition dflags pkgs assembly = do
                                           , version       = correctVersion $ showVersion $ packageVersion dep
                                           , architecture  = getTargetArchitecture
                                           , isApplication = False
-                                          , fullname      = case sxsResolveMode dflags of
-                                                               SxSRelative -> "Get abs path from commandline"
-                                                               SxSAbsolute -> maybe (modName) (filepathRelativePathTo outDir . normalise) fullPkgPath
-                                                               SxSCache    -> fullPkgName
+                                          , fullname      = fullPkgName
                                           , dependencies  = []
                                           }
               rest <- genDependencies xs

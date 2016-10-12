@@ -126,12 +126,13 @@ linkingOptions =
            "Don't generate an import library for a DLL (Windows only)"
          , flagType = DynamicFlag
          }
-  , flag { flagName = "-fgen-sxs-assembly,-fgen-sxs-assembly={absolute,relative,cache}"
+  , flag { flagName = "-fgen-sxs-assembly,-fgen-sxs-assembly={default,relative,cache}"
          , flagDescription =
            "Generate a Windows Side By Side assembly (Windows only)." ++
-           "Using ``absolute`` will put the full path to the sxs resources " ++
-           "in the manifest. ``relative`` means put a path relative to the " ++
-           "assembly being compiled and ``cache`` means rely on the SxS global cache (default)."
+           "Using ``default`` will only use sxs for core libraries " ++
+           "in the manifest. ``relative`` means put a path relative to other libraries of the " ++
+           "assembly being compiled in the sxs case and ``cache`` means rely on the SxS global cache for "++
+           " every library."
          , flagType = DynamicFlag
          }
   , flag { flagName = "-dylib-abi-name ⟨name⟩"
