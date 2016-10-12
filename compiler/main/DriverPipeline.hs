@@ -1761,7 +1761,8 @@ linkBinary' staticLink dflags o_files dep_packages = do
                               return $ normalise (d </> output_fn)
     pkg_lib_paths <- getPackageLibraryPath dflags dep_packages
     pkgs <- getPreloadPackagesAnd dflags dep_packages
-    let get_pkg_lib_path_opts l
+    let pkg_lib_path_opts = concatMap get_pkg_lib_path_opts pkg_lib_paths
+        get_pkg_lib_path_opts l
          | osElfTarget (platformOS platform) &&
            dynLibLoader dflags == SystemDependent &&
            WayDyn `elem` ways dflags

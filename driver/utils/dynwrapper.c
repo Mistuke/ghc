@@ -152,12 +152,12 @@ HINSTANCE loadDll(LPWSTR dll) {
         {
             if (GetLastError() != ERROR_MOD_NOT_FOUND)
             {
-                goto exit;
+                break;
             }
         }
         else
         {
-            goto exit; /* We're done. DLL has been loaded.  */
+            break; /* We're done. DLL has been loaded.  */
         }
     }
 

@@ -1500,7 +1500,7 @@ packageHsLibs dflags p = map (mkDynName . addSuffix) (hsLibraries p)
 
         mkDynName x
          | WayDyn `notElem` ways dflags = x
-         | "HS" `isPrefixOf` x         =
+         | "HS" `isPrefixOf` x          =
               x ++ '-':programName dflags ++ projectVersion dflags
            -- For non-Haskell libraries, we use the name "Cfoo". The .a
            -- file is libCfoo.a, and the .so is libfoo.so. That way the
