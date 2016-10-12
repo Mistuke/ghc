@@ -55,8 +55,7 @@ module Packages (
         pprPackages,
         pprPackagesSimple,
         pprModuleMap,
-        isDllName,
-        filterRtsWays
+        isDllName
     )
 where
 
