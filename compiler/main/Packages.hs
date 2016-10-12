@@ -1480,22 +1480,6 @@ collectLinkOpts dflags ps =
         concatMap ldOptions ps
     )
 
-collectRtsLinkOpts :: DynFlags -> PackageConfig -> [String]
-collectRtsLinkOpts dflags pkgConfig
-  = if    packageConfigId pkgConfig == rtsUnitId
-       && WayDyn `notElem` ways dflags
-#if defined(mingw32_HOST_OS)
-      -- If we're statically linking packages then
-      -- tell the linker so we also statically link the RTS
-      -- This may be a bit of a big hammer as it affects
-      -- user programs as well. Instead should look into
-      -- specifying the full lib name to -l to disambiguate. 
-      then ["-Wl,-static"]
-#else
-      then []
-#endif
-      else []
-
 packageHsLibs :: DynFlags -> PackageConfig -> [String]
 packageHsLibs dflags p = map (mkDynName . addSuffix) (hsLibraries p)
   where
@@ -1516,8 +1500,7 @@ packageHsLibs dflags p = map (mkDynName . addSuffix) (hsLibraries p)
 
         mkDynName x
          | WayDyn `notElem` ways dflags = x
-         | "rts" `isSuffixOf` x         = x
-         | "HS"  `isPrefixOf` x         =
+         | "HS" `isPrefixOf` x         =
               x ++ '-':programName dflags ++ projectVersion dflags
            -- For non-Haskell libraries, we use the name "Cfoo". The .a
            -- file is libCfoo.a, and the .so is libfoo.so. That way the

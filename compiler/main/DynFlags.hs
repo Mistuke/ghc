@@ -739,11 +739,11 @@ data DynFlags = DynFlags {
 
   -- | Windows SxS settings
   sxsResolveMode        :: SxSResolveMode,
-  
+
   -- | Shared Lib ABI settings
   sharedLibABIName      :: Maybe String,
   sharedLibABIVersion   :: Maybe String,
-  
+
   -- | Runtime system options
   rtsOpts               :: Maybe String,
   rtsOptsEnabled        :: RtsOptsEnabled,

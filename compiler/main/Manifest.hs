@@ -42,7 +42,7 @@ data ManifestFile = ManifestFile { name          :: String
 
 -- | Translate TARGET_ARCH into something that Windows manifests expect
 getTargetArchitecture :: String
-getTargetArchitecture 
+getTargetArchitecture
   = case TARGET_ARCH of
       "x86"    -> "x86"
       "x86_64" -> "amd64"
@@ -63,7 +63,7 @@ generateManifest manifest
             -- Generate a security context for binary compiles
             , if not $ isApplication manifest
                  then ""
-                 else unlines 
+                 else unlines
                        [ ""
                         , "  <trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\">"
                         , "    <security>"
@@ -79,7 +79,7 @@ generateManifest manifest
                  else unlines
                        [ ""
                        -- Generate dependencies
-                       , unlines $ map (\dep -> unlines 
+                       , unlines $ map (\dep -> unlines
                            [ "  <dependency>"
                            , "   <dependentAssembly>"
                            , "    <assemblyIdentity name=\"" ++ (dropExtension $ fullname dep) ++ "\""
@@ -92,10 +92,10 @@ generateManifest manifest
 
                        , ""
                        -- Generate dependency names. This is controlled directly by the SxS names.
-                       ,  unlines $ map (\dep ->  
+                       ,  unlines $ map (\dep ->
                            "  <file name=\"" ++ (takeFileName $ fullname dep) ++ "\" />"
                            ) (dependencies manifest)
-                       
+
                        ]
             , "</assembly>"
             ]
@@ -186,8 +186,8 @@ mkManifest dflags pkgs assembly
          -- foo.exe.manifest. However, for extra robustness, and so that
          -- we can move the binary around, we can embed the manifest in
          -- the binary itself using windres:
-         if not (gopt Opt_EmbedManifest dflags) 
-         then return [] 
+         if not (gopt Opt_EmbedManifest dflags)
+         then return []
          else do
              debugTraceMsg dflags 2 (text $ "Embedding manifest `" ++ manifest_filename ++ "' into `" ++ assembly ++ "'")
              rc_filename <- newTempName dflags "rc"
@@ -218,7 +218,7 @@ mkManifest dflags pkgs assembly
 --   a new dependency to a Windows dll in the ghc package. And I wanted to avoid.
 --   This functionality will be added to the Win32 package, but it won't be usable
 --   here for a while. See `filepathRelativePathTo` in Win32.
--- 
+--
 --   So this version is very limited. It only works for the very specific use-case
 --   provided here. To support the relative paths for the testsuite. This function
 --   is unsafe for any other use!!
@@ -233,4 +233,3 @@ filepathRelativePathTo from to =
                                     else ".." : mergePath xs ys
        mergePath []     ys     = []
        mergePath _      []     = []
-  

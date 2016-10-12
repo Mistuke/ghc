@@ -55,7 +55,7 @@ process_dll_link() {
     # Side-by-Side assembly generation flags for GHC. Pass these along so the DLLs
     # get the proper manifests generated.
     SXS_OPTS="-fgen-sxs-assembly -dylib-abi-name \"$9\" -dylib-abi-version \"${10}\""
-    
+
     # echo "Number of symbols in $6: $SYMBOLS_DLL"
     # Now check that the DLL doesn't have too many symbols. See trac #5987.
     case $(($SYMBOLS_OBJ / $DLL_MAX_SYMBOLS)) in
@@ -80,10 +80,10 @@ process_dll_link() {
 
             DLLimport="$base.dll.a"
             dlltool -d $defFile -l $DLLimport
-            
+
             cmd="$7 $DLLimport $5 ${SXS_OPTS} -optl-Wl,--retain-symbols-file=$exports -o $6"
             echo "$cmd"
-            eval "$cmd" || exit 1            
+            eval "$cmd" || exit 1
             build_delay_import_lib $defFile $DLLimport $8
             exit 0
             ;;
