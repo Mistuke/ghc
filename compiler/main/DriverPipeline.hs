@@ -29,7 +29,6 @@ module DriverPipeline (
    hscPostBackendPhase, getLocation, setModLocation, setDynFlags,
    runPhase, exeFileName,
    mkExtraObjToLinkIntoBinary, mkNoteObjsToLinkIntoBinary,
-   maybeCreateManifest,
    linkingNeeded, checkLinkInfo, writeInterfaceOnlyMode
   ) where
 
@@ -46,6 +45,7 @@ import Finder
 import HscTypes hiding ( Hsc )
 import Outputable
 import Module
+import Manifest
 import ErrUtils
 import DynFlags
 import Config
@@ -1912,7 +1912,7 @@ linkBinary' staticLink dflags o_files dep_packages = do
                       ++ lib_path_opts)
                       ++ extra_ld_inputs
                       ++ map SysTools.Option (
-                         rc_objs
+                         resource_objs
                       ++ framework_opts
                       ++ pkg_lib_path_opts
                       ++ extraLinkObj:noteLinkObjs
