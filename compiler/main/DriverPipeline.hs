@@ -45,7 +45,7 @@ import Finder
 import HscTypes hiding ( Hsc )
 import Outputable
 import Module
-import Manifest
+import Manifest ( mkManifest )
 import ErrUtils
 import DynFlags
 import Config
