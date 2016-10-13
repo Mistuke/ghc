@@ -2,7 +2,7 @@
 LIBRARY "libHSghc-prim-@LibVersion@-ghc@ProjectVersion@.dll"
 
 EXPORTS
-
+	ghczmprim_GHCziTuple_Z0T_closure
 	ghczmprim_GHCziTypes_True_closure
 	ghczmprim_GHCziTypes_False_closure
 	ghczmprim_GHCziTypes_Czh_con_info
