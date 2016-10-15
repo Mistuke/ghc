@@ -16,12 +16,10 @@ module Manifest (
 
 import DynFlags
 import PackageConfig
-import Packages
 import Platform
 import SysTools
-import Module
 import ErrUtils
-import Outputable (text,hcat,SDoc)
+import Outputable (text)
 
 
 import Data.Version
@@ -134,8 +132,6 @@ createManifestDefinition dflags pkgs assembly = do
 
               fullPkgPath <- findFile (libraryDirs dep) fullPkgName
 
-              let outDir = normalise $ takeDirectory $ fromJust (outputFile dflags)
-
               debugTraceMsg dflags 2 (text $ "Processing reference to `" ++ (fromJust fullPkgPath) ++ "'.")
 
               let manifest = ManifestFile { name          = modName
@@ -211,25 +207,3 @@ mkManifest dflags pkgs assembly
 
              return [rc_obj_filename]
  | otherwise = return []
-
--- | makeRelative from filepath is very limited, it won't ever introduce .. in paths.
---   Ideally I would like to use the OS call PathRelativePathToW which does
---   the right thing and work under all circumstances. However this introduces
---   a new dependency to a Windows dll in the ghc package. And I wanted to avoid.
---   This functionality will be added to the Win32 package, but it won't be usable
---   here for a while. See `filepathRelativePathTo` in Win32.
---
---   So this version is very limited. It only works for the very specific use-case
---   provided here. To support the relative paths for the testsuite. This function
---   is unsafe for any other use!!
-filepathRelativePathTo :: FilePath -> FilePath -> FilePath
-filepathRelativePathTo from to =
-  let from' = splitDirectories from
-      to'   = splitDirectories to
-  in joinPath $ mergePath (tail from') (tail to') ++ (tail to')
- where mergePath :: [FilePath] -> [FilePath] -> [FilePath]
-       mergePath (x:xs) (y:ys) = if x == y
-                                    then []
-                                    else ".." : mergePath xs ys
-       mergePath []     ys     = []
-       mergePath _      []     = []
