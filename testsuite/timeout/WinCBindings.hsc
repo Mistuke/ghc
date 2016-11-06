@@ -153,8 +153,6 @@ foreign import WINDOWS_CCONV unsafe "windows.h CreateProcessW"
                    -> BOOL -> DWORD -> LPVOID -> LPCTSTR -> LPSTARTUPINFO
                    -> LPPROCESS_INFORMATION -> IO BOOL
 
--- I have decided to do this in C due to the number of parameters involved.
--- and a constant I don't quite know how to marshal.
 foreign import WINDOWS_CCONV unsafe "setJobParameters" setJobParameters :: HANDLE -> IO BOOL
 foreign import WINDOWS_CCONV unsafe "waitForJobCompletion" waitForJobCompletion :: HANDLE -> HANDLE -> DWORD -> IO BOOL
 foreign import WINDOWS_CCONV unsafe "createCompletionPort" createCompletionPort :: HANDLE -> IO HANDLE

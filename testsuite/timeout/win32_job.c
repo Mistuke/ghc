@@ -52,7 +52,6 @@ extern int waitForJobCompletion ( HANDLE hJob, HANDLE ioPort, DWORD timeout )
 
     if (Overlapped == NULL && (HANDLE)CompletionKey != hJob)
     {
-        printf("** IOCP ** Return value: %d, %d, %d\n", GetLastError(), CompletionCode, CompletionKey);
         // Timeout occurred. *dark voice* YOU HAVE FAILED THIS TEST!.
         return 0;
     }
