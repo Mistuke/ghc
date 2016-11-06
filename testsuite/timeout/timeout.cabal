@@ -14,9 +14,9 @@ Executable timeout
     Main-Is: timeout.hs
     Other-Modules: WinCBindings
     Extensions: CPP
-    c-sources: win32_job.c
     Build-Depends: base, process
     if os(windows)
+        c-sources: win32_job.c
         Build-Depends: Win32
     else
         Build-Depends: unix
