@@ -4,6 +4,7 @@
 
 from __future__ import print_function
 
+import signal
 import sys
 import os
 import string
@@ -37,6 +38,9 @@ os.environ['TERM'] = 'vt100'
 
 global config
 config = getConfig() # get it from testglobals
+
+def signal_handler(signal, frame):
+        cleanup_and_exit(1)
 
 # -----------------------------------------------------------------------------
 # cmd-line options
@@ -173,6 +177,9 @@ if windows:
         raise Exception("Failure calling SetConsoleCP(65001)")
     if kernel32.SetConsoleOutputCP(65001) == 0:
         raise Exception("Failure calling SetConsoleOutputCP(65001)")
+
+    # register the interrupt handler
+    signal.signal(signal.SIGINT, signal_handler)
 else:
     # Try and find a utf8 locale to use
     # First see if we already have a UTF8 locale

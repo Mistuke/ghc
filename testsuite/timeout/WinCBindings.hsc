@@ -3,6 +3,14 @@ module WinCBindings where
 
 #if defined(mingw32_HOST_OS)
 
+##if defined(i386_HOST_ARCH)
+## define WINDOWS_CCONV stdcall
+##elif defined(x86_64_HOST_ARCH)
+## define WINDOWS_CCONV ccall
+##else
+## error Unknown mingw32 arch
+##endif
+
 import Foreign
 import System.Win32.File
 import System.Win32.Types
@@ -109,7 +117,7 @@ instance Storable STARTUPINFO where
             siStdOutput     =  vhStdOutput,
             siStdError      =  vhStdError}
 
-foreign import stdcall unsafe "windows.h WaitForSingleObject"
+foreign import WINDOWS_CCONV unsafe "windows.h WaitForSingleObject"
     waitForSingleObject :: HANDLE -> DWORD -> IO DWORD
 
 cWAIT_ABANDONED :: DWORD
@@ -121,23 +129,34 @@ cWAIT_OBJECT_0 = #const WAIT_OBJECT_0
 cWAIT_TIMEOUT :: DWORD
 cWAIT_TIMEOUT = #const WAIT_TIMEOUT
 
-foreign import stdcall unsafe "windows.h GetExitCodeProcess"
+cCREATE_SUSPENDED :: DWORD
+cCREATE_SUSPENDED = #const CREATE_SUSPENDED
+
+foreign import WINDOWS_CCONV unsafe "windows.h GetExitCodeProcess"
     getExitCodeProcess :: HANDLE -> LPDWORD -> IO BOOL
 
-foreign import stdcall unsafe "windows.h TerminateJobObject"
+foreign import WINDOWS_CCONV unsafe "windows.h CloseHandle"
+    closeHandle :: HANDLE -> IO BOOL
+
+foreign import WINDOWS_CCONV unsafe "windows.h TerminateJobObject"
     terminateJobObject :: HANDLE -> UINT -> IO BOOL
 
-foreign import stdcall unsafe "windows.h AssignProcessToJobObject"
+foreign import WINDOWS_CCONV unsafe "windows.h AssignProcessToJobObject"
     assignProcessToJobObject :: HANDLE -> HANDLE -> IO BOOL
 
-foreign import stdcall unsafe "windows.h CreateJobObjectW"
+foreign import WINDOWS_CCONV unsafe "windows.h CreateJobObjectW"
     createJobObjectW :: LPSECURITY_ATTRIBUTES -> LPCTSTR -> IO HANDLE
 
-foreign import stdcall unsafe "windows.h CreateProcessW"
+foreign import WINDOWS_CCONV unsafe "windows.h CreateProcessW"
     createProcessW :: LPCTSTR -> LPTSTR
                    -> LPSECURITY_ATTRIBUTES -> LPSECURITY_ATTRIBUTES
                    -> BOOL -> DWORD -> LPVOID -> LPCTSTR -> LPSTARTUPINFO
                    -> LPPROCESS_INFORMATION -> IO BOOL
 
+-- I have decided to do this in C due to the number of parameters involved.
+-- and a constant I don't quite know how to marshal.
+foreign import WINDOWS_CCONV unsafe "setJobParameters" setJobParameters :: HANDLE -> IO BOOL
+foreign import WINDOWS_CCONV unsafe "waitForJobCompletion" waitForJobCompletion :: HANDLE -> HANDLE -> DWORD -> IO BOOL
+foreign import WINDOWS_CCONV unsafe "createCompletionPort" createCompletionPort :: HANDLE -> IO HANDLE
 #endif
 
