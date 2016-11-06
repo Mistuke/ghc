@@ -8,7 +8,9 @@ extern int setJobParameters( HANDLE hJob )
 {
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli;
     ZeroMemory(&jeli, sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
-    //Configure all child processes associated with the job to terminate when the
+    // Configure all child processes associated with the job to terminate when the
+    // Last process in the job terminates. This prevent half dead processes and that
+    // hanging ghc-iserv.exe process that happens when you interrupt the testsuite.
     jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     
     return SetInformationJobObject( hJob, JobObjectExtendedLimitInformation,
