@@ -3,6 +3,7 @@
 #define STRICT
 #include <windows.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 extern int setJobParameters( HANDLE hJob )
 {
@@ -39,7 +40,7 @@ extern HANDLE createCompletionPort( HANDLE hJob )
     return ioPort;
 }
 
-extern int waitForJobCompletion ( HANDLE hJob, HANDLE ioPort, DWORD timeout )
+extern bool waitForJobCompletion ( HANDLE hJob, HANDLE ioPort, DWORD timeout )
 {
     DWORD CompletionCode;
     ULONG_PTR CompletionKey;
@@ -67,11 +68,12 @@ extern int waitForJobCompletion ( HANDLE hJob, HANDLE ioPort, DWORD timeout )
 #if DEBUG
                 printf("[I/O] :: All done: %p\n", Overlapped);
 #endif
-                break;
+                return true;
             default:
                 break;
         }
     }
+
 #if DEBUG
     printf("[I/O] :: Wait Process: done.\n");
     JOBOBJECT_BASIC_PROCESS_ID_LIST idlist;
@@ -88,9 +90,12 @@ extern int waitForJobCompletion ( HANDLE hJob, HANDLE ioPort, DWORD timeout )
 
     if (Overlapped == NULL && (HANDLE)CompletionKey != hJob)
     {
+#if DEBUG
+        printf("[I/O] :: Timeout happened.\n");
+#endif
         // Timeout occurred. *dark voice* YOU HAVE FAILED THIS TEST!.
-        return 0;
+        return false;
     }
 
-    return 1;
+    return true;
 }
