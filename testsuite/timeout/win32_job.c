@@ -45,12 +45,46 @@ extern int waitForJobCompletion ( HANDLE hJob, HANDLE ioPort, DWORD timeout )
     ULONG_PTR CompletionKey;
     LPOVERLAPPED Overlapped;
 
+#if DEBUG
+    printf("[I/O] :: Wait Process: start.\n");
+#endif
     while (GetQueuedCompletionStatus(ioPort, &CompletionCode,
-             &CompletionKey, &Overlapped, timeout) &&
-             !((HANDLE)CompletionKey == hJob &&
-              CompletionCode == JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO)) {
+             &CompletionKey, &Overlapped, timeout)) {
         // We're still waiting, let's sing a song! lalala lalalalaaa
+        switch (CompletionCode)
+        {
+            case JOB_OBJECT_MSG_NEW_PROCESS:
+#if DEBUG
+                printf("[I/O] :: New Process: %p\n", Overlapped);
+#endif
+                break;
+            case JOB_OBJECT_MSG_EXIT_PROCESS:
+#if DEBUG
+                printf("[I/O] :: Exit Process: %p\n", Overlapped);
+#endif
+                break;
+            case JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO:
+#if DEBUG
+                printf("[I/O] :: All done: %p\n", Overlapped);
+#endif
+                break;
+            default:
+                break;
+        }
     }
+#if DEBUG
+    printf("[I/O] :: Wait Process: done.\n");
+    JOBOBJECT_BASIC_PROCESS_ID_LIST idlist;
+    ZeroMemory(&idlist, sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST));
+
+    QueryInformationJobObject(hJob, JobObjectBasicProcessIdList, &idlist, sizeof(JOBOBJECT_BASIC_PROCESS_ID_LIST), NULL);
+    printf("[I/O] Proc Count: %d>=%d\n", idlist.NumberOfProcessIdsInList, idlist.NumberOfAssignedProcesses);
+    for (int x = 0; x < idlist.NumberOfProcessIdsInList; x++)
+    {
+        printf("[I/O] :: %p\n", idlist.ProcessIdList[x]);
+        WaitForSingleObject(idlist.ProcessIdList[x], INFINITE);
+    }
+#endif
 
     if (Overlapped == NULL && (HANDLE)CompletionKey != hJob)
     {
