@@ -84,7 +84,6 @@ extern bool waitForJobCompletion ( HANDLE hJob, HANDLE ioPort, DWORD timeout )
     for (int x = 0; x < idlist.NumberOfProcessIdsInList; x++)
     {
         printf("[I/O] :: %p\n", idlist.ProcessIdList[x]);
-        WaitForSingleObject(idlist.ProcessIdList[x], INFINITE);
     }
 #endif
 
