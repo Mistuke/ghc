@@ -125,11 +125,16 @@ run secs cmd =
        handleInterrupt $ do
           resumeThread (piThread pi)
           -- The program is now running
-
           let handle = piProcess pi
           let millisecs = secs * 1000
           rc <- waitForJobCompletion job ioPort (fromIntegral millisecs)
           closeHandle ioPort
+          -- Close the std handles to flush them
+          si <- peek p_startupinfo
+          closeHandle $ siStdInput  si
+          closeHandle $ siStdOutput si
+          closeHandle $ siStdError  si
+
           if not rc
               then do terminateJobObject job 99
                       closeHandle job
