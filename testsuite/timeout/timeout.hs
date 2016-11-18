@@ -131,7 +131,6 @@ run secs cmd =
           closeHandle ioPort
           -- Close the std handles to flush them
           si <- peek p_startupinfo
-          closeHandle $ siStdInput  si
           closeHandle $ siStdOutput si
           closeHandle $ siStdError  si
 
