@@ -140,7 +140,8 @@ run secs cmd =
                       closeHandle job
                       exitWith (ExitFailure 99)
               else alloca $ \p_exitCode ->
-                    do closeHandle job
+                    do terminateJobObject job 0 -- Ensure it's all really dead.
+                       closeHandle job
                        r <- getExitCodeProcess handle p_exitCode
                        if r then do ec <- peek p_exitCode
                                     let ec' = if ec == 0
