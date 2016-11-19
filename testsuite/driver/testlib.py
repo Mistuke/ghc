@@ -6,6 +6,7 @@
 from __future__ import print_function
 
 import io
+import sys
 import shutil
 import os
 import errno
@@ -38,6 +39,11 @@ if config.use_threads:
 
 global wantToStop
 wantToStop = False
+
+global pool_sema
+if config.use_threads:
+    pool_sema = threading.BoundedSemaphore(value=config.threads)
+
 def stopNow():
     global wantToStop
     wantToStop = True
@@ -600,24 +606,17 @@ def _newTestDir(name, opts, tempdir, dir):
 parallelTests = []
 aloneTests = []
 allTestNames = set([])
+parallelTests = []
 
-def runTest (opts, name, func, args):
-    ok = 0
-
+def runTest (watcher, opts, name, func, args):
     if config.use_threads:
-        t.thread_pool.acquire()
+        pool_sema.acquire()
         try:
-            while config.threads<(t.running_threads+1):
-                t.thread_pool.wait()
-            t.running_threads = t.running_threads+1
-            ok=1
-            t.thread_pool.release()
-            thread.start_new_thread(test_common_thread, (name, opts, func, args))
-        except:
-            if not ok:
-                t.thread_pool.release()
+            thread.start_new_thread (test_common_thread, (watcher, name, opts, func, args))
+        finally:
+            pass
     else:
-        test_common_work (name, opts, func, args)
+        test_common_work (watcher, name, opts, func, args)
 
 # name  :: String
 # setup :: TestOpts -> IO ()
@@ -649,7 +648,7 @@ def test (name, setup, func, args):
 
     executeSetups([thisdir_settings, setup], name, myTestOpts)
 
-    thisTest = lambda : runTest(myTestOpts, name, func, args)
+    thisTest = lambda watcher: runTest(watcher, myTestOpts, name, func, args)
     if myTestOpts.alone:
         aloneTests.append(thisTest)
     else:
@@ -657,14 +656,12 @@ def test (name, setup, func, args):
     allTestNames.add(name)
 
 if config.use_threads:
-    def test_common_thread(name, opts, func, args):
-        try:
-            test_common_work(name,opts,func,args)
-        finally:
-            t.thread_pool.acquire()
-            t.running_threads = t.running_threads - 1
-            t.thread_pool.notify()
-            t.thread_pool.release()
+    def test_common_thread(watcher, name, opts, func, args):
+            try:
+                test_common_work(watcher, name,opts,func,args)
+            finally:
+                pool_sema.release()
+                watcher.notify()
 
 def get_package_cache_timestamp():
     if config.package_conf_cache_file == '':
@@ -677,7 +674,7 @@ def get_package_cache_timestamp():
 
 do_not_copy = ('.hi', '.o', '.dyn_hi', '.dyn_o', '.out') # 12112
 
-def test_common_work (name, opts, func, args):
+def test_common_work (watcher, name, opts, func, args):
     try:
         t.total_tests += 1
         setLocalTestOpts(opts)
@@ -1722,12 +1719,13 @@ def normalise_asm( str ):
 
 def if_verbose( n, s ):
     if config.verbose >= n:
-        print(s)
+        sys.stdout.write(s + '\n')
 
 def if_verbose_dump( n, f ):
     if config.verbose >= n:
         try:
-            print(open(f).read())
+            with open(f) as file:
+             sys.stdout.write(file.read() + '\n')
         except:
             print('')
 

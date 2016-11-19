@@ -244,12 +244,6 @@ if windows or darwin:
 global testopts_local
 testopts_local.x = TestOptions()
 
-if config.use_threads:
-    t.lock = threading.Lock()
-    t.thread_pool = threading.Condition(t.lock)
-    t.lockFilesWritten = threading.Lock()
-    t.running_threads = 0
-
 # if timeout == -1 then we try to calculate a sensible value
 if config.timeout == -1:
     config.timeout = int(read_no_crs(config.top + '/timeout/calibrate.out'))
@@ -342,27 +336,29 @@ if config.list_broken:
         print('WARNING:', len(framework_failures), 'framework failures!')
         print('')
 else:
+    # completion watcher
+    watcher = Watcher(len(parallelTests))
+
     # Now run all the tests
-    if config.use_threads:
-        t.running_threads=0
     for oneTest in parallelTests:
         if stopping():
             break
-        oneTest()
-    # We get here at most when we have
-    # n remaining threads waiting. So
-    # just block till all n are done.
-    if config.use_threads:
-        t.thread_pool.acquire()
-        while t.running_threads>0:
-            t.thread_pool.wait()
-        t.thread_pool.release()
+        oneTest(watcher)
+
+    # wait for parallel tests to finish
+    if not stopping():
+        watcher.wait()
+
+    # Run the following tests purely sequential
     config.use_threads = False
     for oneTest in aloneTests:
         if stopping():
             break
-        oneTest()
-        
+        oneTest(watcher)
+
+    # flush everything before we continue
+    sys.stdout.flush()
+
     summary(t, sys.stdout, config.no_print_summary)
 
     if config.summary_file != '':
