@@ -658,15 +658,13 @@ def test (name, setup, func, args):
 
 if config.use_threads:
     def test_common_thread(name, opts, func, args):
-        t.lock.acquire()
         try:
             test_common_work(name,opts,func,args)
         finally:
-            t.lock.release()
             t.thread_pool.acquire()
             t.running_threads = t.running_threads - 1
-            t.thread_pool.notify()
             t.thread_pool.release()
+            t.thread_pool.notify()
 
 def get_package_cache_timestamp():
     if config.package_conf_cache_file == '':
@@ -831,9 +829,6 @@ def do_test(name, way, func, args, files):
                 with io.open(dst_makefile, 'w', encoding='utf8') as dst:
                     dst.write(makefile)
 
-    if config.use_threads:
-        t.lock.release()
-
     if opts.pre_cmd:
         exit_code = runCmd('cd "{0}" && {1}'.format(opts.testdir, opts.pre_cmd))
         if exit_code != 0:
@@ -841,9 +836,6 @@ def do_test(name, way, func, args, files):
 
     try:
         result = func(*[name,way] + args)
-    finally:
-        if config.use_threads:
-            t.lock.acquire()
 
     if opts.expect not in ['pass', 'fail', 'missing-lib']:
         framework_fail(name, way, 'bad expected ' + opts.expect)
@@ -1346,21 +1338,20 @@ def interpreter_run(name, way, extra_hc_opts, top_mod):
 
 def split_file(in_fn, delimiter, out1_fn, out2_fn):
     # See Note [Universal newlines].
-    infile = io.open(in_fn, 'r', encoding='utf8', errors='replace', newline=None)
-    out1 = io.open(out1_fn, 'w', encoding='utf8', newline='')
-    out2 = io.open(out2_fn, 'w', encoding='utf8', newline='')
-
-    line = infile.readline()
-    while (re.sub('^\s*','',line) != delimiter and line != ''):
-        out1.write(line)
+    with io.open(in_fn, 'r', encoding='utf8', errors='replace', newline=None) as infile
+     with io.open(out1_fn, 'w', encoding='utf8', newline='') as out1
+      with io.open(out2_fn, 'w', encoding='utf8', newline='') as out2
         line = infile.readline()
-    out1.close()
+        while (re.sub('^\s*','',line) != delimiter and line != ''):
+            out1.write(line)
+            line = infile.readline()
+        out1.close()
 
-    line = infile.readline()
-    while (line != ''):
-        out2.write(line)
         line = infile.readline()
-    out2.close()
+        while (line != ''):
+            out2.write(line)
+            line = infile.readline()
+        out2.close()
 
 # -----------------------------------------------------------------------------
 # Utils
@@ -1392,7 +1383,8 @@ def stdout_ok(name, way):
 
 def dump_stdout( name ):
    print('Stdout:')
-   print(open(in_testdir(name, 'run.stdout')).read())
+   with open(in_testdir(name, 'run.stdout')) as f
+       print(f.read())
 
 def stderr_ok(name, way):
    actual_stderr_file = add_suffix(name, 'run.stderr')
@@ -1405,15 +1397,15 @@ def stderr_ok(name, way):
 
 def dump_stderr( name ):
    print("Stderr:")
-   print(open(in_testdir(name, 'run.stderr')).read())
+   with open(in_testdir(name, 'run.stderr')) as f
+      print(f.read())
 
 def read_no_crs(file):
     str = ''
     try:
         # See Note [Universal newlines].
-        h = io.open(file, 'r', encoding='utf8', errors='replace', newline=None)
-        str = h.read()
-        h.close
+        with io.open(file, 'r', encoding='utf8', errors='replace', newline=None) as h
+           str = h.read()
     except:
         # On Windows, if the program fails very early, it seems the
         # files stdout/stderr are redirected to may not get created
@@ -1422,9 +1414,8 @@ def read_no_crs(file):
 
 def write_file(file, str):
     # See Note [Universal newlines].
-    h = io.open(file, 'w', encoding='utf8', newline='')
-    h.write(str)
-    h.close
+    with io.open(file, 'w', encoding='utf8', newline='') as h
+       h.write(str)
 
 # Note [Universal newlines]
 #
@@ -1746,26 +1737,28 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
     cmd = cmd.format(**config.__dict__)
     if_verbose(3, cmd + ('< ' + os.path.basename(stdin) if stdin else ''))
 
+    # This is very confusing, but this seems to
+    # replace a filename with a handle.
     if stdin:
         stdin = open(stdin, 'r')
     if stdout:
         stdout = open(stdout, 'w')
     if stderr and stderr is not subprocess.STDOUT:
         stderr = open(stderr, 'w')
-
-    # cmd is a complex command in Bourne-shell syntax
-    # e.g (cd . && 'C:/users/simonpj/HEAD/inplace/bin/ghc-stage2' ...etc)
-    # Hence it must ultimately be run by a Bourne shell. It's timeout's job
-    # to invoke the Bourne shell
-    r = subprocess.call([timeout_prog, timeout, cmd],
-                        stdin=stdin, stdout=stdout, stderr=stderr)
-
-    if stdin:
-        stdin.close()
-    if stdout:
-        stdout.close()
-    if stderr and stderr is not subprocess.STDOUT:
-        stderr.close()
+    try
+       # cmd is a complex command in Bourne-shell syntax
+       # e.g (cd . && 'C:/users/simonpj/HEAD/inplace/bin/ghc-stage2' ...etc)
+       # Hence it must ultimately be run by a Bourne shell. It's timeout's job
+       # to invoke the Bourne shell
+       r = subprocess.call([timeout_prog, timeout, cmd],
+                           stdin=stdin, stdout=stdout, stderr=stderr)
+    finally:
+       if stdin:
+           stdin.close()
+       if stdout:
+           stdout.close()
+       if stderr and stderr is not subprocess.STDOUT:
+           stderr.close()
 
     if r == 98:
         # The python timeout program uses 98 to signal that ^C was pressed

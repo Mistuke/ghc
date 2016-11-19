@@ -40,7 +40,7 @@ global config
 config = getConfig() # get it from testglobals
 
 def signal_handler(signal, frame):
-        cleanup_and_exit(1)
+        stopNow()
 
 # -----------------------------------------------------------------------------
 # cmd-line options
@@ -309,9 +309,11 @@ for file in t_files:
     newTestDir(tempdir, os.path.dirname(file))
     try:
         if PYTHON3:
-            src = io.open(file, encoding='utf8').read()
+            with io.open(file, encoding='utf8') as f
+              src = f.read()
         else:
-            src = open(file).read()
+            with open(file) as f
+              src = f.read()
 
         exec(src)
     except Exception as e:
@@ -347,6 +349,9 @@ else:
         if stopping():
             break
         oneTest()
+    # We get here at most when we have
+    # n remaining threads waiting. So
+    # just block till all n are done.
     if config.use_threads:
         t.thread_pool.acquire()
         while t.running_threads>0:
@@ -361,7 +366,8 @@ else:
     summary(t, sys.stdout, config.no_print_summary)
 
     if config.summary_file != '':
-        summary(t, open(config.summary_file, 'w'))
+        with open(config.summary_file, 'w') as file
+            summary(t, file)
 
 cleanup_and_exit(0)
 

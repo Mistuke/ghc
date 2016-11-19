@@ -129,10 +129,6 @@ run secs cmd =
           let millisecs = secs * 1000
           rc <- waitForJobCompletion job ioPort (fromIntegral millisecs)
           closeHandle ioPort
-          -- Close the std handles to flush them
-          si <- peek p_startupinfo
-          closeHandle $ siStdOutput si
-          closeHandle $ siStdError  si
 
           if not rc
               then do terminateJobObject job 99
