@@ -663,8 +663,8 @@ if config.use_threads:
         finally:
             t.thread_pool.acquire()
             t.running_threads = t.running_threads - 1
-            t.thread_pool.release()
             t.thread_pool.notify()
+            t.thread_pool.release()
 
 def get_package_cache_timestamp():
     if config.package_conf_cache_file == '':
@@ -836,6 +836,8 @@ def do_test(name, way, func, args, files):
 
     try:
         result = func(*[name,way] + args)
+    except:
+        pass
 
     if opts.expect not in ['pass', 'fail', 'missing-lib']:
         framework_fail(name, way, 'bad expected ' + opts.expect)
