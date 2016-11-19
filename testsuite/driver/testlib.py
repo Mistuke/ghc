@@ -1338,9 +1338,9 @@ def interpreter_run(name, way, extra_hc_opts, top_mod):
 
 def split_file(in_fn, delimiter, out1_fn, out2_fn):
     # See Note [Universal newlines].
-    with io.open(in_fn, 'r', encoding='utf8', errors='replace', newline=None) as infile
-     with io.open(out1_fn, 'w', encoding='utf8', newline='') as out1
-      with io.open(out2_fn, 'w', encoding='utf8', newline='') as out2
+    with io.open(in_fn, 'r', encoding='utf8', errors='replace', newline=None) as infile:
+     with io.open(out1_fn, 'w', encoding='utf8', newline='') as out1:
+      with io.open(out2_fn, 'w', encoding='utf8', newline='') as out2:
         line = infile.readline()
         while (re.sub('^\s*','',line) != delimiter and line != ''):
             out1.write(line)
@@ -1383,7 +1383,7 @@ def stdout_ok(name, way):
 
 def dump_stdout( name ):
    print('Stdout:')
-   with open(in_testdir(name, 'run.stdout')) as f
+   with open(in_testdir(name, 'run.stdout')) as f:
        print(f.read())
 
 def stderr_ok(name, way):
@@ -1397,14 +1397,14 @@ def stderr_ok(name, way):
 
 def dump_stderr( name ):
    print("Stderr:")
-   with open(in_testdir(name, 'run.stderr')) as f
+   with open(in_testdir(name, 'run.stderr')) as f:
       print(f.read())
 
 def read_no_crs(file):
     str = ''
     try:
         # See Note [Universal newlines].
-        with io.open(file, 'r', encoding='utf8', errors='replace', newline=None) as h
+        with io.open(file, 'r', encoding='utf8', errors='replace', newline=None) as h:
            str = h.read()
     except:
         # On Windows, if the program fails very early, it seems the
@@ -1414,7 +1414,7 @@ def read_no_crs(file):
 
 def write_file(file, str):
     # See Note [Universal newlines].
-    with io.open(file, 'w', encoding='utf8', newline='') as h
+    with io.open(file, 'w', encoding='utf8', newline='') as h:
        h.write(str)
 
 # Note [Universal newlines]
@@ -1745,20 +1745,21 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
         stdout = open(stdout, 'w')
     if stderr and stderr is not subprocess.STDOUT:
         stderr = open(stderr, 'w')
-    try
-       # cmd is a complex command in Bourne-shell syntax
-       # e.g (cd . && 'C:/users/simonpj/HEAD/inplace/bin/ghc-stage2' ...etc)
-       # Hence it must ultimately be run by a Bourne shell. It's timeout's job
-       # to invoke the Bourne shell
-       r = subprocess.call([timeout_prog, timeout, cmd],
+
+    try:
+        # cmd is a complex command in Bourne-shell syntax
+        # e.g (cd . && 'C:/users/simonpj/HEAD/inplace/bin/ghc-stage2' ...etc)
+        # Hence it must ultimately be run by a Bourne shell. It's timeout's job
+        # to invoke the Bourne shell
+        r = subprocess.call([timeout_prog, timeout, cmd],
                            stdin=stdin, stdout=stdout, stderr=stderr)
     finally:
-       if stdin:
-           stdin.close()
-       if stdout:
-           stdout.close()
-       if stderr and stderr is not subprocess.STDOUT:
-           stderr.close()
+        if stdin:
+            stdin.close()
+        if stdout:
+            stdout.close()
+        if stderr and stderr is not subprocess.STDOUT:
+            stderr.close()
 
     if r == 98:
         # The python timeout program uses 98 to signal that ^C was pressed

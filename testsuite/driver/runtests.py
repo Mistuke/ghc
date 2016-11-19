@@ -309,10 +309,10 @@ for file in t_files:
     newTestDir(tempdir, os.path.dirname(file))
     try:
         if PYTHON3:
-            with io.open(file, encoding='utf8') as f
+            with io.open(file, encoding='utf8') as f:
               src = f.read()
         else:
-            with open(file) as f
+            with open(file) as f:
               src = f.read()
 
         exec(src)
@@ -366,7 +366,7 @@ else:
     summary(t, sys.stdout, config.no_print_summary)
 
     if config.summary_file != '':
-        with open(config.summary_file, 'w') as file
+        with open(config.summary_file, 'w') as file:
             summary(t, file)
 
 cleanup_and_exit(0)
