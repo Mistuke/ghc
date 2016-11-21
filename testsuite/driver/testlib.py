@@ -6,6 +6,7 @@
 from __future__ import print_function
 
 import io
+from cStringIO import StringIO
 import sys
 import shutil
 import os
@@ -1737,37 +1738,51 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
     cmd = cmd.format(**config.__dict__)
     if_verbose(3, cmd + ('< ' + os.path.basename(stdin) if stdin else ''))
 
+    # declare the buffers to a default
+    stdin_buffer  = None
+    stdout_buffer = []
+    stderr_buffer = []
+
     # This is very confusing, but this seems to
     # replace a filename with a handle.
     if stdin:
-        stdin = open(stdin, 'r')
-    if stdout:
-        stdout = open(stdout, 'w')
-    if stderr and stderr is not subprocess.STDOUT:
-        stderr = open(stderr, 'w')
+        with open(stdin, 'r') as f:
+            stdin_buffer = f.read()
 
     try:
         # cmd is a complex command in Bourne-shell syntax
         # e.g (cd . && 'C:/users/simonpj/HEAD/inplace/bin/ghc-stage2' ...etc)
         # Hence it must ultimately be run by a Bourne shell. It's timeout's job
         # to invoke the Bourne shell
-        r = subprocess.call([timeout_prog, timeout, cmd],
-                           stdin=stdin, stdout=stdout, stderr=stderr)
+        r = subprocess.Popen([timeout_prog, timeout, cmd],
+                           stdin=subprocess.PIPE,
+                           stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE)
+
+        stdout_buffer, stderr_buffer = r.communicate(stdin_buffer)
+        #print(stdout_buffer)
+        #print(stderr_buffer)
     finally:
         if stdin:
             stdin.close()
         if stdout:
-            stdout.close()
-        if stderr and stderr is not subprocess.STDOUT:
-            stderr.close()
+            with open(stdout, 'w') as f:
+                f.write(stdout_buffer)
+        if stderr:
+            if stderr is not subprocess.STDOUT:
+                with open(stderr, 'w') as f:
+                    f.write(stderr_buffer)
+            else:
+                with open(stdout, 'w') as f:
+                    f.write(stderr_buffer)
 
-    if r == 98:
+    if r.returncode == 98:
         # The python timeout program uses 98 to signal that ^C was pressed
         stopNow()
-    if r == 99 and getTestOpts().exit_code != 99:
+    if r.returncode == 99 and getTestOpts().exit_code != 99:
         # Only print a message when timeout killed the process unexpectedly.
         if_verbose(1, 'Timeout happened...killed process "{0}"...\n'.format(cmd))
-    return r
+    return r.returncode
 
 # -----------------------------------------------------------------------------
 # checking if ghostscript is available for checking the output of hp2ps
