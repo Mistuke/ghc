@@ -1761,14 +1761,14 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
         stdout_buffer, stderr_buffer = r.communicate(stdin_buffer)
     finally:
         if stdout:
-            with open(stdout, 'a') as f:
+            with open(stdout, 'ab') as f:
                 f.write(stdout_buffer)
         if stderr:
             if stderr is not subprocess.STDOUT:
-                with open(stderr, 'a') as f:
+                with open(stderr, 'ab') as f:
                     f.write(stderr_buffer)
             else:
-                with open(stdout, 'a') as f:
+                with open(stdout, 'ab') as f:
                     f.write(stderr_buffer)
 
     if r.returncode == 98:
