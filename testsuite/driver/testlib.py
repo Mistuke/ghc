@@ -6,7 +6,6 @@
 from __future__ import print_function
 
 import io
-from cStringIO import StringIO
 import sys
 import shutil
 import os
