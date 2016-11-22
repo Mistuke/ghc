@@ -1760,11 +1760,7 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
                            stderr=subprocess.PIPE)
 
         stdout_buffer, stderr_buffer = r.communicate(stdin_buffer)
-        #print(stdout_buffer)
-        #print(stderr_buffer)
     finally:
-        if stdin:
-            stdin.close()
         if stdout:
             with open(stdout, 'w') as f:
                 f.write(stdout_buffer)
@@ -1773,7 +1769,7 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
                 with open(stderr, 'w') as f:
                     f.write(stderr_buffer)
             else:
-                with open(stdout, 'w') as f:
+                with open(stdout, 'a') as f:
                     f.write(stderr_buffer)
 
     if r.returncode == 98:
