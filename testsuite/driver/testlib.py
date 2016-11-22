@@ -1762,11 +1762,11 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
         stdout_buffer, stderr_buffer = r.communicate(stdin_buffer)
     finally:
         if stdout:
-            with open(stdout, 'w') as f:
+            with open(stdout, 'a') as f:
                 f.write(stdout_buffer)
         if stderr:
             if stderr is not subprocess.STDOUT:
-                with open(stderr, 'w') as f:
+                with open(stderr, 'a') as f:
                     f.write(stderr_buffer)
             else:
                 with open(stdout, 'a') as f:
