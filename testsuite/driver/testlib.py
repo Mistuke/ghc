@@ -6,7 +6,6 @@
 from __future__ import print_function
 
 import io
-import sys
 import shutil
 import os
 import errno
@@ -606,7 +605,6 @@ def _newTestDir(name, opts, tempdir, dir):
 parallelTests = []
 aloneTests = []
 allTestNames = set([])
-parallelTests = []
 
 def runTest (watcher, opts, name, func, args):
     if config.use_threads:
@@ -1346,13 +1344,11 @@ def split_file(in_fn, delimiter, out1_fn, out2_fn):
         while (re.sub('^\s*','',line) != delimiter and line != ''):
             out1.write(line)
             line = infile.readline()
-        out1.close()
 
         line = infile.readline()
         while (line != ''):
             out2.write(line)
             line = infile.readline()
-        out2.close()
 
 # -----------------------------------------------------------------------------
 # Utils
@@ -1721,13 +1717,13 @@ def normalise_asm( str ):
 
 def if_verbose( n, s ):
     if config.verbose >= n:
-        sys.stdout.write(s + '\n')
+        print(s)
 
 def if_verbose_dump( n, f ):
     if config.verbose >= n:
         try:
             with io.open(f) as file:
-             sys.stdout.write(file.read() + '\n')
+             print(file.read())
         except:
             print('')
 
