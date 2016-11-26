@@ -81,12 +81,3 @@ class Watcher(object):
         if (self.pool <= 0):
             self.evt.set()
         self.sync_lock.release()
-
-if sys.version_info < (3,):
-    def u(x):
-        print("::-- 2")
-        return x
-else:
-    def u(x):
-        print("::-- 3")
-        return x
