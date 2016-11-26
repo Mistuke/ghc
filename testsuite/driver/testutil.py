@@ -83,11 +83,11 @@ class Watcher(object):
         self.sync_lock.release()
 
 if sys.version_info < (3,):
-    print("::-- 3")
     import codecs
     def u(x):
+        print("::-- 2")
         return codecs.unicode_escape_decode(x)[0]
 else:
-    print("::-- 2")
     def u(x):
-        return x #.decode('utf8')
+        print("::-- ")
+        return x

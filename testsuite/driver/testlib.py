@@ -609,14 +609,15 @@ allTestNames = set([])
 parallelTests = []
 
 def runTest (watcher, opts, name, func, args):
-    try:
-        if config.use_threads:
-           pool_sema.acquire()
-           thread.start_new_thread (test_common_thread, (watcher, name, opts, func, args))
-        else:
-            test_common_work (watcher, name, opts, func, args)
-    finally:
-        watcher.notify()
+    if config.use_threads:
+       pool_sema.acquire()
+       t=threading.Thread(target=test_common_thread
+                         ,name=name
+                         ,args=(watcher, name, opts, func, args))
+       t.daemon = False
+       t.start()
+    else:
+        test_common_work (watcher, name, opts, func, args)
 
 # name  :: String
 # setup :: TestOpts -> IO ()
@@ -773,6 +774,8 @@ def test_common_work (watcher, name, opts, func, args):
 
     except Exception as e:
         framework_fail(name, 'runTest', 'Unhandled exception: ' + str(e))
+    finally:
+        watcher.notify()
 
 def do_test(name, way, func, args, files):
     opts = getTestOpts()
