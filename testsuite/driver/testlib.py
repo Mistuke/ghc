@@ -1743,10 +1743,13 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
     stdin_buffer  = None
 
     print("########## 0.1")
-    # This is very confusing, but this seems to
-    # replace a filename with a handle.
+    # ***** IMPORTANT *****
+    # We have to treat input and output as
+    # just binary data here. Don't try to decode
+    # it to a string, since we have tests that actually
+    # feed malformed utf-8 to see how GHC handles it.
     if stdin:
-        with io.open(stdin, 'r', encoding='utf8') as f:
+        with io.open(stdin, 'rb') as f:
             stdin_buffer = f.read()
     print("########## 0.2")
     stdout_buffer = u''
@@ -1766,26 +1769,28 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
         r = subprocess.Popen([timeout_prog, timeout, cmd],
                            stdin=subprocess.PIPE,
                            stdout=subprocess.PIPE,
-                           stderr=hStdErr,
-                           universal_newlines=True)
-        print("########## 2")
+                           stderr=hStdErr)
+        print("########## 2: ")
         stdout_buffer, stderr_buffer = r.communicate(stdin_buffer)
         print("########## 3")
     except Exception as e:
         print(":::: --")
         print(e)
         print(":::: ++")
-        framework_fail(name, way, str(e))
         traceback.print_exc()
+        framework_fail(name, way, str(e))
     finally:
         try:
+            print("@@@@ 1")
             if stdout:
-                with io.open(stdout, 'a', encoding='utf8', newline='') as f:
+                with io.open(stdout, 'ab') as f:
                     f.write(u(stdout_buffer))
+            print("@@@@ 2")
             if stderr:
                 if stderr is not subprocess.STDOUT:
-                    with io.open(stderr, 'a', encoding='utf8', newline='') as f:
+                    with io.open(stderr, 'ab') as f:
                         f.write(u(stderr_buffer))
+            print("@@@@ 3")
 
         except Exception as e:
             print(e)

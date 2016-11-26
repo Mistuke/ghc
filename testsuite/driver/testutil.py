@@ -89,5 +89,5 @@ if sys.version_info < (3,):
         return codecs.unicode_escape_decode(x)[0]
 else:
     def u(x):
-        print("::-- ")
+        print("::-- 3")
         return x
