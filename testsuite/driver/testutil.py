@@ -3,6 +3,7 @@ import os
 import platform
 import subprocess
 import shutil
+import sys
 
 import threading
 
@@ -68,7 +69,7 @@ class Watcher(object):
         self.pool = count
         self.evt = threading.Event()
         self.sync_lock = threading.Lock()
-        if (count < 0):
+        if (count <= 0):
             self.evt.set()
 
     def wait(self):
@@ -80,4 +81,13 @@ class Watcher(object):
         if (self.pool <= 0):
             self.evt.set()
         self.sync_lock.release()
-        
+
+if sys.version_info < (3,):
+    print("::-- 3")
+    import codecs
+    def u(x):
+        return codecs.unicode_escape_decode(x)[0]
+else:
+    print("::-- 2")
+    def u(x):
+        return x #.decode('utf8')

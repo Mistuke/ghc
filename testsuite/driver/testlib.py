@@ -609,14 +609,14 @@ allTestNames = set([])
 parallelTests = []
 
 def runTest (watcher, opts, name, func, args):
-    if config.use_threads:
-        pool_sema.acquire()
-        try:
-            thread.start_new_thread (test_common_thread, (watcher, name, opts, func, args))
-        finally:
-            pass
-    else:
-        test_common_work (watcher, name, opts, func, args)
+    try:
+        if config.use_threads:
+           pool_sema.acquire()
+           thread.start_new_thread (test_common_thread, (watcher, name, opts, func, args))
+        else:
+            test_common_work (watcher, name, opts, func, args)
+    finally:
+        watcher.notify()
 
 # name  :: String
 # setup :: TestOpts -> IO ()
@@ -661,7 +661,6 @@ if config.use_threads:
                 test_common_work(watcher, name,opts,func,args)
             finally:
                 pool_sema.release()
-                watcher.notify()
 
 def get_package_cache_timestamp():
     if config.package_conf_cache_file == '':
@@ -1724,7 +1723,7 @@ def if_verbose( n, s ):
 def if_verbose_dump( n, f ):
     if config.verbose >= n:
         try:
-            with open(f) as file:
+            with io.open(f) as file:
              sys.stdout.write(file.read() + '\n')
         except:
             print('')
@@ -1739,37 +1738,56 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
 
     # declare the buffers to a default
     stdin_buffer  = None
-    stdout_buffer = []
-    stderr_buffer = []
 
+    print("########## 0.1")
     # This is very confusing, but this seems to
     # replace a filename with a handle.
     if stdin:
-        with open(stdin, 'r') as f:
+        with io.open(stdin, 'r', encoding='utf8') as f:
             stdin_buffer = f.read()
+    print("########## 0.2")
+    stdout_buffer = u''
+    stderr_buffer = u''
+    print("########## 0.3")
+    hStdErr = subprocess.PIPE
+    if stderr is subprocess.STDOUT:
+       hStdErr = subprocess.STDOUT
 
     try:
         # cmd is a complex command in Bourne-shell syntax
         # e.g (cd . && 'C:/users/simonpj/HEAD/inplace/bin/ghc-stage2' ...etc)
         # Hence it must ultimately be run by a Bourne shell. It's timeout's job
         # to invoke the Bourne shell
+
+        print("########## 1")
         r = subprocess.Popen([timeout_prog, timeout, cmd],
                            stdin=subprocess.PIPE,
                            stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE)
-
+                           stderr=hStdErr,
+                           universal_newlines=True)
+        print("########## 2")
         stdout_buffer, stderr_buffer = r.communicate(stdin_buffer)
+        print("########## 3")
+    except Exception as e:
+        print(":::: --")
+        print(e)
+        print(":::: ++")
+        framework_fail(name, way, str(e))
+        traceback.print_exc()
     finally:
-        if stdout:
-            with open(stdout, 'ab') as f:
-                f.write(stdout_buffer)
-        if stderr:
-            if stderr is not subprocess.STDOUT:
-                with open(stderr, 'ab') as f:
-                    f.write(stderr_buffer)
-            else:
-                with open(stdout, 'ab') as f:
-                    f.write(stderr_buffer)
+        try:
+            if stdout:
+                with io.open(stdout, 'a', encoding='utf8', newline='') as f:
+                    f.write(u(stdout_buffer))
+            if stderr:
+                if stderr is not subprocess.STDOUT:
+                    with io.open(stderr, 'a', encoding='utf8', newline='') as f:
+                        f.write(u(stderr_buffer))
+
+        except Exception as e:
+            print(e)
+            framework_fail(name, way, str(e))
+            traceback.print_exc()
 
     if r.returncode == 98:
         # The python timeout program uses 98 to signal that ^C was pressed
