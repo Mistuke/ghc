@@ -1742,7 +1742,6 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
     # declare the buffers to a default
     stdin_buffer  = None
 
-    print("########## 0.1")
     # ***** IMPORTANT *****
     # We have to treat input and output as
     # just binary data here. Don't try to decode
@@ -1751,10 +1750,10 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
     if stdin:
         with io.open(stdin, 'rb') as f:
             stdin_buffer = f.read()
-    print("########## 0.2")
+
     stdout_buffer = u''
     stderr_buffer = u''
-    print("########## 0.3")
+
     hStdErr = subprocess.PIPE
     if stderr is subprocess.STDOUT:
        hStdErr = subprocess.STDOUT
@@ -1765,37 +1764,28 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
         # Hence it must ultimately be run by a Bourne shell. It's timeout's job
         # to invoke the Bourne shell
 
-        print("########## 1")
         r = subprocess.Popen([timeout_prog, timeout, cmd],
                            stdin=subprocess.PIPE,
                            stdout=subprocess.PIPE,
                            stderr=hStdErr)
-        print("########## 2: ")
+
         stdout_buffer, stderr_buffer = r.communicate(stdin_buffer)
-        print("########## 3")
     except Exception as e:
-        print(":::: --")
-        print(e)
-        print(":::: ++")
         traceback.print_exc()
         framework_fail(name, way, str(e))
     finally:
         try:
-            print("@@@@ 1")
             if stdout:
                 with io.open(stdout, 'ab') as f:
-                    f.write(u(stdout_buffer))
-            print("@@@@ 2")
+                    f.write(stdout_buffer)
             if stderr:
                 if stderr is not subprocess.STDOUT:
                     with io.open(stderr, 'ab') as f:
-                        f.write(u(stderr_buffer))
-            print("@@@@ 3")
+                        f.write(stderr_buffer)
 
         except Exception as e:
-            print(e)
-            framework_fail(name, way, str(e))
             traceback.print_exc()
+            framework_fail(name, way, str(e))
 
     if r.returncode == 98:
         # The python timeout program uses 98 to signal that ^C was pressed
