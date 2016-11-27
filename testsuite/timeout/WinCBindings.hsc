@@ -12,6 +12,7 @@ module WinCBindings where
 ##endif
 
 import Foreign
+import Foreign.C.Types
 import System.Win32.File
 import System.Win32.Types
 
@@ -367,14 +368,15 @@ waitForJobCompletion hJob ioPort timeout
         loop = do
           res <- getQueuedCompletionStatus ioPort p_CompletionCode p_CompletionKey
                                            p_Overlapped timeout
-          completionKey  <- peek $ castPtr p_CompletionKey
           completionCode <- peek p_CompletionCode
 
-          case completionCode of
-            cJOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO -> return ()
-            cJOB_OBJECT_MSG_EXIT_PROCESS        -> loop
-            cJOB_OBJECT_MSG_NEW_PROCESS         -> loop
-            _                                   -> loop
+          if completionCode == cJOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO
+                     then return ()
+             else if completionCode == cJOB_OBJECT_MSG_EXIT_PROCESS
+                     then loop
+             else if completionCode == cJOB_OBJECT_MSG_NEW_PROCESS
+                     then loop
+                     else loop
 
     loop
 
