@@ -16,7 +16,6 @@ Executable timeout
     Extensions: CPP
     Build-Depends: base, process
     if os(windows)
-        c-sources: win32_job.c
         Build-Depends: Win32
     else
         Build-Depends: unix
