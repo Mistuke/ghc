@@ -68,7 +68,7 @@ class Watcher(object):
         self.pool = count
         self.evt = threading.Event()
         self.sync_lock = threading.Lock()
-        if (count <= 0):
+        if count <= 0:
             self.evt.set()
 
     def wait(self):
@@ -77,6 +77,6 @@ class Watcher(object):
     def notify(self):
         self.sync_lock.acquire()
         self.pool -= 1
-        if (self.pool <= 0):
+        if self.pool <= 0:
             self.evt.set()
         self.sync_lock.release()

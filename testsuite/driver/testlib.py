@@ -606,20 +606,20 @@ parallelTests = []
 aloneTests = []
 allTestNames = set([])
 
-def runTest (watcher, opts, name, func, args):
+def runTest(watcher, opts, name, func, args):
     if config.use_threads:
        pool_sema.acquire()
-       t=threading.Thread(target=test_common_thread
-                         ,name=name
-                         ,args=(watcher, name, opts, func, args))
+       t=threading.Thread(target = test_common_thread,
+                          name = name,
+                          args = (watcher, name, opts, func, args))
        t.daemon = False
        t.start()
     else:
-        test_common_work (watcher, name, opts, func, args)
+        test_common_work(watcher, name, opts, func, args)
 
 # name  :: String
 # setup :: TestOpts -> IO ()
-def test (name, setup, func, args):
+def test(name, setup, func, args):
     global aloneTests
     global parallelTests
     global allTestNames
@@ -657,7 +657,7 @@ def test (name, setup, func, args):
 if config.use_threads:
     def test_common_thread(watcher, name, opts, func, args):
             try:
-                test_common_work(watcher, name,opts,func,args)
+                test_common_work(watcher, name, opts, func, args)
             finally:
                 pool_sema.release()
 
@@ -672,7 +672,7 @@ def get_package_cache_timestamp():
 
 do_not_copy = ('.hi', '.o', '.dyn_hi', '.dyn_o', '.out') # 12112
 
-def test_common_work (watcher, name, opts, func, args):
+def test_common_work(watcher, name, opts, func, args):
     try:
         t.total_tests += 1
         setLocalTestOpts(opts)
@@ -1338,17 +1338,17 @@ def interpreter_run(name, way, extra_hc_opts, top_mod):
 def split_file(in_fn, delimiter, out1_fn, out2_fn):
     # See Note [Universal newlines].
     with io.open(in_fn, 'r', encoding='utf8', errors='replace', newline=None) as infile:
-     with io.open(out1_fn, 'w', encoding='utf8', newline='') as out1:
-      with io.open(out2_fn, 'w', encoding='utf8', newline='') as out2:
-        line = infile.readline()
-        while (re.sub('^\s*','',line) != delimiter and line != ''):
-            out1.write(line)
-            line = infile.readline()
+        with io.open(out1_fn, 'w', encoding='utf8', newline='') as out1:
+            with io.open(out2_fn, 'w', encoding='utf8', newline='') as out2:
+                line = infile.readline()
+                while (re.sub('^\s*','',line) != delimiter and line != ''):
+                    out1.write(line)
+                    line = infile.readline()
 
-        line = infile.readline()
-        while (line != ''):
-            out2.write(line)
-            line = infile.readline()
+                line = infile.readline()
+                while (line != ''):
+                    out2.write(line)
+                    line = infile.readline()
 
 # -----------------------------------------------------------------------------
 # Utils
@@ -1395,14 +1395,14 @@ def stderr_ok(name, way):
 def dump_stderr( name ):
    print("Stderr:")
    with open(in_testdir(name, 'run.stderr')) as f:
-      print(f.read())
+       print(f.read())
 
 def read_no_crs(file):
     str = ''
     try:
         # See Note [Universal newlines].
         with io.open(file, 'r', encoding='utf8', errors='replace', newline=None) as h:
-           str = h.read()
+            str = h.read()
     except:
         # On Windows, if the program fails very early, it seems the
         # files stdout/stderr are redirected to may not get created
@@ -1412,7 +1412,7 @@ def read_no_crs(file):
 def write_file(file, str):
     # See Note [Universal newlines].
     with io.open(file, 'w', encoding='utf8', newline='') as h:
-       h.write(str)
+        h.write(str)
 
 # Note [Universal newlines]
 #
@@ -1723,7 +1723,7 @@ def if_verbose_dump( n, f ):
     if config.verbose >= n:
         try:
             with io.open(f) as file:
-             print(file.read())
+                print(file.read())
         except:
             print('')
 
@@ -1752,7 +1752,7 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
 
     hStdErr = subprocess.PIPE
     if stderr is subprocess.STDOUT:
-       hStdErr = subprocess.STDOUT
+        hStdErr = subprocess.STDOUT
 
     try:
         # cmd is a complex command in Bourne-shell syntax
@@ -1761,9 +1761,9 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
         # to invoke the Bourne shell
 
         r = subprocess.Popen([timeout_prog, timeout, cmd],
-                           stdin=subprocess.PIPE,
-                           stdout=subprocess.PIPE,
-                           stderr=hStdErr)
+                             stdin  = subprocess.PIPE,
+                             stdout = subprocess.PIPE,
+                             stderr = hStdErr)
 
         stdout_buffer, stderr_buffer = r.communicate(stdin_buffer)
     except Exception as e:

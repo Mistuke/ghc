@@ -304,10 +304,10 @@ for file in t_files:
     try:
         if PYTHON3:
             with io.open(file, encoding='utf8') as f:
-              src = f.read()
+                src = f.read()
         else:
             with open(file) as f:
-              src = f.read()
+                src = f.read()
 
         exec(src)
     except Exception as e:
