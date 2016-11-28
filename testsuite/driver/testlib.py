@@ -608,12 +608,12 @@ allTestNames = set([])
 
 def runTest(watcher, opts, name, func, args):
     if config.use_threads:
-       pool_sema.acquire()
-       t=threading.Thread(target = test_common_thread,
-                          name = name,
-                          args = (watcher, name, opts, func, args))
-       t.daemon = False
-       t.start()
+        pool_sema.acquire()
+        t = threading.Thread(target=test_common_thread,
+                             name=name,
+                             args=(watcher, name, opts, func, args))
+        t.daemon = False
+        t.start()
     else:
         test_common_work(watcher, name, opts, func, args)
 
@@ -1341,12 +1341,12 @@ def split_file(in_fn, delimiter, out1_fn, out2_fn):
         with io.open(out1_fn, 'w', encoding='utf8', newline='') as out1:
             with io.open(out2_fn, 'w', encoding='utf8', newline='') as out2:
                 line = infile.readline()
-                while (re.sub('^\s*','',line) != delimiter and line != ''):
+                while re.sub('^\s*','',line) != delimiter and line != '':
                     out1.write(line)
                     line = infile.readline()
 
                 line = infile.readline()
-                while (line != ''):
+                while line != '':
                     out2.write(line)
                     line = infile.readline()
 
@@ -1761,9 +1761,9 @@ def runCmd(cmd, stdin=None, stdout=None, stderr=None, timeout_multiplier=1.0):
         # to invoke the Bourne shell
 
         r = subprocess.Popen([timeout_prog, timeout, cmd],
-                             stdin  = subprocess.PIPE,
-                             stdout = subprocess.PIPE,
-                             stderr = hStdErr)
+                             stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE,
+                             stderr=hStdErr)
 
         stdout_buffer, stderr_buffer = r.communicate(stdin_buffer)
     except Exception as e:
