@@ -486,6 +486,7 @@ data GeneralFlag
    | Opt_PrintEvldWithShow
    | Opt_PrintBindContents
    | Opt_GenManifest
+   | Opt_GenSxSManifest
    | Opt_EmbedManifest
    | Opt_SharedImplib
    | Opt_BuildingCabalPackage
@@ -731,14 +732,6 @@ data DynFlags = DynFlags {
   dynObjectSuf          :: String,
   dynHiSuf              :: String,
 
-  -- Packages.isDllName needs to know whether a call is within a
-  -- single DLL or not. Normally it does this by seeing if the call
-  -- is to the same package, but for the ghc package, we split the
-  -- package between 2 DLLs. The dllSplit tells us which sets of
-  -- modules are in which package.
-  dllSplitFile          :: Maybe FilePath,
-  dllSplit              :: Maybe [Set String],
-
   outputFile            :: Maybe String,
   dynOutputFile         :: Maybe String,
   outputHi              :: Maybe String,
@@ -759,6 +752,14 @@ data DynFlags = DynFlags {
   frameworkPaths        :: [String],    -- used on darwin only
   cmdlineFrameworks     :: [String],    -- ditto
 
+  -- | Windows SxS settings
+  sxsResolveMode        :: SxSResolveMode,
+
+  -- | Shared Lib ABI settings
+  sharedLibABIName      :: Maybe String,
+  sharedLibABIVersion   :: Maybe String,
+
+  -- | Runtime system options
   rtsOpts               :: Maybe String,
   rtsOptsEnabled        :: RtsOptsEnabled,
   rtsOptsSuggestions    :: Bool,
@@ -1454,11 +1455,8 @@ dynamicTooMkDynamicDynFlags dflags0
 -- | Used by 'GHC.runGhc' to partially initialize a new 'DynFlags' value
 initDynFlags :: DynFlags -> IO DynFlags
 initDynFlags dflags = do
- let -- We can't build with dynamic-too on Windows, as labels before
-     -- the fork point are different depending on whether we are
-     -- building dynamically or not.
-     platformCanGenerateDynamicToo
-         = platformOS (targetPlatform dflags) /= OSMinGW32
+ let platformCanGenerateDynamicToo
+         = True
  refCanGenerateDynamicToo <- newIORef platformCanGenerateDynamicToo
  refNextTempSuffix <- newIORef 0
  refFilesToClean <- newIORef []
@@ -1546,9 +1544,6 @@ defaultDynFlags mySettings =
         dynObjectSuf            = "dyn_" ++ phaseInputExt StopLn,
         dynHiSuf                = "dyn_hi",
 
-        dllSplitFile            = Nothing,
-        dllSplit                = Nothing,
-
         pluginModNames          = [],
         pluginModNameOpts       = [],
         frontendPluginOpts      = [],
@@ -1568,6 +1563,10 @@ defaultDynFlags mySettings =
         rtsOpts                 = Nothing,
         rtsOptsEnabled          = RtsOptsSafeOnly,
         rtsOptsSuggestions      = True,
+
+        sxsResolveMode          = SxSDefault,
+        sharedLibABIName        = Nothing,
+        sharedLibABIVersion     = Nothing,
 
         hpcDir                  = ".hpc",
 
@@ -2273,29 +2272,15 @@ parseDynamicFlagsFull activeFlags cmdline dflags0 args = do
 
   let (dflags5, consistency_warnings) = makeDynFlagsConsistent dflags4
 
-  dflags6 <- case dllSplitFile dflags5 of
-             Nothing -> return (dflags5 { dllSplit = Nothing })
-             Just f ->
-                 case dllSplit dflags5 of
-                 Just _ ->
-                     -- If dllSplit is out of date then it would have
-                     -- been set to Nothing. As it's a Just, it must be
-                     -- up-to-date.
-                     return dflags5
-                 Nothing ->
-                     do xs <- liftIO $ readFile f
-                        let ss = map (Set.fromList . words) (lines xs)
-                        return $ dflags5 { dllSplit = Just ss }
-
   -- Set timer stats & heap size
-  when (enableTimeStats dflags6) $ liftIO enableTimingStats
-  case (ghcHeapSize dflags6) of
+  when (enableTimeStats dflags5) $ liftIO enableTimingStats
+  case (ghcHeapSize dflags5) of
     Just x -> liftIO (setHeapSize x)
     _      -> return ()
 
-  liftIO $ setUnsafeGlobalDynFlags dflags6
+  liftIO $ setUnsafeGlobalDynFlags dflags5
 
-  return (dflags6, leftover, consistency_warnings ++ sh_warns ++ warns)
+  return (dflags5, leftover, consistency_warnings ++ sh_warns ++ warns)
 
 updateWays :: DynFlags -> DynFlags
 updateWays dflags
@@ -2578,9 +2563,6 @@ dynamic_flags_deps = [
         (noArg (\d -> d { ghcLink=LinkStaticLib }))
   , make_ord_flag defGhcFlag "dynload"            (hasArg parseDynLibLoaderMode)
   , make_ord_flag defGhcFlag "dylib-install-name" (hasArg setDylibInstallName)
-    -- -dll-split is an internal flag, used only during the GHC build
-  , make_ord_flag defHiddenFlag "dll-split"
-      (hasArg (\f d -> d { dllSplitFile = Just f, dllSplit = Nothing }))
 
         ------- Libraries ---------------------------------------------------
   , make_ord_flag defFlag "L"   (Prefix addLibraryPath)
@@ -2667,6 +2649,18 @@ dynamic_flags_deps = [
         (NoArg (setRtsOptsEnabled RtsOptsNone))
   , make_ord_flag defGhcFlag "no-rtsopts-suggestions"
       (noArg (\d -> d {rtsOptsSuggestions = False}))
+  , make_ord_flag defGhcFlag "fgen-sxs-assembly"
+        (NoArg (setSxSResolveMode SxSDefault))
+  , make_ord_flag defGhcFlag "fgen-sxs-assembly=cache"
+        (NoArg (setSxSResolveMode SxSCache))
+  , make_ord_flag defGhcFlag "fgen-sxs-assembly=default"
+        (NoArg (setSxSResolveMode SxSDefault))
+  , make_ord_flag defGhcFlag "fgen-sxs-assembly=relative"
+        (NoArg (setSxSResolveMode SxSRelative))
+  , make_ord_flag defGhcFlag "dylib-abi-name"
+        (SepArg setSharedABIName)
+  , make_ord_flag defGhcFlag "dylib-abi-version"
+        (SepArg setSharedABIVersion)
 
   , make_ord_flag defGhcFlag "main-is"              (SepArg setMainIs)
   , make_ord_flag defGhcFlag "haddock"              (NoArg (setGeneralFlag Opt_Haddock))
@@ -3513,6 +3507,7 @@ fFlagsDeps = [
   flagSpec "full-laziness"                    Opt_FullLaziness,
   flagSpec "fun-to-thunk"                     Opt_FunToThunk,
   flagSpec "gen-manifest"                     Opt_GenManifest,
+  flagSpec "gen-sxs-assembly"                 Opt_GenSxSManifest,
   flagSpec "ghci-history"                     Opt_GhciHistory,
   flagGhciSpec "local-ghci-history"           Opt_LocalGhciHistory,
   flagSpec "ghci-sandbox"                     Opt_GhciSandbox,
@@ -3800,6 +3795,7 @@ defaultFlags settings
   = [ Opt_AutoLinkPackages,
       Opt_DiagnosticsShowCaret,
       Opt_EmbedManifest,
+      Opt_GenSxSManifest,
       Opt_FlatCache,
       Opt_GenManifest,
       Opt_GhciHistory,
@@ -4772,6 +4768,21 @@ setRtsOptsEnabled :: RtsOptsEnabled -> DynP ()
 setRtsOptsEnabled arg  = upd $ \ d -> d {rtsOptsEnabled = arg}
 
 -----------------------------------------------------------------------------
+-- Windows SxS opts
+
+setSxSResolveMode :: SxSResolveMode -> DynP ()
+setSxSResolveMode arg  = upd $ \ d -> d {sxsResolveMode = arg}
+
+-----------------------------------------------------------------------------
+-- Shared ABI opts
+
+setSharedABIName :: String -> DynP ()
+setSharedABIName arg  = upd $ \ d -> d {sharedLibABIName = Just arg}
+
+setSharedABIVersion :: String -> DynP ()
+setSharedABIVersion arg  = upd $ \ d -> d {sharedLibABIVersion = Just arg}
+
+-----------------------------------------------------------------------------
 -- Hpc stuff
 
 setOptHpcDir :: String -> DynP ()
@@ -4857,7 +4868,7 @@ compilerInfo dflags
        ("RTS ways",                    cGhcRTSWays),
        ("RTS expects libdw",           showBool cGhcRtsWithLibdw),
        -- Whether or not we support @-dynamic-too@
-       ("Support dynamic-too",         showBool $ not isWindows),
+       ("Support dynamic-too",         "YES"),
        -- Whether or not we support the @-j@ flag with @--make@.
        ("Support parallel --make",     "YES"),
        -- Whether or not we support "Foo from foo-0.1-XXX:Foo" syntax in
@@ -4961,11 +4972,6 @@ makeDynFlagsConsistent :: DynFlags -> (DynFlags, [Located String])
 -- ensure that a later change doesn't invalidate an earlier check.
 -- Be careful not to introduce potential loops!
 makeDynFlagsConsistent dflags
- -- Disable -dynamic-too on Windows (#8228, #7134, #5987)
- | os == OSMinGW32 && gopt Opt_BuildDynamicToo dflags
-    = let dflags' = gopt_unset dflags Opt_BuildDynamicToo
-          warn    = "-dynamic-too is not supported on Windows"
-      in loop dflags' warn
  | hscTarget dflags == HscC &&
    not (platformUnregisterised (targetPlatform dflags))
     = if cGhcWithNativeCodeGen == "YES"
