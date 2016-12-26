@@ -71,6 +71,7 @@ import UniqSet
 import Module
 import Util
 import Panic
+import Platform
 import Outputable
 import Maybes
 
@@ -1901,10 +1902,10 @@ isDllName dflags this_mod name
         -- I much rather have dynamic TH not supported than the entire Dynamic linking
         -- not due to a hack.
         -- Also not sure this would break on Windows anyway.
-        OSMinGW32 -> moduleUnitId (findMod mod) /= moduleUnitId (findMod this_mod)
+        OSMinGW32 -> moduleUnitId mod /= this_pkg
 
         -- For the other platforms, still perform the hack
-        _         -> findMod mod /= findMod this_mod
+        _         -> mod /= this_mod
 
   | otherwise = False  -- no, it is not even an external name
 
