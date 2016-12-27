@@ -4902,7 +4902,6 @@ compilerInfo dflags
   where
     showBool True  = "YES"
     showBool False = "NO"
-    isWindows = platformOS (targetPlatform dflags) == OSMinGW32
 
 -- Produced by deriveConstants
 #include "GHCConstantsHaskellWrappers.hs"
