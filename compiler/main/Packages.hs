@@ -1902,7 +1902,7 @@ isDllName dflags this_mod name
         -- I much rather have dynamic TH not supported than the entire Dynamic linking
         -- not due to a hack.
         -- Also not sure this would break on Windows anyway.
-        OSMinGW32 -> moduleUnitId mod /= this_pkg
+        OSMinGW32 -> moduleUnitId mod /= moduleUnitId this_mod
 
         -- For the other platforms, still perform the hack
         _         -> mod /= this_mod
