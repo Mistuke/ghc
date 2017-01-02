@@ -252,7 +252,7 @@ coreTopBindToStg dflags this_mod env body_fvs (NonRec id rhs)
 
         bind = StgTopLifted $ StgNonRec id stg_rhs
     in
-    ASSERT2(consistentCafInfo id bind, ppr id )
+    ASSERT2(consistentCafInfo [id] bind, ppr id )
       -- NB: previously the assertion printed 'rhs' and 'bind'
       --     as well as 'id', but that led to a black hole
       --     where printing the assertion error tripped the
@@ -276,24 +276,24 @@ coreTopBindToStg dflags this_mod env body_fvs (Rec pairs)
 
         bind = StgTopLifted $ StgRec (zip binders stg_rhss)
     in
-    ASSERT2(consistentCafInfo (head binders) bind, ppr binders)
+    ASSERT2(consistentCafInfo binders bind, ppr binders)
     (env', fvs' `unionFVInfo` body_fvs, bind)
 
 
--- Assertion helper: this checks that the CafInfo on the Id matches
+-- Assertion helper: this checks that the CafInfo on any the Ids matches
 -- what CoreToStg has figured out about the binding's SRT.  The
 -- CafInfo will be exact in all cases except when CorePrep has
 -- floated out a binding, in which case it will be approximate.
-consistentCafInfo :: Id -> GenStgTopBinding Var Id -> Bool
-consistentCafInfo id bind
-  = WARN( not (exact || is_sat_thing) , ppr id <+> ppr id_marked_caffy <+> ppr binding_is_caffy )
+consistentCafInfo :: [Id] -> GenStgTopBinding Var Id -> Bool
+consistentCafInfo ids bind
+  = WARN( not (exact || is_sat_thing) , ppr ids <+> ppr id_marked_caffy <+> ppr binding_is_caffy )
     safe
   where
     safe  = id_marked_caffy || not binding_is_caffy
     exact = id_marked_caffy == binding_is_caffy
-    id_marked_caffy  = mayHaveCafRefs (idCafInfo id)
+    id_marked_caffy  = any mayHaveCafRefs $ map idCafInfo ids
     binding_is_caffy = topStgBindHasCafRefs bind
-    is_sat_thing = occNameFS (nameOccName (idName id)) == fsLit "sat"
+    is_sat_thing = any (\id -> occNameFS (nameOccName (idName id)) == fsLit "sat") ids
 
 coreToTopStgRhs
         :: DynFlags

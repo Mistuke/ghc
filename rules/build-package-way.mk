@@ -58,8 +58,24 @@ ifeq "$3" "dyn"
 # On windows we have to supply the extra libs this one links to when building it.
 ifeq "$$(HostOS_CPP)" "mingw32"
 $$($1_$2_$3_LIB) : $$($1_$2_$3_ALL_OBJS) $$(ALL_RTS_LIBS) $$($1_$2_$3_DEPS_LIBS)
-	$$(call build-dll,$1,$2,$3,-L$1/$2/build,$$($1_$2_$3_HS_OBJS) $$($1_$2_$3_NON_HS_OBJS) \
-    ,$$@, "NO", "$$($1_PACKAGE)", "$$($1_$2_VERSION)")
+	# Call out to the shell script to decide how to build the util dll.
+	# 1  = dir
+	# 2  = distdir
+	# 3  = way
+	# 4  = extra flags
+	# 5  = extra libraries to link
+	# 6  = object files to link
+	# 7  = output filename
+	# 8  = link command
+	# 9  = create delay load import lib
+	# 10 = SxS Name
+	# 11 = SxS Version
+	rules/build-dll-win32.sh link "$1" "$2" "$3" "-L$1/$2/build" "" "$$($1_$2_$3_HS_OBJS) $$($1_$2_$3_NON_HS_OBJS)" \
+           "$$@" "$$(call cmd,$1_$2_HC) $$($1_$2_$3_ALL_HC_OPTS) $$($1_$2_$3_GHC_LD_OPTS) \
+           -shared -dynamic -dynload deploy \
+           $(addprefix -l,$($1_$2_EXTRA_LIBRARIES)) \
+           -no-auto-link-packages" "YES" \
+           "$$($1_PACKAGE)" "$$($1_$2_VERSION)"
 
 else # ifneq "$$(HostOS_CPP)" "mingw32"
 $$($1_$2_$3_LIB) : $$($1_$2_$3_ALL_OBJS) $$(ALL_RTS_LIBS) $$($1_$2_$3_DEPS_LIBS)
@@ -128,22 +144,4 @@ endif # "$3" "v"
 
 $(call profEnd, build-package-way($1,$2,$3))
 endef # build-package-way
-
-# $1 = dir
-# $2 = distdir
-# $3 = way
-# $4 = extra flags
-# $5 = object files to link
-# $6 = output filename
-# $7 = indicated whether the dll should be delay loaded
-# $8 = SxS Name
-# $9 = SxS Version
-define build-dll
-# Call out to the shell script to decide how to build the dll.
-rules/build-dll-win32.sh link "$1" "$2" "$3" "$4" "$5" "$6" "$(call cmd,$1_$2_HC) $($1_$2_$3_ALL_HC_OPTS) $($1_$2_$3_GHC_LD_OPTS) $4 \
-           -shared -dynamic -dynload deploy \
-           $(addprefix -l,$($1_$2_EXTRA_LIBRARIES)) \
-           -no-auto-link-packages" $7 \
-           $8 $9
-endef
 

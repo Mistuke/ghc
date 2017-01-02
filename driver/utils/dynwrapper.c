@@ -18,6 +18,7 @@ int rtsOpts;
 #include <Windows.h>
 #include <Shlwapi.h>
 #include <wchar.h>
+#include <stdbool.h>
 
 #include "Rts.h"
 
@@ -203,8 +204,8 @@ int main(int argc, char *argv[]) {
     main_p       = GetNonNullProcAddress(hProgDll, "ZCMain_main_closure");
     rts_config   = *(RtsConfig*)GetNonNullProcAddress(hRtsDll, "defaultRtsConfig");
     rts_config.rts_opts_enabled     = rtsOpts;
-    rts_config.rts_opts_suggestions = rtsFalse;
-    rts_config.rts_hs_main          = rtsTrue;
+    rts_config.rts_opts_suggestions = false;
+    rts_config.rts_hs_main          = true;
 
     int hs_exit_code = hs_main_p(argc, argv, main_p, rts_config);
 

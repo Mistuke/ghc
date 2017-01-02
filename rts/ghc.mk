@@ -201,18 +201,21 @@ $$(rts_$1_LIB) : $$(rts_$1_OBJS) $(ALL_RTS_DEF_LIBS) rts/dist/libs.depend rts/di
 	"$$(RM)" $$(RM_OPTS) $$@
 	# Call out to the shell script to decide how to build the dll.
 	# Making a shared library for the RTS.
-	# $1 = dir
-	# $2 = distdir
-	# $3 = way
-	# $4 = extra flags
-	# $5 = object files to link
-	# $6 = output filename
-	# $7 = indicated whether the dll should be delay loaded
-	rules/build-dll-win32.sh link "rts/dist/build" "rts/dist/build" "" "" "$$(rts_$1_OBJS)" "$$@" "$$(rts_dist_HC) -this-unit-id rts -shared -dynamic -dynload deploy \
+	# $$1  = dir
+	# $$2  = distdir
+	# $$3  = way
+	# $$4  = extra flags
+	# $$5  = extra libraries to link
+	# $$6  = object files to link
+	# $$7  = output filename
+	# $$8  = link command
+	# $$9  = create delay load import lib
+	# $$10 = SxS Name
+	# $$11 = SxS Version
+	rules/build-dll-win32.sh link "rts/dist/build" "rts/dist/build" "" "" "$$(ALL_RTS_DEF_LIBS)" "$$(rts_$1_OBJS)" "$$@" "$$(rts_dist_HC) -this-unit-id rts -shared -dynamic -dynload deploy \
          -no-auto-link-packages -Lrts/dist/build -l$$(LIBFFI_NAME) \
          `cat rts/dist/libs.depend | tr '\n' ' '` \
-         $$(ALL_RTS_DEF_LIBS) \
-         $$(rts_dist_$1_GHC_LD_OPTS)" "NO" \
+         $$(rts_dist_$1_GHC_LD_OPTS)" "YES" \
          "$(rts_INSTALL_INFO)-$(subst dyn,,$(subst _dyn,,$(subst v,,$1)))" "$(ProjectVersion)"
 
 else

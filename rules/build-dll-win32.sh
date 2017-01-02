@@ -27,15 +27,16 @@ build_delay_import_lib()
 # $2  = distdir
 # $3  = way
 # $4  = extra flags
-# $5  = object files to link
-# $6  = output filename
-# $7  = link command
-# $8  = create delay load import lib
-# $9  = SxS Name
-# $10 = SxS Version
+# $5  = extra libraries to link
+# $6  = object files to link
+# $7  = output filename
+# $8  = link command
+# $9  = create delay load import lib
+# $10 = SxS Name
+# $11 = SxS Version
 process_dll_link() {
-    ext="${6##*.}"
-    base="${6%.*}"
+    ext="${7##*.}"
+    base="${7%.*}"
     exports="$base.lst"
 
     # Maximum number of symbols to allow into
@@ -47,20 +48,20 @@ process_dll_link() {
     # from the object files. Use this to lower the max amount of symbols.
     #
     # This granularity is the best we can do without --print-map like info.
-    RAW_EXPORTS=`nm -g $5 | sed -nr 's/^[a-z,A-Z,0-9]+\s([A-Z])\s(.+)$/\1 \2\n/p' | sed -r 's/^.+:.*$//g' | sed '/^\s*$/d' | sort | uniq -u`
+    RAW_EXPORTS=`nm -g $6 | sed -nr 's/^[a-z,A-Z,0-9]+\s([A-Z])\s(.+)$/\1 \2\n/p' | sed -r 's/^.+:.*$//g' | sed '/^\s*$/d' | sort | uniq -u`
     echo -e "${RAW_EXPORTS}" | sed -nr 's/^[A-Z]+\s(.+)$/\1/p' > $exports
     SYMBOLS_OBJ=`cat $exports | wc -l | cut -d' ' -f1`
-    echo "Number of symbols in object files for $6: $SYMBOLS_OBJ"
+    echo "Number of symbols in object files for $7: $SYMBOLS_OBJ"
 
     # Side-by-Side assembly generation flags for GHC. Pass these along so the DLLs
     # get the proper manifests generated.
-    SXS_OPTS="-fgen-sxs-assembly -dylib-abi-name \"$9\" -dylib-abi-version \"${10}\""
+    SXS_OPTS="-fgen-sxs-assembly -dylib-abi-name \"${10}\" -dylib-abi-version \"${11}\""
 
-    # echo "Number of symbols in $6: $SYMBOLS_DLL"
+    # echo "Number of symbols in $7: $SYMBOLS_DLL"
     # Now check that the DLL doesn't have too many symbols. See trac #5987.
     case $(($SYMBOLS_OBJ / $DLL_MAX_SYMBOLS)) in
         0)
-            echo DLL $6 OK, no need to split
+            echo DLL $7 OK, no need to split
             defFile="$base.def"
             elst="$base.elst"
 
@@ -81,23 +82,23 @@ process_dll_link() {
             DLLimport="$base.dll.a"
             dlltool -d $defFile -l $DLLimport
 
-            cmd="$7 $DLLimport $5 ${SXS_OPTS} -optl-Wl,--retain-symbols-file=$exports -o $6"
+            cmd="$8 $6 $5 ${SXS_OPTS} -optl-Wl,--retain-symbols-file=$exports -o $7"
             echo "$cmd"
             eval "$cmd" || exit 1
-            build_delay_import_lib $defFile $DLLimport $8
+            build_delay_import_lib $defFile $DLLimport $9
             exit 0
             ;;
         [0-9]*)
-            echo Too many symbols in DLL $6
+            echo Too many symbols in DLL $7
             echo "We'll have to split the dll..."
             ;; 
         *)
-            echo bad DLL $6
+            echo bad DLL $7
             exit 1
             ;;
     esac
 
-    echo "OK, we only have space for $DLL_MAX_SYMBOLS symbols from object files when building $6"
+    echo "OK, we only have space for $DLL_MAX_SYMBOLS symbols from object files when building $7"
 
     # First split the dlls up by whole object files
     # To do this, we iterate over all object file and
@@ -108,7 +109,7 @@ process_dll_link() {
     declare -A buffer
     declare -A obj_files
 
-    for obj in $5
+    for obj in $6
     do
         obj_symbols=`nm -g $obj | sed -nr 's/^[a-z,A-Z,0-9]+\s[A-Z]\s(.+)$/\1/p' | sed -r 's/^.+:.*$//g' | sed '/^\s*$/d'`
         obj_count=`echo $obj_symbols | wc -w | cut -d' ' -f1`
@@ -177,10 +178,10 @@ process_dll_link() {
                 imports=`echo "$imports" "$base-pt$j.dll.a"`
             fi
         done
-        cmd="$7 $objs $def $imports ${SXS_OPTS} -optl-Wl,--retain-symbols-file=$elstfile -o $DLLfile"
+        cmd="$8 $objs $5 $def $imports ${SXS_OPTS} -optl-Wl,--retain-symbols-file=$elstfile -o $DLLfile"
         echo "$cmd"
         eval "$cmd" || exit 1
-        build_delay_import_lib $def "$base-pt$j.dll.a" $8
+        build_delay_import_lib $def "$base-pt$j.dll.a" $9
     done
 
     # Do some cleanup and create merged lib.
@@ -223,7 +224,7 @@ usage() {
 
 case $1 in
     link)
-        process_dll_link "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}"
+        process_dll_link "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12}"
         exit 0
         ;;
     *)
