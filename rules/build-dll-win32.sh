@@ -151,10 +151,11 @@ process_dll_link() {
         # Now do the same split and partitioning as above.
         # I'm wondering if these can't be refactored to share code with above
         # but my shell foo is weak. So I'll leave it as is for now.
-        globals=`echo -e "${RAW_EXPORTS}" | sed -nr 's/^[DdGgrRSs]\s(.+)$/\1\n/p'1 | sed '/^\s*$/d'`
-        functions=`echo -e "${RAW_EXPORTS}" | sed -nr 's/^[^DdGgrRSs]\s(.+)$/\1\n/p'1 | sed '/^\s*$/d'`
-        echo -e "${globals}" | awk -v root="$defFile" '{def=root;}{print "    \"" $0 "\" DATA"> def}'
-        echo -e "${functions}" | awk -v root="$defFile" '{def=root;}{print "    \"" $0 "\"">> def}'
+        #globals=`sed -nr 's/^[DdGgrRSs]\s(.+)$/\1\n/p'1 "$elstfile" | sed '/^\s*$/d'`
+        #functions=`sed -nr 's/^[^DdGgrRSs]\s(.+)$/\1\n/p'1 "$elstfile" | sed '/^\s*$/d'`
+        functions=`sed '/^\s*$/d' "$lstfile"`
+        #echo -e "${globals}" | awk -v root="$file" '{def=root;}{print "    \"" $0 "\" DATA"> def}'
+        echo -e "${functions}" | awk -v root="$file" '{def=root;}{print "    \"" $0 "\"">> def}'
         sed -i "1i\LIBRARY \"$DLLfile\"\\nEXPORTS" $file
 
         echo "Processing $file..."
@@ -166,7 +167,7 @@ process_dll_link() {
     do
         def="$base-pt$i.def"
         objfile="$base-pt$i.objs"
-        elstfile="$base-pt$i.lst"
+        lstfile="$base-pt$i.lst"
         objs=`cat "$objfile" | tr "\n" " "`
         basefile="$(basename $def)"
         DLLfile="$base-pt$i.$ext"
@@ -178,7 +179,7 @@ process_dll_link() {
                 imports=`echo "$imports" "$base-pt$j.dll.a"`
             fi
         done
-        cmd="$8 $objs $5 $def $imports ${SXS_OPTS} -optl-Wl,--retain-symbols-file=$elstfile -o $DLLfile"
+        cmd="$8 $objs $5 $def $imports ${SXS_OPTS} -optl-Wl,--retain-symbols-file=$lstfile -o $DLLfile"
         echo "$cmd"
         eval "$cmd" || exit 1
         build_delay_import_lib $def "$base-pt$j.dll.a" $9
