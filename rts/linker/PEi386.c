@@ -71,6 +71,7 @@ static UChar *cstring_from_COFF_symbol_name(
 #if defined(x86_64_HOST_ARCH)
 static size_t makeSymbolExtra_PEi386(
     ObjectCode* oc,
+    uint64_t index,
     size_t s,
     char* symbol);
 #endif
@@ -905,8 +906,7 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
                    rel->VirtualAddress );
          sym = (COFF_symbol*)
                myindex ( sizeof_COFF_symbol, symtab, rel->SymbolTableIndex );
-         /* Hmm..mysterious looking offset - what's it for? SOF */
-         printName ( sym->Name, strtab -10 );
+         printName ( sym->Name, strtab );
          debugBelch("'\n" );
       }
 
@@ -1221,24 +1221,25 @@ ocAllocateSymbolExtras_PEi386 ( ObjectCode* oc )
 }
 
 static size_t
-makeSymbolExtra_PEi386( ObjectCode* oc, size_t s, char* symbol )
+makeSymbolExtra_PEi386( ObjectCode* oc, uint64_t index, size_t s, char* symbol )
 {
     unsigned int curr_thunk;
     SymbolExtra *extra;
-
-    curr_thunk = oc->first_symbol_extra;
-    if (curr_thunk >= oc->n_symbol_extras) {
-      barf("Can't allocate thunk for %s", symbol);
+    curr_thunk = oc->first_symbol_extra + index;
+    if (index >= oc->n_symbol_extras) {
+      IF_DEBUG(linker, debugBelch("makeSymbolExtra first:%d, num:%lu, member:%s, index:%llu\n", curr_thunk, oc->n_symbol_extras, oc->archiveMemberName, index));
+      barf("Can't allocate thunk for `%s' in `%" PATH_FMT "' with member `%s'", symbol, oc->fileName, oc->archiveMemberName);
     }
 
     extra = oc->symbol_extras + curr_thunk;
 
-    // jmp *-14(%rip)
-    static uint8_t jmp[] = { 0xFF, 0x25, 0xF2, 0xFF, 0xFF, 0xFF };
-    extra->addr = (uint64_t)s;
-    memcpy(extra->jumpIsland, jmp, 6);
-
-    oc->first_symbol_extra++;
+    if (!extra->addr)
+    {
+        // jmp *-14(%rip)
+        static uint8_t jmp[] = { 0xFF, 0x25, 0xF2, 0xFF, 0xFF, 0xFF };
+        extra->addr = (uint64_t)s;
+        memcpy(extra->jumpIsland, jmp, 6);
+    }
 
     return (size_t)extra->jumpIsland;
 }
@@ -1349,6 +1350,10 @@ ocResolve_PEi386 ( ObjectCode* oc )
          sym = (COFF_symbol*)
                myindex ( sizeof_COFF_symbol,
                          symtab, reltab_j->SymbolTableIndex );
+         uint64_t symIndex = ((uint64_t)myindex(sizeof_COFF_symbol, symtab,
+                                                reltab_j->SymbolTableIndex)
+                                        - (uint64_t)symtab) / sizeof_COFF_symbol;
+
          IF_DEBUG(linker,
                   debugBelch(
                             "reloc sec %2d num %3d:  type 0x%-4x   "
@@ -1367,7 +1372,6 @@ ocResolve_PEi386 ( ObjectCode* oc )
             copyName ( sym->Name, strtab, symbol, 1000-1 );
             S = (size_t) lookupSymbol_( (char*)symbol );
             if ((void*)S == NULL) {
-
                 errorBelch("%" PATH_FMT ": unknown symbol `%s'\n", oc->fileName, symbol);
                 return 0;
             }
@@ -1425,7 +1429,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
                    v = S + ((size_t)A);
                    if (v >> 32) {
                        copyName ( sym->Name, strtab, symbol, 1000-1 );
-                       S = makeSymbolExtra_PEi386(oc, S, (char *)symbol);
+                       S = makeSymbolExtra_PEi386(oc, symIndex, S, (char *)symbol);
                        /* And retry */
                        v = S + ((size_t)A);
                        if (v >> 32) {
@@ -1443,7 +1447,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
                    if ((v >> 32) && ((-v) >> 32)) {
                        /* Make the trampoline then */
                        copyName ( sym->Name, strtab, symbol, 1000-1 );
-                       S = makeSymbolExtra_PEi386(oc, S, (char *)symbol);
+                       S = makeSymbolExtra_PEi386(oc, symIndex, S, (char *)symbol);
                        /* And retry */
                        v = ((intptr_t)S) + ((intptr_t)(Int32)A) - ((intptr_t)pP) - 4;
                        if ((v >> 32) && ((-v) >> 32)) {
