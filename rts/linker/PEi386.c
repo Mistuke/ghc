@@ -58,6 +58,7 @@
 #include "GetEnv.h"
 #include "linker/PEi386.h"
 #include "LinkerInternals.h"
+#include "PathUtils.h"
 
 #include <windows.h>
 #include <shfolder.h> /* SHGetFolderPathW */
@@ -83,6 +84,12 @@ static void addDLLHandle(
 static int verifyCOFFHeader(
     COFF_header *hdr,
     pathchar *filename);
+
+static bool checkIfDllLoaded(
+    pathchar* dll_name);
+
+static pathchar* normalize_dll_name(
+    pathchar* dll_name);
 
 /* Add ld symbol for PE image base. */
 #if defined(__GNUC__)
@@ -143,11 +150,38 @@ static IndirectAddr* indirects = NULL;
 /* Adds a DLL instance to the list of DLLs in which to search for symbols. */
 static void addDLLHandle(pathchar* dll_name, HINSTANCE instance) {
     OpenedDLL* o_dll;
-    o_dll = stgMallocBytes( sizeof(OpenedDLL), "addDLLHandle" );
-    o_dll->name     = dll_name ? pathdup(dll_name) : NULL;
+    pathchar* basename = normalize_dll_name(dll_name);
+    o_dll           = stgMallocBytes( sizeof(OpenedDLL), "addDLLHandle" );
+    o_dll->name     = basename ? pathdup(basename) : NULL;
     o_dll->instance = instance;
     o_dll->next     = opened_dlls;
     opened_dlls     = o_dll;
+    stgFree(basename);
+}
+
+static bool checkIfDllLoaded(pathchar* dll_name)
+{
+    pathchar* basename = normalize_dll_name(dll_name);
+    for (OpenedDLL* o_dll = opened_dlls; o_dll != NULL; o_dll = o_dll->next) {
+        if (0 == pathcmp(o_dll->name, basename))
+        {
+            stgFree(basename);
+            return true;
+        }
+    }
+
+    stgFree(basename);
+    return false;
+}
+
+static pathchar* normalize_dll_name(pathchar* dll_name)
+{
+    pathchar *ret;
+    size_t memberLen = pathlen(dll_name) + 1;
+    ret = stgMallocBytes(pathsize * memberLen, "pathdir(path)");
+    _wsplitpath_s(dll_name, NULL, 0, NULL, 0, ret, memberLen, NULL, 0);
+    _wcslwr_s(ret, pathlen(ret) + 1);
+    return ret;
 }
 
 void freePreloadObjectFile_PEi386(ObjectCode *oc)
@@ -169,17 +203,14 @@ addDLL_PEi386( pathchar *dll_name )
 {
    /* ------------------- Win32 DLL loader ------------------- */
 
-   pathchar*      buf;
-   OpenedDLL* o_dll;
+   pathchar*  buf;
    HINSTANCE  instance;
 
    IF_DEBUG(linker, debugBelch("\naddDLL; dll_name = `%" PATH_FMT "'\n", dll_name));
 
    /* See if we've already got it, and ignore if so. */
-   for (o_dll = opened_dlls; o_dll != NULL; o_dll = o_dll->next) {
-      if (0 == pathcmp(o_dll->name, dll_name))
-         return NULL;
-   }
+    if (checkIfDllLoaded(dll_name))
+        return NULL;
 
    /* The file name has no suffix (yet) so that we can try
       both foo.dll and foo.drv
@@ -233,9 +264,28 @@ addDLL_PEi386( pathchar *dll_name )
        goto error;
    }
 
+   addDLLHandle(buf, instance);
    stgFree(buf);
 
-   addDLLHandle(dll_name, instance);
+   /* Now discover the depencies of dll_name that were just loaded
+      in our process space.  The reason is we have access to them
+      without the user having to explicitly specify them.  */
+   PIMAGE_NT_HEADERS header = (PIMAGE_NT_HEADERS)((BYTE *)instance + ((PIMAGE_DOS_HEADER)instance)->e_lfanew);
+   PIMAGE_IMPORT_DESCRIPTOR imports = (PIMAGE_IMPORT_DESCRIPTOR)((BYTE *)instance + header->
+       OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+   const pathchar* ms_dll = WSTR("api-ms-win-");
+   const int len = wcslen(ms_dll);
+
+   do {
+       pathchar* module = mkPath((char*)(BYTE *)instance + imports->Name);
+       if (0 != wcsncmp(module, ms_dll, len) && !checkIfDllLoaded(module))
+       {
+           IF_DEBUG(linker, debugBelch("Loading dependency %" PATH_FMT " -> %" PATH_FMT ".\n", dll_name, module));
+           addDLLHandle(module, GetModuleHandleW(module));
+       }
+       stgFree(module);
+       imports++;
+   } while (imports->Name);
 
    return NULL;
 
