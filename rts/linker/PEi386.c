@@ -91,6 +91,9 @@ static bool checkIfDllLoaded(
 static pathchar* normalize_dll_name(
     pathchar* dll_name);
 
+static const char* post_process_add_dll(
+    pathchar* entry);
+
 /* Add ld symbol for PE image base. */
 #if defined(__GNUC__)
 #define __ImageBase __MINGW_LSYMBOL(_image_base__)
@@ -117,9 +120,15 @@ void initLinker_PEi386()
      * These two libraries cause problems when added to the static link,
      * but are necessary for resolving symbols in GHCi, hence we load
      * them manually here.
+     *
+     * Most of these are included by base, but GCC always includes them
+     * So lets make sure we always have them too.
      */
     addDLL(WSTR("msvcrt"));
     addDLL(WSTR("kernel32"));
+    addDLL(WSTR("advapi32"));
+    addDLL(WSTR("shell32"));
+    addDLL(WSTR("user32"));
     addDLLHandle(WSTR("*.exe"), GetModuleHandle(NULL));
 #endif
 }
@@ -287,7 +296,7 @@ addDLL_PEi386( pathchar *dll_name )
        imports++;
    } while (imports->Name);
 
-   return NULL;
+   return post_process_add_dll(dll_name);
 
 error:
    stgFree(buf);
@@ -315,6 +324,31 @@ pathchar* findSystemLibrary_PEi386( pathchar* dll_name )
         return NULL;
     }
 
+    return result;
+}
+
+/* GCC does some post processing of libraries it adds to the link
+   depending on if other libraries are found in the requested
+   program's vtable. This means that for GHCi we need more libraries.
+   Let's normalize the behavior by replicating GCC's behavior.
+   See Trac #....
+
+   See LIB_SPEC macro in gcc/config/i386/mingw32.h.
+   Also we don't currently have -mwindows in GCC, so that isn't handled
+   yet. When we do support it the related libs should be added here.
+   See Trac #2460.  */
+static const char* post_process_add_dll(pathchar* entry)
+{
+    pathchar* basename = normalize_dll_name(entry);
+    const char* result = NULL;
+
+    // if std lib is included, then make sure psapi is included.
+    if (0 == wcsncmp(L"stdc++", basename, 6) || 0 == wcsncmp(L"libstdc++", basename, 9))
+    {
+        result = addDLL_PEi386(L"psapi");
+    }
+
+    stgFree(basename);
     return result;
 }
 
