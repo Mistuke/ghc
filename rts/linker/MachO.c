@@ -949,7 +949,7 @@ ocGetNames_MachO(ObjectCode* oc)
         }
     }
     IF_DEBUG(linker, debugBelch("ocGetNames_MachO: %d external symbols\n", oc->n_symbols));
-    oc->symbols = stgMallocBytes(oc->n_symbols * sizeof(SymbolName*),
+    oc->symbols = stgMallocBytes(oc->n_symbols * sizeof(Symbol*),
                                    "ocGetNames_MachO(oc->symbols)");
 
     if(symLC)
@@ -970,9 +970,10 @@ ocGetNames_MachO(ObjectCode* oc)
                     else
                     {
                             IF_DEBUG(linker, debugBelch("ocGetNames_MachO: inserting %s\n", nm));
+                            Section section = sections[nlist[i].n_sect - 1];
                             SymbolAddr* addr = image
-                                       + sections[nlist[i].n_sect - 1].offset
-                                       - sections[nlist[i].n_sect - 1].addr
+                                       + section.offset
+                                       - section.addr
                                        + nlist[i].n_value;
 
                             ghciInsertSymbolTable( oc->fileName
@@ -981,8 +982,10 @@ ocGetNames_MachO(ObjectCode* oc)
                                                  , addr
                                                  , HS_BOOL_FALSE
                                                  , oc);
-
-                            oc->symbols[curSymbol] = nm;
+                            oc->symbols[curSymbol] = stgMallocBytes(sizeof(Symbol),
+                                "ocGetNames_MachO(oc->symbols[curSymbol])");
+                            oc->symbols[curSymbol]->name    = nm;
+                            oc->symbols[curSymbol]->section = &section;
                             curSymbol++;
                     }
                 }
@@ -1015,7 +1018,9 @@ ocGetNames_MachO(ObjectCode* oc)
                 IF_DEBUG(linker, debugBelch("ocGetNames_MachO: inserting common symbol: %s\n", nm));
                 ghciInsertSymbolTable(oc->fileName, symhash, nm,
                                        (void*)commonCounter, HS_BOOL_FALSE, oc);
-                oc->symbols[curSymbol] = nm;
+                oc->symbols[curSymbol]->name    = nm;
+                /* Common symbol, doesn't belong in any section.  */
+                oc->symbols[curSymbol]->section = NULL;
                 curSymbol++;
 
                 commonCounter += sz;

@@ -74,6 +74,17 @@ typedef
    }
    ProddableBlock;
 
+/* A symbol is a pair of a name and the section it belongs to.
+   This is a trade-of between size and speed. Having one top level
+   pair to search is faster but requires an extra pointer per symbol
+   to work.  */
+typedef
+    struct _Symbol {
+        SymbolName* name;
+        Section*    section;
+    }
+    Symbol;
+
 /*
  * We must keep track of the StablePtrs that are created for foreign
  * exports by constructor functions when the module is loaded, so that
@@ -127,7 +138,7 @@ typedef struct _ObjectCode {
        this object into the global symbol hash table.  This is so that
        we know which parts of the latter mapping to nuke when this
        object is removed from the system. */
-    char** symbols;
+    Symbol** symbols;
     int    n_symbols;
 
     /* ptr to mem containing the object file image */

@@ -1164,12 +1164,12 @@ ocGetNames_PEi386 ( ObjectCode* oc )
    /* Copy exported symbols into the ObjectCode. */
 
    oc->n_symbols = hdr->NumberOfSymbols;
-   oc->symbols   = stgCallocBytes(sizeof(SymbolName*), oc->n_symbols,
+   oc->symbols   = stgCallocBytes(sizeof(Symbol*), oc->n_symbols,
                                   "ocGetNames_PEi386(oc->symbols)");
 
    /* Work out the size of the global BSS section */
    StgWord globalBssSize = 0;
-   for (i=0; i < (int)hdr->NumberOfSymbols; i++) {
+   for (i=0; i < (int) oc->n_symbols; i++) {
       COFF_symbol* symtab_i;
        symtab_i = (COFF_symbol*)
            myindex ( sizeof_COFF_symbol, symtab, i );
@@ -1245,7 +1245,17 @@ ocGetNames_PEi386 ( ObjectCode* oc )
          IF_DEBUG(linker, debugBelch("addSymbol %p `%s'\n", addr,sname));
          ASSERT(i >= 0 && i < oc->n_symbols);
          /* cstring_from_COFF_symbol_name always succeeds. */
-         oc->symbols[i] = (SymbolName*)sname;
+         oc->symbols[i] = stgCallocBytes(sizeof(Symbol), 1,
+             "ocGetNames_PEi386(oc->symbols[i])");
+         /* Anything below 1 is a global symbol. No section to assign.  */
+         if (symtab_i->SectionNumber > 0) {
+             /* This can still be NULL. As there are sections we're not tracking.  */
+             oc->symbols[i]->section = &oc->sections[symtab_i->SectionNumber - 1];
+         }
+         else {
+             oc->symbols[i]->section = NULL;
+         }
+         oc->symbols[i]->name    = (SymbolName*)sname;
          if (isWeak == HS_BOOL_TRUE) {
              setWeakSymbol(oc, sname);
          }
@@ -1257,7 +1267,10 @@ ocGetNames_PEi386 ( ObjectCode* oc )
       } else {
           /* We're skipping the symbol, but if we ever load this
           object file we'll want to skip it then too. */
-          oc->symbols[i] = NULL;
+          if (oc->symbols[i]) {
+              stgFree(oc->symbols[i]);
+              oc->symbols[i] = NULL;
+          }
 
 #        if 0
          debugBelch(

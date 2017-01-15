@@ -740,7 +740,7 @@ ocGetNames_ELF ( ObjectCode* oc )
       nent = shdr[i].sh_size / sizeof(Elf_Sym);
 
       oc->n_symbols = nent;
-      oc->symbols = stgCallocBytes(oc->n_symbols, sizeof(SymbolName*),
+      oc->symbols = stgCallocBytes(oc->n_symbols, sizeof(Symbol*),
                                    "ocGetNames_ELF(oc->symbols)");
       // Note calloc: if we fail partway through initializing symbols, we need
       // to undo the additions to the symbol table so far. We know which ones
@@ -833,14 +833,20 @@ ocGetNames_ELF ( ObjectCode* oc )
 
          /* And the decision is ... */
 
-         oc->symbols[j] = nm;
+         oc->symbols[j] = oc->symbols = stgCallocBytes(1, sizeof(Symbol),
+             "ocGetNames_ELF(oc->symbols[j])");
+         oc->symbols[j]->name    = nm;
+         oc->symbols[j]->section = &sections[secno];
 
          if (ad != NULL) {
             ASSERT(nm != NULL);
             /* Acquire! */
             if (isLocal) {
                 /* Ignore entirely. */
-                oc->symbols[j] = NULL;
+                if (oc->symbols[j]) {
+                    stgFree(oc->symbols[j]);
+                    oc->symbols[j] = NULL;
+                }
             } else {
 
                 if (isWeak == HS_BOOL_TRUE) {
@@ -859,7 +865,10 @@ ocGetNames_ELF ( ObjectCode* oc )
 
             /* We're skipping the symbol, but if we ever load this
                object file we'll want to skip it then too. */
-            oc->symbols[j] = NULL;
+            if (oc->symbols[j]) {
+                stgFree(oc->symbols[j]);
+                oc->symbols[j] = NULL;
+            }
 
             /*
             debugBelch(

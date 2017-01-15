@@ -941,7 +941,7 @@ void ghci_enquire ( SymbolAddr* addr );
 void ghci_enquire(SymbolAddr* addr)
 {
    int   i;
-   SymbolName* sym;
+   Symbol* sym;
    RtsSymbolInfo* a;
    const int DELTA = 64;
    ObjectCode* oc;
@@ -949,18 +949,18 @@ void ghci_enquire(SymbolAddr* addr)
    for (oc = objects; oc; oc = oc->next) {
       for (i = 0; i < oc->n_symbols; i++) {
          sym = oc->symbols[i];
-         if (sym == NULL) continue;
-         a = NULL;
+         if (!sym || !sym->name) continue;
+         a = NULL; // Phyx: This if doesn't really make sense to me.
          if (a == NULL) {
-             ghciLookupSymbolInfo(symhash, sym, &a);
+             ghciLookupSymbolInfo(symhash, sym->name, &a);
          }
          if (a == NULL) {
-             // debugBelch("ghci_enquire: can't find %s\n", sym);
+             // debugBelch("ghci_enquire: can't find %s\n", sym->name);
          }
          else if (   a->value
                   && (char*)addr-DELTA <= (char*)a->value
                   && (char*)a->value <= (char*)addr+DELTA) {
-             debugBelch("%p + %3d  ==  `%s'\n", addr, (int)((char*)a->value - (char*)addr), sym);
+             debugBelch("%p + %3d  ==  `%s'\n", addr, (int)((char*)a->value - (char*)addr), sym->name);
          }
       }
    }
@@ -1072,10 +1072,13 @@ static void removeOcSymbols (ObjectCode *oc)
     if (oc->symbols == NULL) return;
 
     // Remove all the mappings for the symbols within this object..
-    int i;
-    for (i = 0; i < oc->n_symbols; i++) {
-        if (oc->symbols[i] != NULL) {
-            ghciRemoveSymbolTable(symhash, oc->symbols[i], oc);
+    for (int i = 0; i < oc->n_symbols; i++) {
+        if (oc->symbols[i]) {
+            if (oc->symbols[i]->name) {
+                ghciRemoveSymbolTable(symhash, oc->symbols[i]->name, oc);
+            }
+            stgFree(oc->symbols[i]);
+            oc->symbols[i] = NULL;
         }
     }
 
@@ -1131,6 +1134,12 @@ void freeObjectCode (ObjectCode *oc)
     freePreloadObjectFile(oc);
 
     if (oc->symbols != NULL) {
+        for (int i = 0; i < oc->n_symbols; i++) {
+            if (oc->symbols[i]) {
+                stgFree(oc->symbols[i]);
+                oc->symbols[i] = NULL;
+            }
+        }
         stgFree(oc->symbols);
         oc->symbols = NULL;
     }
@@ -1501,11 +1510,12 @@ int ocTryLoad (ObjectCode* oc) {
         symbols. Duplicate symbols are distinguished by name and oc.
     */
     int x;
-    SymbolName* symbol;
+    Symbol* symbol;
     for (x = 0; x < oc->n_symbols; x++) {
         symbol = oc->symbols[x];
         if (   symbol
-            && !ghciInsertSymbolTable(oc->fileName, symhash, symbol, NULL, isSymbolWeak(oc, symbol), oc)) {
+            && symbol->name
+            && !ghciInsertSymbolTable(oc->fileName, symhash, symbol->name, NULL, isSymbolWeak(oc, symbol->name), oc)) {
             return 0;
         }
     }
