@@ -145,6 +145,12 @@
 
      This phase may transition an ObjectCode from `OBJECT_LOADED` to `OBJECT_RESOLVED`
 
+   * An ObjectCode can be partially initialized, as the linker initializes on a per
+     section basis and not the entire ObjectCode at once if not needed. In this case the
+     ObjectCode will be in the state `OBJECT_INITIALIZED`. This means some but not all of
+     the sections in the ObjectCode have been relocated etc. Global data have all always
+     been initialized when in thi state.
+
    When a new scope is introduced (e.g. a new module imported) GHCi does a full re-link
    by calling unloadObj and starting over.
    When a new declaration or statement is performed ultimately lookupSymbol is called
@@ -182,8 +188,17 @@ Mutex linker_mutex;
 Mutex linker_unloaded_mutex;
 #endif
 
-/* Generic wrapper function to try and Resolve and RunInit oc files */
-int ocTryLoad( ObjectCode* oc );
+/* Generic wrapper function to try and Resolve and RunInit oc files,
+   pass NULL for sym to load all sections in OC, otherwise only symbols
+   defined or required by the given section will be loaded. */
+int ocTryLoad( ObjectCode* oc, Symbol* sym );
+
+/* Finds the symbol & section the symbol is defined in if available.
+   If the symbol is not in any section return NULL.
+   This does an O(n) lookup where n is the number of symbols.
+   The alternative would be some extra book keeping, increasing the memory
+   but making this constant. (By using a hashtable in the OC).  */
+static Symbol* findSymbolSection( ObjectCode* oc, SymbolName* lbl );
 
 /* Link objects into the lower 2Gb on x86_64.  GHC assumes the
  * small memory model on this architecture (see gcc docs,
@@ -873,7 +888,7 @@ SymbolAddr* loadSymbol(SymbolName *lbl, RtsSymbolInfo *pinfo) {
     if (oc && lbl && oc->status == OBJECT_LOADED) {
         oc->status = OBJECT_NEEDED;
         IF_DEBUG(linker, debugBelch("lookupSymbol: on-demand loading symbol '%s'\n", lbl));
-        int r = ocTryLoad(oc);
+        int r = ocTryLoad(oc, findSymbolSection(oc, lbl));
         if (!r) {
             return NULL;
         }
@@ -1491,10 +1506,11 @@ HsInt loadOc (ObjectCode* oc)
 *
 * Returns: 1 if ok, 0 on error.
 */
-int ocTryLoad (ObjectCode* oc) {
+int ocTryLoad (ObjectCode* oc, Symbol* sym) {
     int r;
 
-    if (oc->status != OBJECT_NEEDED) {
+    if (   oc->status != OBJECT_NEEDED
+        || oc->status != OBJECT_INITIALIZED) {
         return 1;
     }
 
@@ -1513,43 +1529,64 @@ int ocTryLoad (ObjectCode* oc) {
     Symbol* symbol;
     for (x = 0; x < oc->n_symbols; x++) {
         symbol = oc->symbols[x];
-        if (   symbol
+        if (symbol
             && symbol->name
+            && (sym == NULL || sym->section == symbol->section) // Either we're loading all symbols, or all in one section.
             && !ghciInsertSymbolTable(oc->fileName, symhash, symbol->name, NULL, isSymbolWeak(oc, symbol->name), oc)) {
             return 0;
         }
     }
 
-#           if defined(OBJFORMAT_ELF)
-        r = ocResolve_ELF ( oc );
-#           elif defined(OBJFORMAT_PEi386)
-        r = ocResolve_PEi386 ( oc );
-#           elif defined(OBJFORMAT_MACHO)
-        r = ocResolve_MachO ( oc );
-#           else
-    barf("ocTryLoad: not implemented on this platform");
-#           endif
-        if (!r) { return r; }
-
-        // run init/init_array/ctors/mod_init_func
-
-        loading_obj = oc; // tells foreignExportStablePtr what to do
 #if defined(OBJFORMAT_ELF)
-        r = ocRunInit_ELF ( oc );
+    r = ocResolve_ELF ( oc );
 #elif defined(OBJFORMAT_PEi386)
-        r = ocRunInit_PEi386 ( oc );
+    r = ocResolve_PEi386 ( oc );
 #elif defined(OBJFORMAT_MACHO)
-        r = ocRunInit_MachO ( oc );
+    r = ocResolve_MachO ( oc );
+#else
+    barf("ocTryLoad: not implemented on this platform");
+#endif
+    if (!r) { return r; }
+
+    // run init/init_array/ctors/mod_init_func
+
+    loading_obj = oc; // tells foreignExportStablePtr what to do
+#if defined(OBJFORMAT_ELF)
+    r = ocRunInit_ELF ( oc );
+#elif defined(OBJFORMAT_PEi386)
+    r = ocRunInit_PEi386 ( oc );
+#elif defined(OBJFORMAT_MACHO)
+    r = ocRunInit_MachO ( oc );
 #else
     barf("ocTryLoad: initializers not implemented on this platform");
 #endif
-        loading_obj = NULL;
+    loading_obj = NULL;
 
-        if (!r) { return r; }
+    if (!r) { return r; }
 
-    oc->status = OBJECT_RESOLVED;
+    /* Do some bookkeeping.  */
+    if (sym) oc->n_loaded_sections++;
+    else oc->n_loaded_sections = oc->n_sections;
+
+    if (oc->n_sections == oc->n_loaded_sections) {
+        oc->status = OBJECT_RESOLVED;
+    } else {
+        oc->status = OBJECT_INITIALIZED;
+    }
 
     return 1;
+}
+
+static Symbol*
+findSymbolSection(ObjectCode* oc, SymbolName* lbl)
+{
+    for (int i = 0; i < oc->n_symbols; i++) {
+        if (0 == strcmp(lbl, oc->symbols[i]->name)) {
+            return oc->symbols[i];
+        }
+    }
+
+    return NULL;
 }
 
 /* -----------------------------------------------------------------------------
@@ -1565,7 +1602,7 @@ static HsInt resolveObjs_ (void)
     IF_DEBUG(linker, debugBelch("resolveObjs: start\n"));
 
     for (oc = objects; oc; oc = oc->next) {
-        r = ocTryLoad(oc);
+        r = ocTryLoad(oc, NULL);
         if (!r)
         {
             return r;

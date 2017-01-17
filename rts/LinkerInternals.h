@@ -16,6 +16,8 @@
 #include <sys/mman.h>
 #endif
 
+#include <stdint.h>
+
 #include "BeginPrivate.h"
 
 typedef void SymbolAddr;
@@ -25,6 +27,7 @@ typedef char SymbolName;
 typedef enum {
     OBJECT_LOADED,
     OBJECT_NEEDED,
+    OBJECT_INITIALIZED,
     OBJECT_RESOLVED,
     OBJECT_UNLOADED,
     OBJECT_DONT_RESOLVE
@@ -52,6 +55,7 @@ typedef
 
 typedef
    struct _Section {
+      uint16_t index;
       void*    start;              /* actual start of section in memory */
       StgWord  size;               /* actual size of section in memory */
       SectionKind kind;
@@ -63,6 +67,8 @@ typedef
       StgWord mapped_offset;      /* offset from the image of mapped_start */
       void* mapped_start;         /* start of mmap() block */
       StgWord mapped_size;        /* size of mmap() block */
+
+      bool loaded;                /* Section is ready for use. */
    }
    Section;
 
@@ -156,6 +162,7 @@ typedef struct _ObjectCode {
     /* The section-kind entries for this object module.  Linked
        list. */
     int n_sections;
+    int n_loaded_sections;
     Section* sections;
 
     /* Allow a chain of these things */
