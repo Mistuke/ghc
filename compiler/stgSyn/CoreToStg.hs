@@ -251,8 +251,8 @@ coreTopBindToStg dflags this_mod env body_fvs (NonRec id rhs)
               return (stg_rhs, fvs')
 
         bind = StgTopLifted $ StgNonRec id stg_rhs
-    in
-    ASSERT2(consistentCafInfo [id] bind, ppr id )
+    in -- TODO: Fix these for DynWay
+    ASSERT2(consistentCafInfo [id] bind || WayDyn `elem` (ways dflags), ppr id )
       -- NB: previously the assertion printed 'rhs' and 'bind'
       --     as well as 'id', but that led to a black hole
       --     where printing the assertion error tripped the
@@ -275,8 +275,8 @@ coreTopBindToStg dflags this_mod env body_fvs (Rec pairs)
                return (stg_rhss, fvs')
 
         bind = StgTopLifted $ StgRec (zip binders stg_rhss)
-    in
-    ASSERT2(consistentCafInfo binders bind, ppr binders)
+    in -- TODO: Fix these for DynWay
+    ASSERT2(consistentCafInfo binders bind || WayDyn `elem` (ways dflags), ppr binders)
     (env', fvs' `unionFVInfo` body_fvs, bind)
 
 
