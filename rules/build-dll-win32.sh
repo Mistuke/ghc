@@ -77,7 +77,7 @@ process_dll_link() {
             # by default, but for libtool is it and even for mingw-w64 we can trim the output.
             echo -e "${globals}" | awk -v root="$defFile" '{def=root;}{print "    \"" $0 "\" DATA"> def}'
             echo -e "${functions}" | awk -v root="$defFile" '{def=root;}{print "    \"" $0 "\"">> def}'
-            sed -i "1i\LIBRARY \"${6##*/}\"\\nEXPORTS" $defFile
+            sed -i "1i\LIBRARY \"${7##*/}\"\\nEXPORTS" $defFile
 
             DLLimport="$base.dll.a"
             dlltool -d $defFile -l $DLLimport

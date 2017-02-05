@@ -538,6 +538,7 @@ utils/ghc-pkg/dist-install/package-data.mk: $(fixed_pkg_prev)
 utils/hsc2hs/dist-install/package-data.mk: $(fixed_pkg_prev)
 utils/compare_sizes/dist-install/package-data.mk: $(fixed_pkg_prev)
 utils/runghc/dist-install/package-data.mk: $(fixed_pkg_prev)
+utils/gen-dll/dist-install/package-data.mk: $(fixed_pkg_prev)
 iserv/stage2/package-data.mk: $(fixed_pkg_prev)
 iserv/stage2_p/package-data.mk: $(fixed_pkg_prev)
 iserv/stage2_dyn/package-data.mk: $(fixed_pkg_prev)
@@ -649,6 +650,7 @@ BUILD_DIRS += includes
 BUILD_DIRS += rts
 BUILD_DIRS += bindisttest
 BUILD_DIRS += utils/genapply
+BUILD_DIRS += utils/gen-dll
 
 # When cleaning, don't add any library packages to BUILD_DIRS. We include
 # ghc.mk files for all BUILD_DIRS, but they don't exist until after running
