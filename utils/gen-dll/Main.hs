@@ -1,3 +1,4 @@
+{-# LANGUAGE Safe #-}
 {-# LANGUAGE CPP #-}
 
 module Main(main) where
@@ -19,8 +20,9 @@ import System.Process (proc, createProcess_, StdStream (..), CreateProcess(..)
                       ,waitForProcess)
 
 import Foreign.C.Types (CInt(..), )
-import Foreign.C.String (withCWString, CWString)
+import Foreign.C.String (withCWString, peekCWString, CWString)
 import Foreign.Ptr (Ptr)
+import Foreign.Storable (peek)
 import Foreign.Marshal.Array (peekArray)
 import Foreign.Marshal.Alloc (alloca)
 
@@ -253,7 +255,7 @@ isTrue :: String -> Bool
 isTrue = (=="yes") . map toLower
 
 foreign import WINDOWS_CCONV unsafe "Shellapi.h CommandLineToArgvW"
-     c_CommandLineToArgvW :: CWString -> Ptr CInt -> Ptr CWString
+     c_CommandLineToArgvW :: CWString -> Ptr CInt -> IO (Ptr CWString)
 
 foreign import WINDOWS_CCONV unsafe "windows.h LocalFree"
     localFree :: Ptr a -> IO (Ptr a)
@@ -261,12 +263,12 @@ foreign import WINDOWS_CCONV unsafe "windows.h LocalFree"
 mkArgs :: String -> IO [String]
 mkArgs arg =
   do withCWString arg $ \c_arg -> do
-       alloca $ c_size -> do
+       alloca $ \c_size -> do
          res <- c_CommandLineToArgvW c_arg c_size
          size <- peek c_size
          args <- peekArray (fromIntegral size) res
-         localFree res
-         return args
+         _ <- localFree res
+         mapM peekCWString args
 
 execProg :: String -> [String] -> IO [String]
 execProg prog args =
