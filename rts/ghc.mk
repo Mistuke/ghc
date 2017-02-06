@@ -147,7 +147,7 @@ rts_dist_$1_CC_OPTS += -fno-omit-frame-pointer -g -O0
 endif
 
 ifneq "$$(findstring dyn, $1)" ""
-ifeq "$$(HostOS_CPP)" "mingw32" 
+ifeq "$$(HostOS_CPP)" "mingw32"
 rts_dist_$1_CC_OPTS += -DCOMPILING_WINDOWS_DLL
 endif
 rts_dist_$1_CC_OPTS += -DDYNAMIC
@@ -212,7 +212,7 @@ $$(rts_$1_LIB) : $$(rts_$1_OBJS) $(ALL_RTS_DEF_LIBS) rts/dist/libs.depend rts/di
 	# $$9  = create delay load import lib
 	# $$10 = SxS Name
 	# $$11 = SxS Version
-	rules/build-dll-win32.sh link "rts/dist/build" "rts/dist/build" "" "" "$$(ALL_RTS_DEF_LIBS)" "$$(rts_$1_OBJS)" "$$@" "$$(rts_dist_HC) -this-unit-id rts -shared -dynamic -dynload deploy \
+	$$(gen-dll_INPLACE) link "rts/dist/build" "rts/dist/build" "" "" "$$(ALL_RTS_DEF_LIBS)" "$$(rts_$1_OBJS)" "$$@" "$$(rts_dist_HC) -this-unit-id rts -shared -dynamic -dynload deploy \
          -no-auto-link-packages -Lrts/dist/build -l$$(LIBFFI_NAME) \
          `cat rts/dist/libs.depend | tr '\n' ' '` \
          $$(rts_dist_$1_GHC_LD_OPTS)" "NO" \
@@ -272,15 +272,15 @@ WARNING_OPTS += -W
 else
 WARNING_OPTS += -Wextra
 endif
-WARNING_OPTS += -Wstrict-prototypes 
-WARNING_OPTS += -Wmissing-prototypes 
+WARNING_OPTS += -Wstrict-prototypes
+WARNING_OPTS += -Wmissing-prototypes
 WARNING_OPTS += -Wmissing-declarations
 WARNING_OPTS += -Winline
 WARNING_OPTS += -Waggregate-return
 WARNING_OPTS += -Wpointer-arith
 WARNING_OPTS += -Wmissing-noreturn
 WARNING_OPTS += -Wnested-externs
-WARNING_OPTS += -Wredundant-decls 
+WARNING_OPTS += -Wredundant-decls
 
 # These ones are hard to avoid:
 #WARNING_OPTS += -Wconversion
@@ -288,7 +288,7 @@ WARNING_OPTS += -Wredundant-decls
 #WARNING_OPTS += -Wshadow
 #WARNING_OPTS += -Wcast-qual
 
-# This one seems buggy on GCC 4.1.2, which is the only GCC version we 
+# This one seems buggy on GCC 4.1.2, which is the only GCC version we
 # have that can bootstrap the SPARC build. We end up with lots of supurious
 # warnings of the form "cast increases required alignment of target type".
 # Some legitimate warnings can be fixed by adding an intermediate cast to
@@ -320,7 +320,7 @@ rts_CC_OPTS += -DUSE_LIBFFI_FOR_ADJUSTORS
 endif
 
 # We *want* type-checking of hand-written cmm.
-rts_HC_OPTS += -dcmm-lint 
+rts_HC_OPTS += -dcmm-lint
 
 # -fno-strict-aliasing is required for the runtime, because we often
 # use a variety of types to represent closure pointers (StgPtr,

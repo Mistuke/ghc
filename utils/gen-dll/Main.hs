@@ -7,17 +7,30 @@ import Control.Monad (when, forM_)
 
 import Data.Char (toLower, isSpace)
 import Data.List (isPrefixOf, nub, sort, (\\))
-import qualified Data.Map as M (Map(..), insert, alter, singleton, empty
+import qualified Data.Map as M (Map(), alter, empty
                                ,toList)
 
 import System.Environment (getArgs)
 import System.Directory (findFilesWith)
-import System.FilePath (takeBaseName, takeDirectory, takeExtension
-                       ,dropExtension, (<.>), takeFileName)
-import System.IO (FilePath, hClose, hGetContents, withFile, IOMode(..)
-                 ,Handle(..), hPutStrLn)
+import System.FilePath (takeBaseName, takeDirectory, dropExtension, (<.>)
+                       ,takeFileName)
+import System.IO (hClose, hGetContents, withFile, IOMode(..), hPutStrLn)
 import System.Process (proc, createProcess_, StdStream (..), CreateProcess(..)
                       ,waitForProcess)
+
+import Foreign.C.Types (CInt(..), )
+import Foreign.C.String (withCWString, CWString)
+import Foreign.Ptr (Ptr)
+import Foreign.Marshal.Array (peekArray)
+import Foreign.Marshal.Alloc (alloca)
+
+#if defined(i386_HOST_ARCH)
+# define WINDOWS_CCONV stdcall
+#elif defined(x86_64_HOST_ARCH)
+# define WINDOWS_CCONV ccall
+#else
+# error Unknown mingw32 arch
+#endif
 
 usage :: IO ()
 usage = putStrLn $ unlines [ " -= Split a dll if required and perform the linking =- "
@@ -66,17 +79,16 @@ process_dll_link :: String -- ^ dir
                  -> String -- ^ SxS Name
                  -> String -- ^ SxS version
                  -> IO ()
-process_dll_link dir distdir way extra_flags extra_libs objs_files output
+process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                  link_cmd delay_imp sxs_name sxs_version
-  = do let ext  = takeExtension output
-           base = dropExtension output
+  = do let base = dropExtension output
 
        -- We need to know how many symbols came from other static archives
        -- So take the total number of symbols and remove those we know came
        -- from the object files. Use this to lower the max amount of symbols.
        --
        -- This granularity is the best we can do without --print-map like info.
-       raw_exports <- execProg "nm.exe" ["-g", objs_files]
+       raw_exports <- execProg "nm" ["-g", objs_files]
        let objs    = collectObjs $ sort $ nub raw_exports
            num_sym = foldr (\a b -> b + objCount a) 0 objs
            exports = base <.> "lst"
@@ -134,7 +146,7 @@ process_dll_link dir distdir way extra_flags extra_libs objs_files output
 
                     -- Start off by creating the import libraries to break the
                     -- mutual dependency chain.
-                    forM_ (zip [1..] spl_objs) $ \(i, (n, o)) ->
+                    forM_ (zip [(1::Int)..] spl_objs) $ \(i, (n, o)) ->
                       do putStrLn $ "Processing file " ++ show i   ++ " of "
                                  ++ show n_spl_objs    ++ " with " ++ show n
                                  ++ " symbols."
@@ -150,7 +162,7 @@ process_dll_link dir distdir way extra_flags extra_libs objs_files output
 
                     -- Now create the actual DLLs by using the import libraries
                     -- to break the mutual recursion.
-                    forM_ (zip [1..] spl_objs) $ \(i, (n, o)) ->
+                    forM_ (zip [1..] spl_objs) $ \(i, (n, _)) ->
                       do putStrLn $ "Creating DLL " ++ show i   ++ " of "
                                  ++ show n_spl_objs    ++ " with " ++ show n
                                  ++ " symbols."
@@ -190,12 +202,12 @@ collectObjs :: [String] -> Objs
 collectObjs = map snd . M.toList . foldr collectObjs' M.empty
 collectObjs' :: String -> M.Map String Obj -> M.Map String Obj
 collectObjs' []  m   = m
-collectObjs' str m
+collectObjs' str_in m
   = let clean        = dropWhile isSpace
-        str          = clean str
+        str          = clean str_in
         (file, rest) = ((takeWhile (/=':') . clean) *** clean) $
                          break isSpace str
-        (typ , sym ) = (id *** clean) $ break isSpace str
+        (typ , sym ) = (id *** clean) $ break isSpace rest
         obj          = Obj { objName  = file
                            , objCount = 1
                            , objItems = [(head typ, sym)]
@@ -213,7 +225,7 @@ collectObjs' str m
 -- Split a list of objects into globals and functions
 splitObjs :: Objs -> (Symbols, Symbols)
 splitObjs []     = ([], [])
-splitObjs (x:xs) = group_ (objItems x) (splitObjs xs)
+splitObjs (y:ys) = group_ (objItems y) (splitObjs ys)
   where globals = "DdGgrRSs"
         group_ :: [(Char, Symbol)] -> (Symbols, Symbols) -> (Symbols, Symbols)
         group_ []     x                             = x
@@ -240,12 +252,29 @@ dll_max_symbols = 65535
 isTrue :: String -> Bool
 isTrue = (=="yes") . map toLower
 
+foreign import WINDOWS_CCONV unsafe "Shellapi.h CommandLineToArgvW"
+     c_CommandLineToArgvW :: CWString -> Ptr CInt -> Ptr CWString
+
+foreign import WINDOWS_CCONV unsafe "windows.h LocalFree"
+    localFree :: Ptr a -> IO (Ptr a)
+
+mkArgs :: String -> IO [String]
+mkArgs arg =
+  do withCWString arg $ \c_arg -> do
+       alloca $ c_size -> do
+         res <- c_CommandLineToArgvW c_arg c_size
+         size <- peek c_size
+         args <- peekArray (fromIntegral size) res
+         localFree res
+         return args
+
 execProg :: String -> [String] -> IO [String]
 execProg prog args =
-  do let cp = (proc prog args)
+  do args' <- fmap concat $ mapM mkArgs args
+     let cp = (proc prog args')
               { std_out = CreatePipe }
      (_, Just hout, _, ph) <- createProcess_ ("execProg: " ++ prog)  cp
-     waitForProcess ph
+     _ <- waitForProcess ph
      results <- hGetContents hout
      hClose hout
      return $ lines results
@@ -283,7 +312,7 @@ build_import_lib base dll_name defFile objs
               mapM_ (\v -> hPutStrLn hDef $ "    " ++ show v           ) functions
 
        let dll_import = base <.> "dll.a"
-       execProg "dlltool" ["-d", defFile, "-l", dll_import]
+       _ <- execProg "dlltool" ["-d", defFile, "-l", dll_import]
        return ()
 
 -- Do some cleanup and create merged lib.
@@ -309,5 +338,5 @@ create_merged_archive base
                     map ("addlib " ++) imp_libs ++
                     [ "save", "end" ]
        writeFile ar_script (unlines script)
-       execProg "ar" ["-M", ar_script]
+       _ <- execProg "ar" ["-M", ar_script]
        return ()

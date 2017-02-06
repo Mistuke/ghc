@@ -141,7 +141,7 @@ define build-dll
 # 9  = create delay load import lib
 # 10 = SxS Name
 # 11 = SxS Version
-rules/build-dll-win32.sh link "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$(call cmd,$1_$2_HC) $($1_$2_$3_ALL_HC_OPTS) $($1_$2_$3_GHC_LD_OPTS) \
+$$(gen-dll_INPLACE) link "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$(call cmd,$1_$2_HC) $($1_$2_$3_ALL_HC_OPTS) $($1_$2_$3_GHC_LD_OPTS) \
            -shared -dynamic -dynload deploy \
            $(addprefix -l,$($1_$2_EXTRA_LIBRARIES)) \
            -no-auto-link-packages" "$8" \
