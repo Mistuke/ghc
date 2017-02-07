@@ -5,14 +5,14 @@ module Main(main) where
 
 import Control.Arrow ((***))
 import Control.Monad (when, forM_)
+import Control.Exception (bracket)
 
 import Data.Char (toLower, isSpace)
 import Data.List (isPrefixOf, nub, sort, (\\))
-import qualified Data.Map as M (Map(), alter, empty
-                               ,toList)
+import qualified Data.Map as M (Map(), alter, empty, toList)
 
 import System.Environment (getArgs)
-import System.Directory (findFilesWith)
+import System.Directory (findFilesWith, getCurrentDirectory)
 import System.FilePath (takeBaseName, takeDirectory, dropExtension, (<.>)
                        ,takeFileName)
 import System.IO (hClose, hGetContents, withFile, IOMode(..), hPutStrLn)
@@ -215,7 +215,7 @@ collectObjs' str_in m
                            , objItems = [(head typ, sym)]
                            }
         upd value
-          = if length typ /= 1 && length typ > 0
+          = if length typ /= 1
                then value
                else Just $ maybe obj
                                  (\o -> o { objCount = objCount o + 1
@@ -273,13 +273,19 @@ mkArgs arg =
 execProg :: String -> [String] -> IO [String]
 execProg prog args =
   do args' <- fmap concat $ mapM mkArgs args
-     let cp = (proc prog args')
-              { std_out = CreatePipe }
-     (_, Just hout, _, ph) <- createProcess_ ("execProg: " ++ prog)  cp
-     _ <- waitForProcess ph
-     results <- hGetContents hout
-     hClose hout
-     return $ lines results
+     prog' <- mkArgs prog
+     let (c_prog:c_args) = prog' ++ args'
+     cwdir <- getCurrentDirectory
+     let cp = (proc c_prog c_args)
+              { std_out = CreatePipe, cwd = Just cwdir }
+     bracket
+       (createProcess_ ("execProg: " ++ prog)  cp)
+       (\(_, Just hout, _, ph) -> do
+         hClose hout
+         waitForProcess ph)
+       (\(_, Just hout, _, _) -> do
+         results <- hGetContents hout
+         length results `seq` return $ lines results)
 
 -- Builds a delay import lib at the very end which is used to
 -- be able to delay the picking of a DLL on Windows.
