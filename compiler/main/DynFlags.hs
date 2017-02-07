@@ -494,6 +494,7 @@ data GeneralFlag
    | Opt_PrintEvldWithShow
    | Opt_PrintBindContents
    | Opt_GenManifest
+   | Opt_GenSxSManifest
    | Opt_EmbedManifest
    | Opt_SharedImplib
    | Opt_BuildingCabalPackage
@@ -754,14 +755,6 @@ data DynFlags = DynFlags {
   dynObjectSuf          :: String,
   dynHiSuf              :: String,
 
-  -- Packages.isDllName needs to know whether a call is within a
-  -- single DLL or not. Normally it does this by seeing if the call
-  -- is to the same package, but for the ghc package, we split the
-  -- package between 2 DLLs. The dllSplit tells us which sets of
-  -- modules are in which package.
-  dllSplitFile          :: Maybe FilePath,
-  dllSplit              :: Maybe [Set String],
-
   outputFile            :: Maybe String,
   dynOutputFile         :: Maybe String,
   outputHi              :: Maybe String,
@@ -782,6 +775,14 @@ data DynFlags = DynFlags {
   frameworkPaths        :: [String],    -- used on darwin only
   cmdlineFrameworks     :: [String],    -- ditto
 
+  -- | Windows SxS settings
+  sxsResolveMode        :: SxSResolveMode,
+
+  -- | Shared Lib ABI settings
+  sharedLibABIName      :: Maybe String,
+  sharedLibABIVersion   :: Maybe String,
+
+  -- | Runtime system options
   rtsOpts               :: Maybe String,
   rtsOptsEnabled        :: RtsOptsEnabled,
   rtsOptsSuggestions    :: Bool,
@@ -1570,9 +1571,6 @@ defaultDynFlags mySettings =
         dynObjectSuf            = "dyn_" ++ phaseInputExt StopLn,
         dynHiSuf                = "dyn_hi",
 
-        dllSplitFile            = Nothing,
-        dllSplit                = Nothing,
-
         pluginModNames          = [],
         pluginModNameOpts       = [],
         frontendPluginOpts      = [],
@@ -1592,6 +1590,10 @@ defaultDynFlags mySettings =
         rtsOpts                 = Nothing,
         rtsOptsEnabled          = RtsOptsSafeOnly,
         rtsOptsSuggestions      = True,
+
+        sxsResolveMode          = SxSDefault,
+        sharedLibABIName        = Nothing,
+        sharedLibABIVersion     = Nothing,
 
         hpcDir                  = ".hpc",
 
@@ -2699,9 +2701,6 @@ dynamic_flags_deps = [
         (noArg (\d -> d { ghcLink=LinkStaticLib }))
   , make_ord_flag defGhcFlag "dynload"            (hasArg parseDynLibLoaderMode)
   , make_ord_flag defGhcFlag "dylib-install-name" (hasArg setDylibInstallName)
-    -- -dll-split is an internal flag, used only during the GHC build
-  , make_ord_flag defHiddenFlag "dll-split"
-      (hasArg (\f d -> d { dllSplitFile = Just f, dllSplit = Nothing }))
 
         ------- Libraries ---------------------------------------------------
   , make_ord_flag defFlag "L"   (Prefix addLibraryPath)
@@ -2792,6 +2791,18 @@ dynamic_flags_deps = [
         (NoArg (setRtsOptsEnabled RtsOptsNone))
   , make_ord_flag defGhcFlag "no-rtsopts-suggestions"
       (noArg (\d -> d {rtsOptsSuggestions = False}))
+  , make_ord_flag defGhcFlag "fgen-sxs-assembly"
+        (NoArg (setSxSResolveMode SxSDefault))
+  , make_ord_flag defGhcFlag "fgen-sxs-assembly=cache"
+        (NoArg (setSxSResolveMode SxSCache))
+  , make_ord_flag defGhcFlag "fgen-sxs-assembly=default"
+        (NoArg (setSxSResolveMode SxSDefault))
+  , make_ord_flag defGhcFlag "fgen-sxs-assembly=relative"
+        (NoArg (setSxSResolveMode SxSRelative))
+  , make_ord_flag defGhcFlag "dylib-abi-name"
+        (SepArg setSharedABIName)
+  , make_ord_flag defGhcFlag "dylib-abi-version"
+        (SepArg setSharedABIVersion)
 
   , make_ord_flag defGhcFlag "main-is"              (SepArg setMainIs)
   , make_ord_flag defGhcFlag "haddock"              (NoArg (setGeneralFlag Opt_Haddock))
@@ -3661,6 +3672,7 @@ fFlagsDeps = [
   flagSpec "full-laziness"                    Opt_FullLaziness,
   flagSpec "fun-to-thunk"                     Opt_FunToThunk,
   flagSpec "gen-manifest"                     Opt_GenManifest,
+  flagSpec "gen-sxs-assembly"                 Opt_GenSxSManifest,
   flagSpec "ghci-history"                     Opt_GhciHistory,
   flagGhciSpec "local-ghci-history"           Opt_LocalGhciHistory,
   flagSpec "ghci-sandbox"                     Opt_GhciSandbox,
@@ -3951,6 +3963,7 @@ defaultFlags settings
   = [ Opt_AutoLinkPackages,
       Opt_DiagnosticsShowCaret,
       Opt_EmbedManifest,
+      Opt_GenSxSManifest,
       Opt_FlatCache,
       Opt_GenManifest,
       Opt_GhciHistory,
@@ -4925,6 +4938,21 @@ setRtsOpts arg  = upd $ \ d -> d {rtsOpts = Just arg}
 
 setRtsOptsEnabled :: RtsOptsEnabled -> DynP ()
 setRtsOptsEnabled arg  = upd $ \ d -> d {rtsOptsEnabled = arg}
+
+-----------------------------------------------------------------------------
+-- Windows SxS opts
+
+setSxSResolveMode :: SxSResolveMode -> DynP ()
+setSxSResolveMode arg  = upd $ \ d -> d {sxsResolveMode = arg}
+
+-----------------------------------------------------------------------------
+-- Shared ABI opts
+
+setSharedABIName :: String -> DynP ()
+setSharedABIName arg  = upd $ \ d -> d {sharedLibABIName = Just arg}
+
+setSharedABIVersion :: String -> DynP ()
+setSharedABIVersion arg  = upd $ \ d -> d {sharedLibABIVersion = Just arg}
 
 -----------------------------------------------------------------------------
 -- Hpc stuff
