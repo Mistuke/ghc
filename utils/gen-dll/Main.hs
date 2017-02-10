@@ -12,6 +12,7 @@ import Data.List (isPrefixOf, nub, sort, (\\))
 import qualified Data.Map as M (Map(), alter, empty, toList)
 
 import System.Environment (getArgs)
+import System.Exit (ExitCode(..), exitWith)
 import System.Directory (findFilesWith, getCurrentDirectory)
 import System.FilePath (takeBaseName, takeDirectory, dropExtension, (<.>)
                        ,takeFileName)
@@ -84,7 +85,6 @@ process_dll_link :: String -- ^ dir
 process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                  link_cmd delay_imp sxs_name sxs_version
   = do let base = dropExtension output
-
        -- We need to know how many symbols came from other static archives
        -- So take the total number of symbols and remove those we know came
        -- from the object files. Use this to lower the max amount of symbols.
@@ -261,6 +261,7 @@ foreign import WINDOWS_CCONV unsafe "windows.h LocalFree"
     localFree :: Ptr a -> IO (Ptr a)
 
 mkArgs :: String -> IO [String]
+mkArgs []  = return []
 mkArgs arg =
   do withCWString arg $ \c_arg -> do
        alloca $ \c_size -> do
@@ -274,7 +275,9 @@ execProg :: String -> [String] -> IO [String]
 execProg prog args =
   do args' <- fmap concat $ mapM mkArgs args
      prog' <- mkArgs prog
-     let (c_prog:c_args) = prog' ++ args'
+     let full@(c_prog:c_args) = prog' ++ args'
+     -- print the commands we're executing for debugging and transparency
+     putStrLn $ unwords full
      cwdir <- getCurrentDirectory
      let cp = (proc c_prog c_args)
               { std_out = CreatePipe, cwd = Just cwdir }
@@ -282,7 +285,10 @@ execProg prog args =
        (createProcess_ ("execProg: " ++ prog)  cp)
        (\(_, Just hout, _, ph) -> do
          hClose hout
-         waitForProcess ph)
+         code <- waitForProcess ph
+         case code of
+           ExitFailure _ -> exitWith code
+           ExitSuccess   -> return ())
        (\(_, Just hout, _, _) -> do
          results <- hGetContents hout
          length results `seq` return $ lines results)
