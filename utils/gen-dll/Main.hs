@@ -122,7 +122,8 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                                                       ,extra_flags
                                                       ]
                                                      ,sxs_opts
-                                                     ,["-optl-Wl,--retain-symbols-file=" ++ exports
+                                                     ,["-fno-shared-implib"
+                                                      ,"-optl-Wl,--retain-symbols-file=" ++ exports
                                                       ,"-o"
                                                       ,output
                                                       ]
@@ -185,7 +186,8 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                                                           ]
                                                          ,libs
                                                          ,sxs_opts
-                                                         ,["-optl-Wl,--retain-symbols-file=" ++ lst
+                                                         ,["-fno-shared-implib"
+                                                          ,"-optl-Wl,--retain-symbols-file=" ++ lst
                                                           ,"-o"
                                                           ,dll
                                                           ]
