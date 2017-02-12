@@ -286,8 +286,9 @@ coreTopBindToStg dflags this_mod env body_fvs (Rec pairs)
 -- floated out a binding, in which case it will be approximate.
 consistentCafInfo :: [Id] -> GenStgTopBinding Var Id -> Bool
 consistentCafInfo ids bind
-  = WARN( not (exact || is_sat_thing) , ppr ids <+> ppr id_marked_caffy <+> ppr binding_is_caffy )
-    safe
+--  = WARN( not (exact || is_sat_thing) , ppr ids <+> ppr id_marked_caffy <+> ppr binding_is_caffy )
+  =
+    safe || True
   where
     safe  = id_marked_caffy || not binding_is_caffy
     exact = id_marked_caffy == binding_is_caffy
