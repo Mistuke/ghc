@@ -90,7 +90,7 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
        -- from the object files. Use this to lower the max amount of symbols.
        --
        -- This granularity is the best we can do without --print-map like info.
-       raw_exports <- execProg "nm" ["-g", objs_files]
+       raw_exports <- execProg "nm" ["-g", "--defined-only", objs_files]
        let objs    = collectObjs $ sort $ nub raw_exports
            num_sym = foldr (\a b -> b + objCount a) 0 objs
            exports = base <.> "lst"
@@ -143,6 +143,8 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                     -- maximum of $DLL_MAX_SYMBOLS in one DLL.
                     let spl_objs   = groupObjs objs
                         n_spl_objs = length spl_objs
+                        base'      = base ++ "-pt"
+
                     mapM_ (\(n, _) -> putStrLn $ ">> DLL split at " ++ show n ++ " symbols.") spl_objs
                     putStrLn $ "OK, based on the amount of symbols we'll split the DLL into " ++ show n_spl_objs ++ " pieces."
 
@@ -152,7 +154,7 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                       do putStrLn $ "Processing file " ++ show i   ++ " of "
                                  ++ show n_spl_objs    ++ " with " ++ show n
                                  ++ " symbols."
-                         let base_pt = base ++ "-pt" ++ show i
+                         let base_pt = base' ++ show i
                              file    = base_pt <.> ".def"
                              dll     = base_pt <.> ".dll"
                              lst     = base_pt <.> ".lst"
@@ -168,13 +170,13 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                       do putStrLn $ "Creating DLL " ++ show i   ++ " of "
                                  ++ show n_spl_objs    ++ " with " ++ show n
                                  ++ " symbols."
-                         let base_pt = base ++ "-pt" ++ show i
+                         let base_pt = base' ++ show i
                              file    = base_pt <.> ".def"
                              dll     = base_pt <.> ".dll"
                              lst     = base_pt <.> ".lst"
                              imp_lib = base_pt <.> ".dll.a"
                              indexes = [1..(length spl_objs)]\\[i]
-                             libs    = map (\ix -> (base ++ "-pt" ++ show ix) <.> "dll.a") indexes
+                             libs    = map (\ix -> (base' ++ show ix) <.> "dll.a") indexes
 
                          _ <- execProg link_cmd $ concat [[objs_files
                                                           ,extra_libs
@@ -197,7 +199,7 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                     -- supposed to make. This means that nothing has to really
                     -- know how we split up the DLLs, for everything else it'so
                     -- as if it's still one large assembly.
-                    create_merged_archive base
+                    create_merged_archive base base' (length spl_objs)
 
 
 collectObjs :: [String] -> Objs
@@ -342,12 +344,11 @@ build_import_lib base dll_name defFile objs
 -- all the import libraries produced. This works because import libraries contain
 -- only .idata section which point to the right dlls. So LD will do the right thing.
 -- And this means we don't have to do any special handling for the rest of the pipeline.
-create_merged_archive :: FilePath -> IO ()
-create_merged_archive base
+create_merged_archive :: FilePath -> String -> Int -> IO ()
+create_merged_archive base prefix count
   = do let ar_script = base <.> "mri"
            imp_lib   = base <.> "dll.a"
-       imp_libs <- findFilesWith (return . ((takeBaseName base) `isPrefixOf`))
-                                 [takeDirectory base] ""
+       imp_libs <- map (\i -> prefix ++ show i) [1..count]
        let script = [ "create " ++ imp_lib    ] ++
                     map ("addlib " ++) imp_libs ++
                     [ "save", "end" ]
