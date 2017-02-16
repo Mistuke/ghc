@@ -350,7 +350,7 @@ create_merged_archive :: FilePath -> String -> Int -> IO ()
 create_merged_archive base prefix count
   = do let ar_script = base <.> "mri"
            imp_lib   = base <.> "dll.a"
-       imp_libs <- map (\i -> prefix ++ show i) [1..count]
+           imp_libs  = map (\i -> prefix ++ show i) [1..count]
        let script = [ "create " ++ imp_lib    ] ++
                     map ("addlib " ++) imp_libs ++
                     [ "save", "end" ]
