@@ -113,7 +113,7 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
        case num_sym > dll_max_symbols of
          False -> do putStrLn $ "DLL " ++ output ++ " OK, no need to split."
                      let defFile    = base <.> "def"
-                         dll_import = base <.> "dll.a"
+                         dll_import = base <.> "lib"
 
                      build_import_lib base (takeFileName output) defFile objs
 
@@ -156,9 +156,9 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                                  ++ show n_spl_objs    ++ " with " ++ show n
                                  ++ " symbols."
                          let base_pt = base' ++ show i
-                             file    = base_pt <.> ".def"
-                             dll     = base_pt <.> ".dll"
-                             lst     = base_pt <.> ".lst"
+                             file    = base_pt <.> "def"
+                             dll     = base_pt <.> "dll"
+                             lst     = base_pt <.> "lst"
 
                          _ <- withFile lst WriteMode $ \hExports ->
                                mapM_ (hPutStrLn hExports . unlines . map snd . objItems) o
@@ -172,12 +172,12 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                                  ++ show n_spl_objs    ++ " with " ++ show n
                                  ++ " symbols."
                          let base_pt = base' ++ show i
-                             file    = base_pt <.> ".def"
-                             dll     = base_pt <.> ".dll"
-                             lst     = base_pt <.> ".lst"
-                             imp_lib = base_pt <.> ".dll.a"
+                             file    = base_pt <.> "def"
+                             dll     = base_pt <.> "dll"
+                             lst     = base_pt <.> "lst"
+                             imp_lib = base_pt <.> "lib"
                              indexes = [1..(length spl_objs)]\\[i]
-                             libs    = map (\ix -> (base' ++ show ix) <.> "dll.a") indexes
+                             libs    = map (\ix -> (base' ++ show ix) <.> "lib") indexes
 
                          _ <- execProg link_cmd $ concat [[objs_files
                                                           ,extra_libs
@@ -297,6 +297,9 @@ execProg prog args =
          results <- hGetContents hout
          length results `seq` return $ lines results)
 
+libexe :: FilePath
+libexe = "lib"
+
 -- Builds a delay import lib at the very end which is used to
 -- be able to delay the picking of a DLL on Windows.
 -- This function is called always and decided internally
@@ -308,7 +311,7 @@ build_delay_import_lib :: String -- ^ input def file
                        -> IO ()
 build_delay_import_lib input_def output_lib create_delayed
   = when (isTrue create_delayed) $
-       execProg "dlltool" ["-d", input_def, "-y", output_lib] >> return ()
+       execProg libexe ["-DEF:" ++ input_def, "-OUT:" ++ output_lib] >> return ()
 
 -- Build a normal import library from the object file definitions
 build_import_lib :: FilePath -> FilePath -> FilePath -> Objs -> IO ()
@@ -329,15 +332,15 @@ build_import_lib base dll_name defFile objs
               mapM_ (\v -> hPutStrLn hDef $ "    " ++ show v ++ " DATA") globals
               mapM_ (\v -> hPutStrLn hDef $ "    " ++ show v           ) functions
 
-       let dll_import = base <.> "dll.a"
-       _ <- execProg "dlltool" ["-d", defFile, "-l", dll_import]
+       let dll_import = base <.> "lib"
+       _ <- execProg libexe ["-DEF:" ++ defFile, "-OUT:" ++ dll_import]
        return ()
 
 -- Do some cleanup and create merged lib.
 -- Because we have no split the DLL we need
 -- to provide a way for the linker to know about the split
 -- DLL. Also the compile was supposed to produce a DLL
--- foo.dll and import library foo.dll.a. However we've actually
+-- foo.dll and import library foo.lib. However we've actually
 -- produced foo-pt1.dll, foo-pt2.dll etc. What we don't want is to have
 -- To somehow convey back to the compiler that we split the DLL in x pieces
 -- as this would require a lot of changes.
@@ -349,7 +352,7 @@ build_import_lib base dll_name defFile objs
 create_merged_archive :: FilePath -> String -> Int -> IO ()
 create_merged_archive base prefix count
   = do let ar_script = base <.> "mri"
-           imp_lib   = base <.> "dll.a"
+           imp_lib   = base <.> "lib"
            imp_libs  = map (\i -> prefix ++ show i) [1..count]
        let script = [ "create " ++ imp_lib    ] ++
                     map ("addlib " ++) imp_libs ++
