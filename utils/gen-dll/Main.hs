@@ -91,9 +91,13 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
        --
        -- This granularity is the best we can do without --print-map like info.
        raw_exports <- execProg "nm" ["-g", "--defined-only", objs_files]
-       let objs    = collectObjs $ sort $ nub raw_exports
+       putStrLn $ "Processing symbols.."
+
+       let objs    = collectObjs raw_exports
            num_sym = foldr (\a b -> b + objCount a) 0 objs
            exports = base <.> "lst"
+
+       putStrLn $ "Number of symbols in object files for " ++ output ++ ": " ++ show num_sym
 
        _ <- withFile exports WriteMode $ \hExports ->
              mapM_ (hPutStrLn hExports . unlines . map snd . objItems) objs
@@ -106,8 +110,6 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                       , "-dylib-abi-version"
                       , show sxs_version
                       ]
-
-       putStrLn $ "Number of symbols in object files for " ++ output ++ ": " ++ show num_sym
 
        -- Now check that the DLL doesn't have too many symbols. See trac #5987.
        case num_sym > dll_max_symbols of
@@ -193,7 +195,7 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                                                           ]
                                                          ]
 
-                         build_delay_import_lib file imp_lib delay_imp
+                         -- build_delay_import_lib file imp_lib delay_imp
                          putStrLn $ "Created " ++ dll ++ "."
 
                     -- And finally, merge the individual import libraries into
@@ -253,7 +255,7 @@ groupObjs = binObjs 0 []
 -- Maximum number of symbols to allow into
 -- one DLL. This is the split factor used.
 dll_max_symbols :: Int
-dll_max_symbols = 65535
+dll_max_symbols = 65535 - 10 -- lib.exe seems to want some padding room.
 
 isTrue :: String -> Bool
 isTrue = (=="yes") . map toLower
@@ -272,8 +274,9 @@ mkArgs arg =
          res <- c_CommandLineToArgvW c_arg c_size
          size <- peek c_size
          args <- peekArray (fromIntegral size) res
+         values <- mapM peekCWString args
          _ <- localFree res
-         mapM peekCWString args
+         return values
 
 execProg :: String -> [String] -> IO [String]
 execProg prog args =
