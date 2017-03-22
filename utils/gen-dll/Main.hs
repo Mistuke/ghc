@@ -16,7 +16,7 @@ import System.Exit (ExitCode(..), exitWith)
 import System.Directory (findFilesWith, getCurrentDirectory)
 import System.FilePath (takeBaseName, takeDirectory, dropExtension, (<.>)
                        ,takeFileName)
-import System.IO (hClose, hGetContents, withFile, IOMode(..), hPutStrLn)
+import System.IO (hClose, hGetContents, withFile, IOMode(..), hPutStrLn, openFile)
 import System.Process (proc, createProcess_, StdStream (..), CreateProcess(..)
                       ,waitForProcess)
 
@@ -90,7 +90,7 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
        -- from the object files. Use this to lower the max amount of symbols.
        --
        -- This granularity is the best we can do without --print-map like info.
-       raw_exports <- execProg "nm" ["-g", "--defined-only", objs_files]
+       raw_exports <- execProg "nm" Nothing ["-g", "--defined-only", objs_files]
        putStrLn $ "Processing symbols.."
 
        let objs    = collectObjs raw_exports
@@ -119,17 +119,18 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
 
                      build_import_lib base (takeFileName output) defFile objs
 
-                     _ <- execProg link_cmd $ concat [[objs_files
-                                                      ,extra_libs
-                                                      ,extra_flags
-                                                      ]
-                                                     ,sxs_opts
-                                                     ,["-fno-shared-implib"
-                                                      ,"-optl-Wl,--retain-symbols-file=" ++ exports
-                                                      ,"-o"
-                                                      ,output
-                                                      ]
-                                                     ]
+                     _ <- execProg link_cmd Nothing
+                              $ concat [[objs_files
+                                        ,extra_libs
+                                        ,extra_flags
+                                        ]
+                                       ,sxs_opts
+                                       ,["-fno-shared-implib"
+                                        ,"-optl-Wl,--retain-symbols-file=" ++ exports
+                                        ,"-o"
+                                        ,output
+                                        ]
+                                       ]
 
                      build_delay_import_lib defFile dll_import delay_imp
 
@@ -181,19 +182,20 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                              indexes = [1..(length spl_objs)]\\[i]
                              libs    = map (\ix -> (base' ++ show ix) <.> "lib") indexes
 
-                         _ <- execProg link_cmd $ concat [[objs_files
-                                                          ,extra_libs
-                                                          ,extra_flags
-                                                          ,file
-                                                          ]
-                                                         ,libs
-                                                         ,sxs_opts
-                                                         ,["-fno-shared-implib"
-                                                          ,"-optl-Wl,--retain-symbols-file=" ++ lst
-                                                          ,"-o"
-                                                          ,dll
-                                                          ]
-                                                         ]
+                         _ <- execProg link_cmd Nothing
+                                  $ concat [[objs_files
+                                            ,extra_libs
+                                            ,extra_flags
+                                            ,file
+                                            ]
+                                           ,libs
+                                           ,sxs_opts
+                                           ,["-fno-shared-implib"
+                                            ,"-optl-Wl,--retain-symbols-file=" ++ lst
+                                            ,"-o"
+                                            ,dll
+                                            ]
+                                           ]
 
                          -- build_delay_import_lib file imp_lib delay_imp
                          putStrLn $ "Created " ++ dll ++ "."
@@ -278,21 +280,28 @@ mkArgs arg =
          _ <- localFree res
          return values
 
-execProg :: String -> [String] -> IO [String]
-execProg prog args =
+execProg :: String -> Maybe FilePath -> [String] -> IO [String]
+execProg prog m_stdin args =
   do args' <- fmap concat $ mapM mkArgs args
      prog' <- mkArgs prog
      let full@(c_prog:c_args) = prog' ++ args'
      -- print the commands we're executing for debugging and transparency
-     putStrLn $ unwords full
+     putStrLn $ unwords $ full ++ [maybe "" ("< " ++) m_stdin]
      cwdir <- getCurrentDirectory
      let cp = (proc c_prog c_args)
               { std_out = CreatePipe, cwd = Just cwdir }
+     cp' <- case m_stdin of
+              Nothing   -> return cp
+              Just path -> do h <- openFile path ReadMode
+                              return cp{ std_in = UseHandle h}
      bracket
-       (createProcess_ ("execProg: " ++ prog)  cp)
+       (createProcess_ ("execProg: " ++ prog)  cp')
        (\(_, Just hout, _, ph) -> do
          hClose hout
          code <- waitForProcess ph
+         case std_in cp' of
+           UseHandle h -> hClose h
+           _           -> return ()
          case code of
            ExitFailure _ -> exitWith code
            ExitSuccess   -> return ())
@@ -314,7 +323,7 @@ build_delay_import_lib :: String -- ^ input def file
                        -> IO ()
 build_delay_import_lib input_def output_lib create_delayed
   = when (isTrue create_delayed) $
-       execProg libexe ["-DEF:" ++ input_def, "-OUT:" ++ output_lib] >> return ()
+       execProg libexe Nothing ["-DEF:" ++ input_def, "-OUT:" ++ output_lib] >> return ()
 
 -- Build a normal import library from the object file definitions
 build_import_lib :: FilePath -> FilePath -> FilePath -> Objs -> IO ()
@@ -336,7 +345,7 @@ build_import_lib base dll_name defFile objs
               mapM_ (\v -> hPutStrLn hDef $ "    " ++ show v           ) functions
 
        let dll_import = base <.> "lib"
-       _ <- execProg libexe ["-DEF:" ++ defFile, "-OUT:" ++ dll_import]
+       _ <- execProg libexe Nothing ["-DEF:" ++ defFile, "-OUT:" ++ dll_import]
        return ()
 
 -- Do some cleanup and create merged lib.
@@ -356,10 +365,10 @@ create_merged_archive :: FilePath -> String -> Int -> IO ()
 create_merged_archive base prefix count
   = do let ar_script = base <.> "mri"
            imp_lib   = base <.> "lib"
-           imp_libs  = map (\i -> prefix ++ show i) [1..count]
+           imp_libs  = map (\i -> prefix ++ show i <.> "lib") [1..count]
        let script = [ "create " ++ imp_lib    ] ++
                     map ("addlib " ++) imp_libs ++
                     [ "save", "end" ]
        writeFile ar_script (unlines script)
-       _ <- execProg "ar" ["-M", ar_script]
+       _ <- execProg "ar" (Just ar_script) ["-M"]
        return ()
