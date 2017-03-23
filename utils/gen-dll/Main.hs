@@ -99,7 +99,7 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
 
        putStrLn $ "Number of symbols in object files for " ++ output ++ ": " ++ show num_sym
 
-       _ <- withFile exports WriteMode $ \hExports ->
+       _ <- withFile exports WriteMode $ \hExports -> do
              mapM_ (hPutStrLn hExports . unlines . map snd . objItems) objs
 
        -- Side-by-Side assembly generation flags for GHC. Pass these along so the DLLs
@@ -115,7 +115,7 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
        case num_sym > dll_max_symbols of
          False -> do putStrLn $ "DLL " ++ output ++ " OK, no need to split."
                      let defFile    = base <.> "def"
-                         dll_import = base <.> "lib"
+                         dll_import = base <.> "dll.a"
 
                      build_import_lib base (takeFileName output) defFile objs
 
@@ -178,9 +178,9 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                              file    = base_pt <.> "def"
                              dll     = base_pt <.> "dll"
                              lst     = base_pt <.> "lst"
-                             imp_lib = base_pt <.> "lib"
+                             imp_lib = base_pt <.> "dll.a"
                              indexes = [1..(length spl_objs)]\\[i]
-                             libs    = map (\ix -> (base' ++ show ix) <.> "lib") indexes
+                             libs    = map (\ix -> (base' ++ show ix) <.> "dll.a") indexes
 
                          _ <- execProg link_cmd Nothing
                                   $ concat [[objs_files
@@ -310,7 +310,7 @@ execProg prog m_stdin args =
          length results `seq` return $ lines results)
 
 libexe :: FilePath
-libexe = "lib"
+libexe = "dlltool"
 
 -- Builds a delay import lib at the very end which is used to
 -- be able to delay the picking of a DLL on Windows.
@@ -323,7 +323,7 @@ build_delay_import_lib :: String -- ^ input def file
                        -> IO ()
 build_delay_import_lib input_def output_lib create_delayed
   = when (isTrue create_delayed) $
-       execProg libexe Nothing ["-DEF:" ++ input_def, "-OUT:" ++ output_lib] >> return ()
+       execProg libexe Nothing ["-d", input_def, "-l", output_lib] >> return ()
 
 -- Build a normal import library from the object file definitions
 build_import_lib :: FilePath -> FilePath -> FilePath -> Objs -> IO ()
@@ -344,8 +344,8 @@ build_import_lib base dll_name defFile objs
               mapM_ (\v -> hPutStrLn hDef $ "    " ++ show v ++ " DATA") globals
               mapM_ (\v -> hPutStrLn hDef $ "    " ++ show v           ) functions
 
-       let dll_import = base <.> "lib"
-       _ <- execProg libexe Nothing ["-DEF:" ++ defFile, "-OUT:" ++ dll_import]
+       let dll_import = base <.> "dll.a"
+       _ <- execProg libexe Nothing ["-d", defFile, "-l", dll_import]
        return ()
 
 -- Do some cleanup and create merged lib.
@@ -364,8 +364,8 @@ build_import_lib base dll_name defFile objs
 create_merged_archive :: FilePath -> String -> Int -> IO ()
 create_merged_archive base prefix count
   = do let ar_script = base <.> "mri"
-           imp_lib   = base <.> "lib"
-           imp_libs  = map (\i -> prefix ++ show i <.> "lib") [1..count]
+           imp_lib   = base <.> "dll.a"
+           imp_libs  = map (\i -> prefix ++ show i <.> "dll.a") [1..count]
        let script = [ "create " ++ imp_lib    ] ++
                     map ("addlib " ++) imp_libs ++
                     [ "save", "end" ]
