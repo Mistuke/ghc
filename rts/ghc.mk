@@ -212,7 +212,7 @@ $$(rts_$1_LIB) : $$(rts_$1_OBJS) $(ALL_RTS_DEF_LIBS) rts/dist/libs.depend rts/di
 	# $$9  = create delay load import lib
 	# $$10 = SxS Name
 	# $$11 = SxS Version
-	$$(gen-dll_INPLACE) link "rts/dist/build" "rts/dist/build" "" "" "$$(ALL_RTS_DEF_LIBS)" "$$(rts_$1_OBJS)" "$$@" "$$(rts_dist_HC) -this-unit-id rts -shared -dynamic -dynload deploy \
+	$$(gen-dll_INPLACE) link "rts/dist/build" "rts/dist/build" "" "" "$$(ALL_RTS_DEF_LIBS)" "$$(rts_$1_OBJS)" "$$@" "$$(rts_dist_HC) -this-unit-id rts -no-hs-main -shared -dynamic -dynload deploy \
          -no-auto-link-packages -Lrts/dist/build -l$$(LIBFFI_NAME) \
          `cat rts/dist/libs.depend | tr '\n' ' '` \
          $$(rts_dist_$1_GHC_LD_OPTS)" "NO" \

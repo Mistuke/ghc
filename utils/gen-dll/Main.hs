@@ -99,7 +99,7 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
 
        putStrLn $ "Number of symbols in object files for " ++ output ++ ": " ++ show num_sym
 
-       _ <- withFile exports WriteMode $ \hExports -> do
+       _ <- withFile exports WriteMode $ \hExports ->
              mapM_ (hPutStrLn hExports . unlines . map snd . objItems) objs
 
        -- Side-by-Side assembly generation flags for GHC. Pass these along so the DLLs
@@ -210,6 +210,7 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
 
 collectObjs :: [String] -> Objs
 collectObjs = map snd . M.toList . foldr collectObjs' M.empty
+
 collectObjs' :: String -> M.Map String Obj -> M.Map String Obj
 collectObjs' []  m   = m
 collectObjs' str_in m
@@ -257,7 +258,7 @@ groupObjs = binObjs 0 []
 -- Maximum number of symbols to allow into
 -- one DLL. This is the split factor used.
 dll_max_symbols :: Int
-dll_max_symbols = 65535 - 10 -- lib.exe seems to want some padding room.
+dll_max_symbols = 65535 - 10 -- Some padding for required symbols.
 
 isTrue :: String -> Bool
 isTrue = (=="yes") . map toLower

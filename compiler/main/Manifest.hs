@@ -119,7 +119,7 @@ createManifestDefinition dflags pkgs assembly = do
                       }
      where genDependencies :: [PackageConfig] -> IO [ManifestFile]
            genDependencies []       = return []
-           genDependencies (dep:xs) = do              
+           genDependencies (dep:xs) = do
               let fullPkgName = "libHS"
                               ++ packageNameString dep
                               ++ "-"
