@@ -237,7 +237,7 @@ collectObjs' str_in m
 splitObjs :: Objs -> (Symbols, Symbols)
 splitObjs []     = ([], [])
 splitObjs (y:ys) = group_ (objItems y) (splitObjs ys)
-  where globals = "DdGgrRSs"
+  where globals = "DdGgrRSsbBC"
         group_ :: [(Char, Symbol)] -> (Symbols, Symbols) -> (Symbols, Symbols)
         group_ []     x                             = x
         group_ (x:xs) (g, f) | fst x `elem` globals = group_ xs (snd x:g, f)

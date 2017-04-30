@@ -48,16 +48,6 @@ static void *GetNonNullProcAddress(HINSTANCE h, char *sym) {
     return p;
 }
 
-static HINSTANCE GetNonNullModuleHandle(LPWSTR dll) {
-    HINSTANCE h;
-
-    h = GetModuleHandle(dll);
-    if (h == NULL) {
-        die("Failed to get module handle for %ls", dll);
-    }
-    return h;
-}
-
 DLL_DIRECTORY_COOKIE* setSearchPath (int *len) {
     HMODULE hDLL = (HMODULE)LoadLibraryW(L"Kernel32.DLL");
     LPAddDLLDirectory AddDllDirectory = (LPAddDLLDirectory)GetNonNullProcAddress(hDLL, "AddDllDirectory");
@@ -135,34 +125,9 @@ HINSTANCE loadDll(LPWSTR dll) {
     DWORD dw;
     LPVOID lpMsgBuf;
 
-    const DWORD flags[] = { LOAD_LIBRARY_SEARCH_USER_DIRS | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, 0 };
+    const DWORD flags = LOAD_LIBRARY_SEARCH_USER_DIRS | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
 
-    int cFlag;
-    int flags_start = 1; /* Assume we don't support the new API.  */
-
-    /* Detect if newer API are available, if not, skip the first flags entry.  */
-    if (GetNonNullProcAddress((HMODULE)LoadLibraryW(L"Kernel32.DLL"), "AddDllDirectory")) {
-        flags_start = 0;
-    }
-
-    /* Iterate through the possible flags and formats.  */
-    for (cFlag = flags_start; cFlag < 2; cFlag++)
-    {
-        h = LoadLibraryExW(dll, NULL, flags[cFlag]);
-        if (h == NULL)
-        {
-            if (GetLastError() != ERROR_MOD_NOT_FOUND)
-            {
-                break;
-            }
-        }
-        else
-        {
-            break; /* We're done. DLL has been loaded.  */
-        }
-    }
-
-exit:
+    h = LoadLibraryExW(dll, NULL, flags);
 
     if (h == NULL) {
         dw = GetLastError();
@@ -182,6 +147,7 @@ exit:
 }
 
 typedef int (*hs_main_t)(int , char **, StgClosure *, RtsConfig);
+typedef void (*hs_init_t)(int *argc, char **argv[]);
 
 int main(int argc, char *argv[]) {
     HINSTANCE hRtsDll, hProgDll;
@@ -189,18 +155,25 @@ int main(int argc, char *argv[]) {
     StgClosure *main_p;
     RtsConfig rts_config;
     hs_main_t hs_main_p;
+    hs_init_t hs_init_p;
 
     int count = 0;
-
     DLL_DIRECTORY_COOKIE* cookies = setSearchPath(&count);
+
+    /* RTS must be loaded first and initialized before any other haskell
+       library, so the static constructors are properly initialized.  */
+    hRtsDll = loadDll(rtsDll);
+    hs_init_p = GetNonNullProcAddress(hRtsDll, "hs_init");
+    hs_init_p(&argc, &argv);
+
+    /* Now load the program Dll, this will trigger loading of all dependencies
+       and initialize all static constructors.  */
     hProgDll = loadDll(progDll);
-    hRtsDll = GetNonNullModuleHandle(rtsDll);
 
     /* Do some default initializations.
        These should mirror those done for mkExtraObjToLinkIntoBinary
        in compiler/main/DriverPipeline.hs or bad things will happen.  */
-
-    hs_main_p    = GetNonNullProcAddress(hRtsDll, "hs_main");
+    hs_main_p    = GetNonNullProcAddress(hRtsDll , "hs_main");
     main_p       = GetNonNullProcAddress(hProgDll, "ZCMain_main_closure");
     rts_config   = *(RtsConfig*)GetNonNullProcAddress(hRtsDll, "defaultRtsConfig");
     rts_config.rts_opts_enabled     = rtsOpts;

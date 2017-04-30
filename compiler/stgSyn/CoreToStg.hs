@@ -251,8 +251,8 @@ coreTopBindToStg dflags this_mod env body_fvs (NonRec id rhs)
               return (stg_rhs, fvs')
 
         bind = StgTopLifted $ StgNonRec id stg_rhs
-    in -- TODO: Fix these for DynWay
-    ASSERT2(consistentCafInfo [id] bind || WayDyn `elem` (ways dflags), ppr id )
+    in
+    ASSERT2(consistentCafInfo id bind, ppr id )
       -- NB: previously the assertion printed 'rhs' and 'bind'
       --     as well as 'id', but that led to a black hole
       --     where printing the assertion error tripped the
@@ -275,26 +275,25 @@ coreTopBindToStg dflags this_mod env body_fvs (Rec pairs)
                return (stg_rhss, fvs')
 
         bind = StgTopLifted $ StgRec (zip binders stg_rhss)
-    in -- TODO: Fix these for DynWay
-    ASSERT2(consistentCafInfo binders bind || WayDyn `elem` (ways dflags), ppr binders)
+    in
+    ASSERT2(consistentCafInfo (head binders) bind, ppr binders)
     (env', fvs' `unionFVInfo` body_fvs, bind)
 
 
--- Assertion helper: this checks that the CafInfo on any the Ids matches
+-- Assertion helper: this checks that the CafInfo on the Id matches
 -- what CoreToStg has figured out about the binding's SRT.  The
 -- CafInfo will be exact in all cases except when CorePrep has
 -- floated out a binding, in which case it will be approximate.
-consistentCafInfo :: [Id] -> GenStgTopBinding Var Id -> Bool
-consistentCafInfo ids bind
---  = WARN( not (exact || is_sat_thing) , ppr ids <+> ppr id_marked_caffy <+> ppr binding_is_caffy )
-  =
-    safe || True || exact || is_sat_thing
+consistentCafInfo :: Id -> GenStgTopBinding Var Id -> Bool
+consistentCafInfo id bind
+  = WARN( not (exact || is_sat_thing) , ppr id <+> ppr id_marked_caffy <+> ppr binding_is_caffy )
+    safe
   where
     safe  = id_marked_caffy || not binding_is_caffy
     exact = id_marked_caffy == binding_is_caffy
-    id_marked_caffy  = any mayHaveCafRefs $ map idCafInfo ids
+    id_marked_caffy  = mayHaveCafRefs (idCafInfo id)
     binding_is_caffy = topStgBindHasCafRefs bind
-    is_sat_thing = any (\id -> occNameFS (nameOccName (idName id)) == fsLit "sat") ids
+    is_sat_thing = occNameFS (nameOccName (idName id)) == fsLit "sat"
 
 coreToTopStgRhs
         :: DynFlags
