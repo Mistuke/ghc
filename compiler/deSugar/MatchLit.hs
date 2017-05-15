@@ -49,6 +49,7 @@ import qualified GHC.LanguageExtensions as LangExt
 import Control.Monad
 import Data.Int
 import Data.Word
+import Data.Proxy
 
 {-
 ************************************************************************
@@ -82,17 +83,16 @@ dsLit (HsInt64Prim  _ i) = return (Lit (MachInt64 i))
 dsLit (HsWord64Prim _ w) = return (Lit (MachWord64 w))
 dsLit (HsFloatPrim    f) = return (Lit (MachFloat (fl_value f)))
 dsLit (HsDoublePrim   d) = return (Lit (MachDouble (fl_value d)))
-
 dsLit (HsChar _ c)       = return (mkCharExpr c)
 dsLit (HsString _ str)   = mkStringExprFS str
 dsLit (HsInteger _ i _)  = mkIntegerExpr i
-dsLit (HsInt _ i)        = do dflags <- getDynFlags
-                              return (mkIntExpr dflags i)
+dsLit (HsInt i)          = do dflags <- getDynFlags
+                              return (mkIntExpr dflags (il_value i))
 
-dsLit (HsRat r ty) = do
-   num   <- mkIntegerExpr (numerator (fl_value r))
-   denom <- mkIntegerExpr (denominator (fl_value r))
-   return (mkCoreConApps ratio_data_con [Type integer_ty, num, denom])
+dsLit (HsRat (FL _ _ val) ty) = do
+  num   <- mkIntegerExpr (numerator val)
+  denom <- mkIntegerExpr (denominator val)
+  return (mkCoreConApps ratio_data_con [Type integer_ty, num, denom])
   where
     (ratio_data_con, integer_ty)
         = case tcSplitTyConApp ty of
@@ -157,21 +157,21 @@ warnAboutOverflowedLiterals :: DynFlags -> HsOverLit Id -> DsM ()
 warnAboutOverflowedLiterals dflags lit
  | wopt Opt_WarnOverflowedLiterals dflags
  , Just (i, tc) <- getIntegralLit lit
-  = if      tc == intTyConName    then check i tc (undefined :: Int)
-    else if tc == int8TyConName   then check i tc (undefined :: Int8)
-    else if tc == int16TyConName  then check i tc (undefined :: Int16)
-    else if tc == int32TyConName  then check i tc (undefined :: Int32)
-    else if tc == int64TyConName  then check i tc (undefined :: Int64)
-    else if tc == wordTyConName   then check i tc (undefined :: Word)
-    else if tc == word8TyConName  then check i tc (undefined :: Word8)
-    else if tc == word16TyConName then check i tc (undefined :: Word16)
-    else if tc == word32TyConName then check i tc (undefined :: Word32)
-    else if tc == word64TyConName then check i tc (undefined :: Word64)
+  = if      tc == intTyConName    then check i tc (Proxy :: Proxy Int)
+    else if tc == int8TyConName   then check i tc (Proxy :: Proxy Int8)
+    else if tc == int16TyConName  then check i tc (Proxy :: Proxy Int16)
+    else if tc == int32TyConName  then check i tc (Proxy :: Proxy Int32)
+    else if tc == int64TyConName  then check i tc (Proxy :: Proxy Int64)
+    else if tc == wordTyConName   then check i tc (Proxy :: Proxy Word)
+    else if tc == word8TyConName  then check i tc (Proxy :: Proxy Word8)
+    else if tc == word16TyConName then check i tc (Proxy :: Proxy Word16)
+    else if tc == word32TyConName then check i tc (Proxy :: Proxy Word32)
+    else if tc == word64TyConName then check i tc (Proxy :: Proxy Word64)
     else return ()
 
   | otherwise = return ()
   where
-    check :: forall a. (Bounded a, Integral a) => Integer -> Name -> a -> DsM ()
+    check :: forall a. (Bounded a, Integral a) => Integer -> Name -> Proxy a -> DsM ()
     check i tc _proxy
       = when (i < minB || i > maxB) $ do
         warnDs (Reason Opt_WarnOverflowedLiterals)
@@ -208,7 +208,7 @@ warnAboutEmptyEnumerations dflags fromExpr mThnExpr toExpr
   , Just (from,tc) <- getLHsIntegralLit fromExpr
   , Just mThn      <- traverse getLHsIntegralLit mThnExpr
   , Just (to,_)    <- getLHsIntegralLit toExpr
-  , let check :: forall a. (Enum a, Num a) => a -> DsM ()
+  , let check :: forall a. (Enum a, Num a) => Proxy a -> DsM ()
         check _proxy
           = when (null enumeration) $
             warnDs (Reason Opt_WarnEmptyEnumerations) (text "Enumeration is empty")
@@ -218,17 +218,17 @@ warnAboutEmptyEnumerations dflags fromExpr mThnExpr toExpr
                             Nothing      -> [fromInteger from                    .. fromInteger to]
                             Just (thn,_) -> [fromInteger from, fromInteger thn   .. fromInteger to]
 
-  = if      tc == intTyConName    then check (undefined :: Int)
-    else if tc == int8TyConName   then check (undefined :: Int8)
-    else if tc == int16TyConName  then check (undefined :: Int16)
-    else if tc == int32TyConName  then check (undefined :: Int32)
-    else if tc == int64TyConName  then check (undefined :: Int64)
-    else if tc == wordTyConName   then check (undefined :: Word)
-    else if tc == word8TyConName  then check (undefined :: Word8)
-    else if tc == word16TyConName then check (undefined :: Word16)
-    else if tc == word32TyConName then check (undefined :: Word32)
-    else if tc == word64TyConName then check (undefined :: Word64)
-    else if tc == integerTyConName then check (undefined :: Integer)
+  = if      tc == intTyConName    then check (Proxy :: Proxy Int)
+    else if tc == int8TyConName   then check (Proxy :: Proxy Int8)
+    else if tc == int16TyConName  then check (Proxy :: Proxy Int16)
+    else if tc == int32TyConName  then check (Proxy :: Proxy Int32)
+    else if tc == int64TyConName  then check (Proxy :: Proxy Int64)
+    else if tc == wordTyConName   then check (Proxy :: Proxy Word)
+    else if tc == word8TyConName  then check (Proxy :: Proxy Word8)
+    else if tc == word16TyConName then check (Proxy :: Proxy Word16)
+    else if tc == word32TyConName then check (Proxy :: Proxy Word32)
+    else if tc == word64TyConName then check (Proxy :: Proxy Word64)
+    else if tc == integerTyConName then check (Proxy :: Proxy Integer)
     else return ()
 
   | otherwise = return ()
@@ -243,9 +243,9 @@ getLHsIntegralLit (L _ (HsOverLit over_lit)) = getIntegralLit over_lit
 getLHsIntegralLit _ = Nothing
 
 getIntegralLit :: HsOverLit Id -> Maybe (Integer, Name)
-getIntegralLit (OverLit { ol_val = HsIntegral _ i, ol_type = ty })
+getIntegralLit (OverLit { ol_val = HsIntegral i, ol_type = ty })
   | Just tc <- tyConAppTyCon_maybe ty
-  = Just (i, tyConName tc)
+  = Just (il_value i, tyConName tc)
 getIntegralLit _ = Nothing
 
 {-
@@ -313,8 +313,8 @@ tidyNPat tidy_lit_pat (OverLit val False _ ty) mb_neg _eq outer_ty
 
     mb_int_lit :: Maybe Integer
     mb_int_lit = case (mb_neg, val) of
-                   (Nothing, HsIntegral _ i) -> Just i
-                   (Just _,  HsIntegral _ i) -> Just (-i)
+                   (Nothing, HsIntegral i) -> Just (il_value i)
+                   (Just _,  HsIntegral i) -> Just (-(il_value i))
                    _ -> Nothing
 
     mb_str_lit :: Maybe FastString

@@ -94,7 +94,7 @@ runMainIO main =
       topHandler
 
 install_interrupt_handler :: IO () -> IO ()
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 install_interrupt_handler handler = do
   _ <- GHC.ConsoleHandler.installHandler $
      Catch $ \event ->
@@ -177,8 +177,9 @@ real_handler exit se = do
 
       Just UserInterrupt -> exitInterrupted
 
-      Just HeapOverflow -> exit 251
-           -- the RTS has already emitted a message to stderr
+      Just HeapOverflow -> do
+           reportHeapOverflow
+           exit 251
 
       _ -> case fromException se of
            -- only the main thread gets ExitException exceptions
@@ -243,7 +244,7 @@ unreachable :: IO a
 unreachable = fail "If you can read this, shutdownHaskellAndExit did not exit."
 
 exitHelper :: CInt -> Int -> IO a
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 exitHelper exitKind r =
   shutdownHaskellAndExit (fromIntegral r) exitKind >> unreachable
 #else
@@ -265,7 +266,7 @@ foreign import ccall "shutdownHaskellAndSignal"
 
 exitInterrupted :: IO a
 exitInterrupted =
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
   safeExit 252
 #else
   -- we must exit via the default action for SIGINT, so that the

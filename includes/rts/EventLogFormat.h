@@ -73,8 +73,7 @@
  *
  * -------------------------------------------------------------------------- */
 
-#ifndef RTS_EVENTLOGFORMAT_H
-#define RTS_EVENTLOGFORMAT_H
+#pragma once
 
 /*
  * Markers for begin/end of the Header.
@@ -231,7 +230,7 @@
 #define CAPSET_TYPE_OSPROCESS   2  /* caps belong to the same OS process */
 #define CAPSET_TYPE_CLOCKDOMAIN 3  /* caps share a local clock/time      */
 
-#ifndef EVENTLOG_CONSTANTS_ONLY
+#if !defined(EVENTLOG_CONSTANTS_ONLY)
 
 typedef StgWord16 EventTypeNum;
 typedef StgWord64 EventTimestamp; /* in nanoseconds */
@@ -245,5 +244,3 @@ typedef StgWord64 EventTaskId;         /* for EVENT_TASK_* */
 typedef StgWord64 EventKernelThreadId; /* for EVENT_TASK_CREATE */
 
 #endif
-
-#endif /* RTS_EVENTLOGFORMAT_H */

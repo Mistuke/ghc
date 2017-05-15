@@ -167,7 +167,7 @@ import MonadUtils
 import Data.IORef
 import Data.List ( foldl', partition )
 
-#ifdef DEBUG
+#if defined(DEBUG)
 import Digraph
 import UniqSet
 #endif
@@ -1382,6 +1382,7 @@ addInertEq :: Ct -> TcS ()
 addInertEq ct
   = do { traceTcS "addInertEq {" $
          text "Adding new inert equality:" <+> ppr ct
+
        ; ics <- getInertCans
 
        ; ct@(CTyEqCan { cc_tyvar = tv, cc_ev = ev }) <- maybeEmitShadow ics ct
@@ -2397,14 +2398,14 @@ runTcSWithEvBinds ev_binds_var tcs
        ; when (count > 0) $
          csTraceTcM $ return (text "Constraint solver steps =" <+> int count)
 
-#ifdef DEBUG
+#if defined(DEBUG)
        ; ev_binds <- TcM.getTcEvBindsMap ev_binds_var
        ; checkForCyclicBinds ev_binds
 #endif
 
        ; return res }
 
-#ifdef DEBUG
+#if defined(DEBUG)
 checkForCyclicBinds :: EvBindMap -> TcM ()
 checkForCyclicBinds ev_binds_map
   | null cycles
@@ -2422,8 +2423,8 @@ checkForCyclicBinds ev_binds_map
     coercion_cycles = [c | c <- cycles, any is_co_bind c]
     is_co_bind (EvBind { eb_lhs = b }) = isEqPred (varType b)
 
-    edges :: [(EvBind, EvVar, [EvVar])]
-    edges = [ (bind, bndr, nonDetEltsUniqSet (evVarsOfTerm rhs))
+    edges :: [ Node EvVar EvBind ]
+    edges = [ DigraphNode bind bndr (nonDetEltsUniqSet (evVarsOfTerm rhs))
             | bind@(EvBind { eb_lhs = bndr, eb_rhs = rhs}) <- bagToList ev_binds ]
             -- It's OK to use nonDetEltsUFM here as
             -- stronglyConnCompFromEdgedVertices is still deterministic even
@@ -2456,7 +2457,7 @@ nestImplicTcS ref inner_tclvl (TcS thing_inside)
        ; res <- TcM.setTcLevel inner_tclvl $
                 thing_inside nest_env
 
-#ifdef DEBUG
+#if defined(DEBUG)
        -- Perform a check that the thing_inside did not cause cycles
        ; ev_binds <- TcM.getTcEvBindsMap ref
        ; checkForCyclicBinds ev_binds

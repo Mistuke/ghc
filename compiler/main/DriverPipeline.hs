@@ -252,7 +252,15 @@ compileOne' m_tc_result mHscMessage
        -- imports a _stub.h file that we created here.
        current_dir = takeDirectory basename
        old_paths   = includePaths dflags1
-       dflags      = dflags1 { includePaths = current_dir : old_paths }
+       prevailing_dflags = hsc_dflags hsc_env0
+       dflags =
+          dflags1 { includePaths = current_dir : old_paths
+                  , log_action = log_action prevailing_dflags
+                  , log_finaliser = log_finaliser prevailing_dflags }
+                  -- use the prevailing log_action / log_finaliser,
+                  -- not the one cached in the summary.  This is so
+                  -- that we can change the log_action without having
+                  -- to re-summarize all the source files.
        hsc_env     = hsc_env0 {hsc_dflags = dflags}
 
        -- Figure out what lang we're generating
@@ -370,7 +378,7 @@ link' dflags batch_attempt_linking hpt
         let
             staticLink = case ghcLink dflags of
                           LinkStaticLib -> True
-                          _ -> platformBinariesAreStaticLibs (targetPlatform dflags)
+                          _ -> False
 
             home_mod_infos = eltsHpt hpt
 
@@ -1126,10 +1134,6 @@ runPhase (RealPhase cc_phase) input_fn dflags
                                  (cmdlineFrameworkPaths ++ pkgFrameworkPaths)
             else return []
 
-        let split_objs = gopt Opt_SplitObjs dflags
-            split_opt | hcc && split_objs = [ "-DUSE_SPLIT_MARKERS" ]
-                      | otherwise         = [ ]
-
         let cc_opt | optLevel dflags >= 2 = [ "-O2" ]
                    | optLevel dflags >= 1 = [ "-O" ]
                    | otherwise            = []
@@ -1208,7 +1212,6 @@ runPhase (RealPhase cc_phase) input_fn dflags
                        ++ cc_opt
                        ++ [ "-include", ghcVersionH ]
                        ++ framework_paths
-                       ++ split_opt
                        ++ include_paths
                        ++ pkg_extra_cc_opts
                        ))
@@ -1734,22 +1737,19 @@ linkBinary' staticLink dflags o_files dep_packages = do
     -- Here are some libs that need to be linked at the *end* of
     -- the command line, because they contain symbols that are referred to
     -- by the RTS.  We can't therefore use the ordinary way opts for these.
-    let
-        debug_opts | WayDebug `elem` ways dflags = [
+    let debug_opts | WayDebug `elem` ways dflags = [
 #if defined(HAVE_LIBBFD)
                         "-lbfd", "-liberty"
 #endif
                          ]
-                   | otherwise            = []
+                   | otherwise                   = []
 
-    let thread_opts
-         | WayThreaded `elem` ways dflags =
-            let os = platformOS (targetPlatform dflags)
-            in if os `elem` [OSMinGW32, OSFreeBSD, OSOpenBSD,
-                             OSNetBSD, OSHaiku, OSQNXNTO, OSiOS, OSDarwin]
-               then []
-               else ["-lpthread"]
-         | otherwise               = []
+        thread_opts | WayThreaded `elem` ways dflags = [
+#if NEED_PTHREAD_LIB
+                        "-lpthread"
+#endif
+                        ]
+                    | otherwise                      = []
 
     resource_objs <- mkManifest dflags pkgs output_fn
 
@@ -1793,13 +1793,6 @@ linkBinary' staticLink dflags o_files dep_packages = do
                                ArchARM64  -> True
                                _ -> False
                           then ["-Wl,-no_compact_unwind"]
-                          else [])
-
-                      -- '-no_pie'
-                      -- iOS uses 'dynamic-no-pic', so we must pass this to ld to suppress a warning; see #7722
-                      ++ (if platformOS platform == OSiOS &&
-                             not staticLink
-                          then ["-Wl,-no_pie"]
                           else [])
 
                       -- '-Wl,-read_only_relocs,suppress'

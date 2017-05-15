@@ -177,9 +177,13 @@ then
 
     if test "$ghc_host_os" = "mingw32"
     then
-        # Canonicalise to <drive>:/path/to/ghc
-        WithGhc=`cygpath -m "${WithGhc}"`
-
+        if test "${OSTYPE}" = "msys"
+        then
+            WithGhc=`echo "${WithGhc}" | sed "s#^/\([a-zA-Z]\)/#\1:/#"`
+        else
+            # Canonicalise to <drive>:/path/to/ghc
+            WithGhc=`cygpath -m "${WithGhc}"`
+        fi
         echo "GHC path canonicalised to: ${WithGhc}"
     fi
 fi
@@ -241,8 +245,8 @@ AC_SUBST(SOLARIS_BROKEN_SHLD)
 
 dnl ** Do an unregisterised build?
 dnl --------------------------------------------------------------
-case "$HostArch" in
-    i386|x86_64|powerpc|powerpc64|powerpc64le|arm)
+case "$TargetArch" in
+    i386|x86_64|powerpc|powerpc64|powerpc64le|arm|aarch64)
         UnregisterisedDefault=NO
         ;;
     *)
@@ -374,8 +378,6 @@ then
     NM="${mingwbin}nm.exe"
     RANLIB="${mingwbin}ranlib.exe"
     OBJDUMP="${mingwbin}objdump.exe"
-    Windres="${mingwbin}windres.exe"
-    DllWrap="${mingwbin}dllwrap.exe"
     fp_prog_ar="${mingwbin}ar.exe"
 
     # NB. Download the perl binaries if required
@@ -425,12 +427,6 @@ with a cross-compiler.  To cross-compile GHC itself, set TARGET: stage
 GHC.
 ])
 fi
-if test "$CrossCompiling" = "YES"
-then
-  CrossCompilePrefix="${target}-"
-else
-  CrossCompilePrefix=""
-fi
 # Despite its similarity in name to TargetPlatform, TargetPlatformFull is used
 # in calls to subproject configure scripts and thus must be set to the autoconf
 # triple, not the normalized GHC triple that TargetPlatform is set to.
@@ -446,12 +442,21 @@ fi
 # all be taken care of for us if we configured the subprojects using
 # AC_CONFIG_DIR, but unfortunately Cabal needs to be the one to do the
 # configuration.
+#
+# We also use non-canonicalized triple when install stage1 crosscompiler
 if test -z "${target_alias}"
 then
   # --target wasn't given; use result from AC_CANONICAL_TARGET
   TargetPlatformFull="${target}"
 else
   TargetPlatformFull="${target_alias}"
+fi
+if test "$CrossCompiling" = "YES"
+then
+  # Use value passed by user from --target=
+  CrossCompilePrefix="${TargetPlatformFull}-"
+else
+  CrossCompilePrefix=""
 fi
 AC_SUBST(CrossCompiling)
 AC_SUBST(CrossCompilePrefix)
@@ -492,12 +497,19 @@ FP_SET_CFLAGS_C99([CC],[CONF_CC_OPTS_STAGE2],[CONF_CPP_OPTS_STAGE2])
 
 dnl ** Which ld to use?
 dnl --------------------------------------------------------------
-FIND_LD([LdCmd])
+FIND_LD([$target],[LdCmd])
 AC_SUBST([LdCmd])
 
 dnl ** Which nm to use?
 dnl --------------------------------------------------------------
-FP_ARG_WITH_PATH_GNU_PROG([NM], [nm], [nm])
+if test "$HostOS" != "mingw32"; then
+    AC_CHECK_TARGET_TOOL([NM], [nm])
+    if test "$NM" = ":"; then
+        AC_MSG_ERROR([cannot find nm in your PATH])
+    fi
+fi
+NmCmd="$NM"
+AC_SUBST([NmCmd])
 
 if test "$TargetOS_CPP" = "darwin"
 then
@@ -514,7 +526,7 @@ then
             echo
             echo "Try re-running configure with:"
             echo
-            echo '   ./configure --with-nm=$(xcrun --find nm-classic)'
+            echo '   NM=$(xcrun --find nm-classic) ./configure'
             echo
             exit 1
             ;;
@@ -524,39 +536,39 @@ then
         esac
 fi
 
-NmCmd="$NM"
-AC_SUBST([NmCmd])
-
 dnl ** Which objdump to use?
 dnl --------------------------------------------------------------
-FP_ARG_WITH_PATH_GNU_PROG_OPTIONAL([OBJDUMP], [objdump], [objdump])
+dnl Note: we may not have objdump on OS X, and we only need it on Windows (for DLL checks)
+case $HostOS_CPP in
+  cygwin32|mingw32)
+    AC_CHECK_TARGET_TOOL([OBJDUMP], [objdump])
+    ;;
+esac
+
 ObjdumpCmd="$OBJDUMP"
 AC_SUBST([ObjdumpCmd])
 
 dnl ** Which ar to use?
 dnl --------------------------------------------------------------
-FP_ARG_WITH_PATH_GNU_PROG([AR], [ar], [ar])
+if test "$HostOS" != "mingw32"; then
+    AC_CHECK_TARGET_TOOL([AR], [ar])
+    if test "$AR" = ":"; then
+        AC_MSG_ERROR([cannot find ar in your PATH])
+    fi
+fi
 ArCmd="$AR"
 fp_prog_ar="$AR"
 AC_SUBST([ArCmd])
 
 dnl ** Which ranlib to use?
 dnl --------------------------------------------------------------
-FP_ARG_WITH_PATH_GNU_PROG([RANLIB], [ranlib], [ranlib])
+AC_PROG_RANLIB
+if test "$RANLIB" = ":"; then
+    AC_MSG_ERROR([cannot find ranlib in your PATH])
+fi
 RanlibCmd="$RANLIB"
 RANLIB="$RanlibCmd"
 
-
-# Note: we may not have objdump on OS X, and we only need it on Windows (for DLL checks)
-case $HostOS_CPP in
-cygwin32|mingw32)
-    dnl ** Which objdump to use?
-    dnl --------------------------------------------------------------
-    FP_ARG_WITH_PATH_GNU_PROG([OBJDUMP], [objdump], [objdump])
-    ObjdumpCmd="$OBJDUMP"
-    AC_SUBST([ObjdumpCmd])
-    ;;
-esac
 
 # Here is where we re-target which specific version of the LLVM
 # tools we are looking for. In the past, GHC supported a number of
@@ -569,13 +581,13 @@ AC_DEFINE_UNQUOTED([sUPPORTED_LLVM_VERSION], ${sUPPORTED_LLVM_VERSION}, [The sup
 
 dnl ** Which LLVM llc to use?
 dnl --------------------------------------------------------------
-FIND_LLVM_PROG([LLC], [llc], [llc], [$LlvmVersion])
+FIND_LLVM_PROG([LLC], [llc], [$LlvmVersion])
 LlcCmd="$LLC"
 AC_SUBST([LlcCmd])
 
 dnl ** Which LLVM opt to use?
 dnl --------------------------------------------------------------
-FIND_LLVM_PROG([OPT], [opt], [opt], [$LlvmVersion])
+FIND_LLVM_PROG([OPT], [opt], [$LlvmVersion])
 OptCmd="$OPT"
 AC_SUBST([OptCmd])
 
@@ -702,6 +714,11 @@ dnl ** check for tar
 dnl   if GNU tar is named gtar, look for it first.
 AC_PATH_PROGS(TarCmd,gnutar gtar tar,tar)
 
+dnl ** check for compressors
+AC_PATH_PROGS(Bzip2Cmd,bzip2, bzip2)
+AC_PATH_PROGS(GzipCmd,gzip, gzip)
+AC_PATH_PROGS(XzCmd,pxz xz, xz)
+
 dnl ** check for patch
 dnl if GNU patch is named gpatch, look for it first
 AC_PATH_PROGS(PatchCmd,gpatch patch, patch)
@@ -719,6 +736,7 @@ AC_SUBST(HaveDtrace)
 AC_PATH_PROG(HSCOLOUR,HsColour)
 # HsColour is passed to Cabal, so we need a native path
 if test "$HostOS"      = "mingw32" && \
+   test "${OSTYPE}"   != "msys"    && \
    test "${HSCOLOUR}" != ""
 then
     # Canonicalise to <drive>:/path/to/gcc
@@ -1076,10 +1094,10 @@ dnl ** Use MMAP in the runtime linker?
 dnl --------------------------------------------------------------
 
 case ${TargetOS} in
-    linux|freebsd|dragonfly|netbsd|openbsd|kfreebsdgnu|gnu|solaris2)
+    linux|linux-android|freebsd|dragonfly|netbsd|openbsd|kfreebsdgnu|gnu|solaris2)
         RtsLinkerUseMmap=1
         ;;
-    darwin)
+    darwin|ios)
         # Don't use mmap on powerpc/darwin as the mmap there doesn't support
         # reallocating. Reallocating is needed to allocate jump islands just
         # after each object image. Jumps to these jump islands use relative
@@ -1229,9 +1247,13 @@ echo "\
    Unregisterised            : $Unregisterised
    hs-cpp       : $HaskellCPPCmd
    hs-cpp-flags : $HaskellCPPArgs
+   ar           : $ArCmd
    ld           : $LdCmd
    nm           : $NmCmd
    objdump      : $ObjdumpCmd
+   ranlib       : $RanlibCmd
+   windres      : $Windres
+   dllwrap      : $DllWrap
    Happy        : $HappyCmd ($HappyVersion)
    Alex         : $AlexCmd ($AlexVersion)
    Perl         : $PerlCmd

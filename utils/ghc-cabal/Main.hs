@@ -19,6 +19,7 @@ import Distribution.Simple.Utils (defaultPackageDesc, writeFileAtomic, toUTF8)
 import Distribution.Simple.Build (writeAutogenFiles)
 import Distribution.Simple.Register
 import Distribution.Text
+import Distribution.Types.MungedPackageId
 import Distribution.Verbosity
 import qualified Distribution.InstalledPackageInfo as Installed
 import qualified Distribution.Simple.PackageIndex as PackageIndex
@@ -362,7 +363,7 @@ generate directory distdir config_args
           depLibNames
             | packageKeySupported comp = dep_ipids
             | otherwise = deps
-          depNames = map (display . packageName) dep_ids
+          depNames = map (display . mungedName) dep_ids
 
           transitive_dep_ids = map Installed.sourcePackageId dep_pkgs
           transitiveDeps = map display transitive_dep_ids

@@ -286,7 +286,7 @@
 #define RTS_OPENBSD_ONLY_SYMBOLS
 #endif
 
-#ifndef SMP
+#if !defined(SMP)
 # define MAIN_CAP_SYM SymI_HasProto(MainCapability)
 #else
 # define MAIN_CAP_SYM
@@ -325,7 +325,7 @@
      SymE_NeedsDataProto(ffi_type_uint8)                    \
      SymE_NeedsDataProto(ffi_type_pointer)
 
-#ifdef TABLES_NEXT_TO_CODE
+#if defined(TABLES_NEXT_TO_CODE)
 #define RTS_RET_SYMBOLS /* nothing */
 #else
 #define RTS_RET_SYMBOLS                                 \
@@ -613,7 +613,6 @@
       SymI_HasProto(hs_exit)                                            \
       SymI_HasProto(hs_exit_nowait)                                     \
       SymI_HasProto(hs_set_argv)                                        \
-      SymI_HasProto(hs_add_root)                                        \
       SymI_HasProto(hs_perform_gc)                                      \
       SymI_HasProto(hs_lock_stable_tables)                              \
       SymI_HasProto(hs_unlock_stable_tables)                            \
@@ -755,7 +754,8 @@
       SymI_HasProto(shutdownHaskellAndExit)                             \
       SymI_HasProto(stable_name_table)                                  \
       SymI_HasProto(stable_ptr_table)                                   \
-      SymI_HasProto(stackOverflow)                                      \
+      SymI_HasProto(reportStackOverflow)                                \
+      SymI_HasProto(reportHeapOverflow)                                 \
       SymI_HasProto(stg_CAF_BLACKHOLE_info)                             \
       SymI_HasProto(stg_BLACKHOLE_info)                                 \
       SymI_HasProto(__stg_EAGER_BLACKHOLE_info)                         \

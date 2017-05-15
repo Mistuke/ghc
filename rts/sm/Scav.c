@@ -86,7 +86,7 @@ scavengeTSO (StgTSO *tso)
         ) {
         evacuate(&tso->block_info.closure);
     }
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     // in the THREADED_RTS, block_info.closure must always point to a
     // valid closure, because we assume this in throwTo().  In the
     // non-threaded RTS it might be a FD (for
@@ -117,7 +117,7 @@ static void
 evacuate_hash_entry(MapHashData *dat, StgWord key, const void *value)
 {
     StgClosure *p = (StgClosure*)key;
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     gc_thread *old_gct = gct;
 #endif
 
@@ -557,6 +557,7 @@ scavenge_block (bdescr *bd)
 
     case FUN_1_0:
         scavenge_fun_srt(info);
+        /* fallthrough */
     case CONSTR_1_0:
         evacuate(&((StgClosure *)p)->payload[0]);
         p += sizeofW(StgHeader) + 1;
@@ -569,6 +570,7 @@ scavenge_block (bdescr *bd)
 
     case FUN_0_1:
         scavenge_fun_srt(info);
+        /* fallthrough */
     case CONSTR_0_1:
         p += sizeofW(StgHeader) + 1;
         break;
@@ -580,6 +582,7 @@ scavenge_block (bdescr *bd)
 
     case FUN_0_2:
         scavenge_fun_srt(info);
+        /* fallthrough */
     case CONSTR_0_2:
         p += sizeofW(StgHeader) + 2;
         break;
@@ -592,6 +595,7 @@ scavenge_block (bdescr *bd)
 
     case FUN_1_1:
         scavenge_fun_srt(info);
+        /* fallthrough */
     case CONSTR_1_1:
         evacuate(&((StgClosure *)p)->payload[0]);
         p += sizeofW(StgHeader) + 2;
@@ -1640,7 +1644,7 @@ scavenge_mutable_list(bdescr *bd, generation *gen)
             p = (StgPtr)*q;
             ASSERT(LOOKS_LIKE_CLOSURE_PTR(p));
 
-#ifdef DEBUG
+#if defined(DEBUG)
             switch (get_itbl((StgClosure *)p)->type) {
             case MUT_VAR_CLEAN:
                 // can happen due to concurrent writeMutVars

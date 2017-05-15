@@ -19,7 +19,7 @@ module SimplUtils (
         -- The continuation type
         SimplCont(..), DupFlag(..),
         isSimplified,
-        contIsDupable, contResultType, contHoleType, applyContToJoinType,
+        contIsDupable, contResultType, contHoleType,
         contIsTrivial, contArgs,
         countArgs,
         mkBoringStop, mkRhsStop, mkLazyArgStop, contIsRhsOrArg,
@@ -53,8 +53,7 @@ import Demand
 import SimplMonad
 import Type     hiding( substTy )
 import Coercion hiding( substCo )
-import DataCon          ( dataConWorkId )
-import VarEnv
+import DataCon          ( dataConWorkId, isNullaryRepDataCon )
 import VarSet
 import BasicTypes
 import Util
@@ -62,7 +61,7 @@ import MonadUtils
 import Outputable
 import Pair
 import PrelRules
-import Literal
+import FastString       ( fsLit )
 
 import Control.Monad    ( when )
 import Data.List        ( sortBy )
@@ -96,7 +95,7 @@ Key points:
 -}
 
 data SimplCont
-  = Stop                -- An empty context, or <hole>
+  = Stop                -- Stop[e] = e
         OutType         -- Type of the <hole>
         CallCtxt        -- Tells if there is something interesting about
                         --          the context, and hence the inliner
@@ -107,43 +106,48 @@ data SimplCont
                         -- Never ValAppCxt (use ApplyToVal instead)
                         -- or CaseCtxt (use Select instead)
 
-  | CastIt            -- <hole> `cast` co
+  | CastIt              -- (CastIt co K)[e] = K[ e `cast` co ]
         OutCoercion             -- The coercion simplified
                                 -- Invariant: never an identity coercion
         SimplCont
 
-  | ApplyToVal {        -- <hole> arg
-        sc_dup  :: DupFlag,          -- See Note [DupFlag invariants]
-        sc_arg  :: InExpr,           -- The argument,
-        sc_env  :: StaticEnv,        --     and its static env
-        sc_cont :: SimplCont }
+  | ApplyToVal         -- (ApplyToVal arg K)[e] = K[ e arg ]
+      { sc_dup  :: DupFlag      -- See Note [DupFlag invariants]
+      , sc_arg  :: InExpr       -- The argument,
+      , sc_env  :: StaticEnv    --     and its static env
+      , sc_cont :: SimplCont }
 
-  | ApplyToTy {         -- <hole> ty
-        sc_arg_ty  :: OutType,     -- Argument type
-        sc_hole_ty :: OutType,     -- Type of the function, presumably (forall a. blah)
-                                   -- See Note [The hole type in ApplyToTy]
-        sc_cont    :: SimplCont }
+  | ApplyToTy          -- (ApplyToTy ty K)[e] = K[ e ty ]
+      { sc_arg_ty  :: OutType     -- Argument type
+      , sc_hole_ty :: OutType     -- Type of the function, presumably (forall a. blah)
+                                  -- See Note [The hole type in ApplyToTy]
+      , sc_cont    :: SimplCont }
 
-  | Select {           -- case <hole> of alts
-        sc_dup  :: DupFlag,                 -- See Note [DupFlag invariants]
-        sc_bndr :: InId,                    -- case binder
-        sc_alts :: [InAlt],                 -- Alternatives
-        sc_env  ::  StaticEnv,              --   and their static environment
-        sc_cont :: SimplCont }
+  | Select             -- (Select alts K)[e] = K[ case e of alts ]
+      { sc_dup  :: DupFlag        -- See Note [DupFlag invariants]
+      , sc_bndr :: InId           -- case binder
+      , sc_alts :: [InAlt]        -- Alternatives
+      , sc_env  :: StaticEnv      --   and their static environment
+      , sc_cont :: SimplCont }
 
   -- The two strict forms have no DupFlag, because we never duplicate them
-  | StrictBind                  -- (\x* \xs. e) <hole>
-        InId [InBndr]           -- let x* = <hole> in e
-        InExpr StaticEnv        --      is a special case
-        SimplCont
+  | StrictBind          -- (StrictBind x xs b K)[e] = let x = e in K[\xs.b]
+                        --       or, equivalently,  = K[ (\x xs.b) e ]
+      { sc_dup   :: DupFlag        -- See Note [DupFlag invariants]
+      , sc_bndr  :: InId
+      , sc_bndrs :: [InBndr]
+      , sc_body  :: InExpr
+      , sc_env   :: StaticEnv
+      , sc_cont  :: SimplCont }
 
-  | StrictArg           -- f e1 ..en <hole>
-        ArgInfo         -- Specifies f, e1..en, Whether f has rules, etc
-                        --     plus strictness flags for *further* args
-        CallCtxt        -- Whether *this* argument position is interesting
-        SimplCont
+  | StrictArg           -- (StrictArg (f e1 ..en) K)[e] = K[ f e1 .. en e ]
+      { sc_dup  :: DupFlag     -- Always Simplified or OkToDup
+      , sc_fun  :: ArgInfo     -- Specifies f, e1..en, Whether f has rules, etc
+                               --     plus strictness flags for *further* args
+      , sc_cci  :: CallCtxt    -- Whether *this* argument position is interesting
+      , sc_cont :: SimplCont }
 
-  | TickIt
+  | TickIt              -- (TickIt t K)[e] = K[ tick t e ]
         (Tickish Id)    -- Tick tickish <hole>
         SimplCont
 
@@ -186,8 +190,10 @@ instance Outputable SimplCont where
   ppr (ApplyToVal { sc_arg = arg, sc_dup = dup, sc_cont = cont })
     = (text "ApplyToVal" <+> ppr dup <+> pprParendExpr arg)
                                         $$ ppr cont
-  ppr (StrictBind b _ _ _ cont)       = (text "StrictBind" <+> ppr b) $$ ppr cont
-  ppr (StrictArg ai _ cont)           = (text "StrictArg" <+> ppr (ai_fun ai)) $$ ppr cont
+  ppr (StrictBind { sc_bndr = b, sc_cont = cont })
+    = (text "StrictBind" <+> ppr b) $$ ppr cont
+  ppr (StrictArg { sc_fun = ai, sc_cont = cont })
+    = (text "StrictArg" <+> ppr (ai_fun ai)) $$ ppr cont
   ppr (Select { sc_dup = dup, sc_bndr = bndr, sc_alts = alts, sc_env = se, sc_cont = cont })
     = (text "Select" <+> ppr dup <+> ppr bndr) $$
        ifPprDebug (nest 2 $ vcat [ppr (seTvSubst se), ppr alts]) $$ ppr cont
@@ -221,9 +227,10 @@ data ArgInfo
   = ArgInfo {
         ai_fun   :: OutId,      -- The function
         ai_args  :: [ArgSpec],  -- ...applied to these args (which are in *reverse* order)
+
         ai_type  :: OutType,    -- Type of (f a1 ... an)
 
-        ai_rules :: [CoreRule], -- Rules for this function
+        ai_rules :: FunRules,   -- Rules for this function
 
         ai_encl :: Bool,        -- Flag saying whether this function
                                 -- or an enclosing one has rules (recursively)
@@ -250,11 +257,13 @@ instance Outputable ArgSpec where
 
 addValArgTo :: ArgInfo -> OutExpr -> ArgInfo
 addValArgTo ai arg = ai { ai_args = ValArg arg : ai_args ai
-                        , ai_type = applyTypeToArg (ai_type ai) arg }
+                        , ai_type = applyTypeToArg (ai_type ai) arg
+                        , ai_rules = decRules (ai_rules ai) }
 
 addTyArgTo :: ArgInfo -> OutType -> ArgInfo
 addTyArgTo ai arg_ty = ai { ai_args = arg_spec : ai_args ai
-                          , ai_type = piResultTy poly_fun_ty arg_ty }
+                          , ai_type = piResultTy poly_fun_ty arg_ty
+                          , ai_rules = decRules (ai_rules ai) }
   where
     poly_fun_ty = ai_type ai
     arg_spec    = TyArg { as_arg_ty = arg_ty, as_hole_ty = poly_fun_ty }
@@ -293,6 +302,20 @@ argInfoExpr fun rev_args
     go (CastBy co                : as) = mkCast (go as) co
 
 
+type FunRules = Maybe (Int, [CoreRule]) -- Remaining rules for this function
+     -- Nothing => No rules
+     -- Just (n, rules) => some rules, requiring at least n more type/value args
+
+decRules :: FunRules -> FunRules
+decRules (Just (n, rules)) = Just (n-1, rules)
+decRules Nothing           = Nothing
+
+mkFunRules :: [CoreRule] -> FunRules
+mkFunRules [] = Nothing
+mkFunRules rs = Just (n_required, rs)
+  where
+    n_required = maximum (map ruleArity rs)
+
 {-
 ************************************************************************
 *                                                                      *
@@ -327,6 +350,7 @@ contIsDupable (Stop {})                         = True
 contIsDupable (ApplyToTy  { sc_cont = k })      = contIsDupable k
 contIsDupable (ApplyToVal { sc_dup = OkToDup }) = True -- See Note [DupFlag invariants]
 contIsDupable (Select { sc_dup = OkToDup })     = True -- ...ditto...
+contIsDupable (StrictArg { sc_dup = OkToDup })  = True -- ...ditto...
 contIsDupable (CastIt _ k)                      = contIsDupable k
 contIsDupable _                                 = False
 
@@ -342,8 +366,8 @@ contIsTrivial _                                                 = False
 contResultType :: SimplCont -> OutType
 contResultType (Stop ty _)                  = ty
 contResultType (CastIt _ k)                 = contResultType k
-contResultType (StrictBind _ _ _ _ k)       = contResultType k
-contResultType (StrictArg _ _ k)            = contResultType k
+contResultType (StrictBind { sc_cont = k }) = contResultType k
+contResultType (StrictArg { sc_cont = k })  = contResultType k
 contResultType (Select { sc_cont = k })     = contResultType k
 contResultType (ApplyToTy  { sc_cont = k }) = contResultType k
 contResultType (ApplyToVal { sc_cont = k }) = contResultType k
@@ -353,18 +377,15 @@ contHoleType :: SimplCont -> OutType
 contHoleType (Stop ty _)                      = ty
 contHoleType (TickIt _ k)                     = contHoleType k
 contHoleType (CastIt co _)                    = pFst (coercionKind co)
-contHoleType (StrictBind b _ _ se _)          = substTy se (idType b)
-contHoleType (StrictArg ai _ _)               = funArgTy (ai_type ai)
+contHoleType (StrictBind { sc_bndr = b, sc_dup = dup, sc_env = se })
+  = perhapsSubstTy dup se (idType b)
+contHoleType (StrictArg { sc_fun = ai })      = funArgTy (ai_type ai)
 contHoleType (ApplyToTy  { sc_hole_ty = ty }) = ty  -- See Note [The hole type in ApplyToTy]
 contHoleType (ApplyToVal { sc_arg = e, sc_env = se, sc_dup = dup, sc_cont = k })
   = mkFunTy (perhapsSubstTy dup se (exprType e))
             (contHoleType k)
 contHoleType (Select { sc_dup = d, sc_bndr =  b, sc_env = se })
   = perhapsSubstTy d se (idType b)
-
-applyContToJoinType :: JoinArity -> SimplCont -> OutType -> OutType
-applyContToJoinType ar cont ty
-  = setJoinResTy ar (contResultType cont) ty
 
 -------------------
 countArgs :: SimplCont -> Int
@@ -407,17 +428,19 @@ mkArgInfo :: Id
 mkArgInfo fun rules n_val_args call_cont
   | n_val_args < idArity fun            -- Note [Unsaturated functions]
   = ArgInfo { ai_fun = fun, ai_args = [], ai_type = fun_ty
-            , ai_rules = rules, ai_encl = False
+            , ai_rules = fun_rules, ai_encl = False
             , ai_strs = vanilla_stricts
             , ai_discs = vanilla_discounts }
   | otherwise
   = ArgInfo { ai_fun = fun, ai_args = [], ai_type = fun_ty
-            , ai_rules = rules
+            , ai_rules = fun_rules
             , ai_encl = interestingArgContext rules call_cont
             , ai_strs  = add_type_str fun_ty arg_stricts
             , ai_discs = arg_discounts }
   where
     fun_ty = idType fun
+
+    fun_rules = mkFunRules rules
 
     vanilla_discounts, arg_discounts :: [Int]
     vanilla_discounts = repeat 0
@@ -536,12 +559,13 @@ interestingCallContext cont
         -- If f has an INLINE prag we need to give it some
         -- motivation to inline. See Note [Cast then apply]
         -- in CoreUnfold
-    interesting (StrictArg _ cci _)         = cci
-    interesting (StrictBind {})             = BoringCtxt
-    interesting (Stop _ cci)                = cci
-    interesting (TickIt _ k)                = interesting k
-    interesting (ApplyToTy { sc_cont = k }) = interesting k
-    interesting (CastIt _ k)                = interesting k
+
+    interesting (StrictArg { sc_cci = cci }) = cci
+    interesting (StrictBind {})              = BoringCtxt
+    interesting (Stop _ cci)                 = cci
+    interesting (TickIt _ k)                 = interesting k
+    interesting (ApplyToTy { sc_cont = k })  = interesting k
+    interesting (CastIt _ k)                 = interesting k
         -- If this call is the arg of a strict function, the context
         -- is a bit interesting.  If we inline here, we may get useful
         -- evaluation information to avoid repeated evals: e.g.
@@ -583,14 +607,14 @@ interestingArgContext rules call_cont
   where
     enclosing_fn_has_rules = go call_cont
 
-    go (Select {})         = False
-    go (ApplyToVal {})     = False  -- Shouldn't really happen
-    go (ApplyToTy  {})     = False  -- Ditto
-    go (StrictArg _ cci _) = interesting cci
-    go (StrictBind {})     = False      -- ??
-    go (CastIt _ c)        = go c
-    go (Stop _ cci)        = interesting cci
-    go (TickIt _ c)        = go c
+    go (Select {})                  = False
+    go (ApplyToVal {})              = False  -- Shouldn't really happen
+    go (ApplyToTy  {})              = False  -- Ditto
+    go (StrictArg { sc_cci = cci }) = interesting cci
+    go (StrictBind {})              = False      -- ??
+    go (CastIt _ c)                 = go c
+    go (Stop _ cci)                 = interesting cci
+    go (TickIt _ c)                 = go c
 
     interesting RuleArgCtxt = True
     interesting _           = False
@@ -633,12 +657,10 @@ interestingArg env e = go env 0 e
   where
     -- n is # value args to which the expression is applied
     go env n (Var v)
-       | SimplEnv { seIdSubst = ids, seInScope = in_scope } <- env
-       = case snd <$> lookupVarEnv ids v of
-           Nothing                     -> go_var n (refineFromInScope in_scope v)
-           Just (DoneId v')            -> go_var n (refineFromInScope in_scope v')
-           Just (DoneEx e)             -> go (zapSubstEnv env)             n e
-           Just (ContEx tvs cvs ids e) -> go (setSubstEnv env tvs cvs ids) n e
+       = case substId env v of
+           DoneId v'            -> go_var n v'
+           DoneEx e _           -> go (zapSubstEnv env)             n e
+           ContEx tvs cvs ids e -> go (setSubstEnv env tvs cvs ids) n e
 
     go _   _ (Lit {})          = ValueArg
     go _   _ (Type _)          = TrivArg
@@ -1762,8 +1784,12 @@ prepareAlts scrut case_bndr' alts
 
 mkCase tries these things
 
-1.  Merge Nested Cases
+* Note [Nerge nested cases]
+* Note [Elimiante identity case]
+* Note [Scrutinee constant folding]
 
+Note [Merge Nested Cases]
+~~~~~~~~~~~~~~~~~~~~~~~~~
        case e of b {             ==>   case e of b {
          p1 -> rhs1                      p1 -> rhs1
          ...                             ...
@@ -1775,21 +1801,21 @@ mkCase tries these things
                      _  -> rhsd
        }
 
-    which merges two cases in one case when -- the default alternative of
-    the outer case scrutises the same variable as the outer case. This
-    transformation is called Case Merging.  It avoids that the same
-    variable is scrutinised multiple times.
+which merges two cases in one case when -- the default alternative of
+the outer case scrutises the same variable as the outer case. This
+transformation is called Case Merging.  It avoids that the same
+variable is scrutinised multiple times.
 
-2.  Eliminate Identity Case
-
+Note [Eliminate Identity Case]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         case e of               ===> e
                 True  -> True;
                 False -> False
 
-    and similar friends.
+and similar friends.
 
-3.  Scrutinee Constant Folding
-
+Note [Scrutinee Constant Folding]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
      case x op# k# of _ {  ===> case x of _ {
         a1# -> e1                  (a1# inv_op# k#) -> e1
         a2# -> e2                  (a2# inv_op# k#) -> e2
@@ -1798,32 +1824,66 @@ mkCase tries these things
 
      where (x op# k#) inv_op# k# == x
 
-    And similarly for commuted arguments and for some unary operations.
+And similarly for commuted arguments and for some unary operations.
 
-    The purpose of this transformation is not only to avoid an arithmetic
-    operation at runtime but to allow other transformations to apply in cascade.
+The purpose of this transformation is not only to avoid an arithmetic
+operation at runtime but to allow other transformations to apply in cascade.
 
-    Example with the "Merge Nested Cases" optimization (from #12877):
+Example with the "Merge Nested Cases" optimization (from #12877):
 
-          main = case t of t0
-             0##     -> ...
-             DEFAULT -> case t0 `minusWord#` 1## of t1
-                0##    -> ...
-                DEFAUT -> case t1 `minusWord#` 1## of t2
-                   0##     -> ...
-                   DEFAULT -> case t2 `minusWord#` 1## of _
-                      0##     -> ...
-                      DEFAULT -> ...
+      main = case t of t0
+         0##     -> ...
+         DEFAULT -> case t0 `minusWord#` 1## of t1
+            0##    -> ...
+            DEFAUT -> case t1 `minusWord#` 1## of t2
+               0##     -> ...
+               DEFAULT -> case t2 `minusWord#` 1## of _
+                  0##     -> ...
+                  DEFAULT -> ...
 
-      becomes:
+  becomes:
 
-          main = case t of _
-          0##     -> ...
-          1##     -> ...
-          2##     -> ...
-          3##     -> ...
-          DEFAULT -> ...
+      main = case t of _
+      0##     -> ...
+      1##     -> ...
+      2##     -> ...
+      3##     -> ...
+      DEFAULT -> ...
 
+There are some wrinkles
+
+* Do not apply caseRules if there is just a single DEFAULT alternative
+     case e +# 3# of b { DEFAULT -> rhs }
+  If we applied the transformation here we would (stupidly) get
+     case a of b' { DEFAULT -> let b = e +# 3# in rhs }
+  and now the process may repeat, because that let will really
+  be a case.
+
+* The type of the scrutinee might change.  E.g.
+        case tagToEnum (x :: Int#) of (b::Bool)
+          False -> e1
+          True -> e2
+  ==>
+        case x of (b'::Int#)
+          DEFAULT -> e1
+          1#      -> e2
+
+* The case binder may be used in the right hand sides, so we need
+  to make a local binding for it, if it is alive.  e.g.
+         case e +# 10# of b
+           DEFAULT -> blah...b...
+           44#     -> blah2...b...
+  ===>
+         case e of b'
+           DEFAULT -> let b = b' +# 10# in blah...b...
+           34#     -> let b = 44# in blah2...b...
+
+  Note that in the non-DEFAULT cases we know what to bind 'b' to,
+  whereas in the DEFAULT case we must reconstruct the original value.
+  But NB: we use b'; we do not duplicate 'e'.
+
+* In dataToTag we might need to make up some fake binders;
+  see Note [caseRules for dataToTag] in PrelRules
 -}
 
 mkCase, mkCase1, mkCase2, mkCase3
@@ -1924,9 +1984,18 @@ mkCase1 dflags scrut bndr alts_ty alts = mkCase2 dflags scrut bndr alts_ty alts
 --------------------------------------------------
 
 mkCase2 dflags scrut bndr alts_ty alts
-  | gopt Opt_CaseFolding dflags
-  , Just (scrut',f) <- caseRules dflags scrut
-  = mkCase3 dflags scrut' bndr alts_ty (new_alts f)
+  | -- See Note [Scrutinee Constant Folding]
+    case alts of  -- Not if there is just a DEFAULT alterantive
+      [(DEFAULT,_,_)] -> False
+      _               -> True
+  , gopt Opt_CaseFolding dflags
+  , Just (scrut', tx_con, mk_orig) <- caseRules dflags scrut
+  = do { bndr' <- newId (fsLit "lwild") (exprType scrut')
+       ; alts' <- mapM  (tx_alt tx_con mk_orig bndr') alts
+       ; mkCase3 dflags scrut' bndr' alts_ty $
+         add_default (re_sort alts')
+       }
+
   | otherwise
   = mkCase3 dflags scrut bndr alts_ty alts
   where
@@ -1942,19 +2011,41 @@ mkCase2 dflags scrut bndr alts_ty alts
     --                                      10      -> let y = 20      in e1
     --                                      DEFAULT -> let y = y' + 10 in e2
     --
-    wrap_rhs l rhs
-      | isDeadBinder bndr = rhs
-      | otherwise         = Let (NonRec bndr l) rhs
+    -- This wrapping is done in tx_alt; we use mk_orig, returned by caseRules,
+    -- to construct an expression equivalent to the original one, for use
+    -- in the DEFAULT case
 
-    -- We need to re-sort the alternatives to preserve the #case_invariants#
-    new_alts f = sortBy cmpAlt (map (mapAlt f) alts)
+    tx_alt tx_con mk_orig new_bndr (con, bs, rhs)
+      | DataAlt dc <- con', not (isNullaryRepDataCon dc)
+      = -- For non-nullary data cons we must invent some fake binders
+        -- See Note [caseRules for dataToTag] in PrelRules
+        do { us <- getUniquesM
+           ; let (ex_tvs, arg_ids) = dataConRepInstPat us dc
+                                         (tyConAppArgs (idType new_bndr))
+           ; return (con', ex_tvs ++ arg_ids, rhs') }
+      | otherwise
+      = return (con', [], rhs')
+      where
+        con' = tx_con con
 
-    mapAlt f alt@(c,bs,e) = case c of
-      DEFAULT          -> (c, bs, wrap_rhs scrut e)
-      LitAlt l
-        | isLitValue l -> (LitAlt (mapLitValue dflags f l),
-                           bs, wrap_rhs (Lit l) e)
-      _ -> pprPanic "Unexpected alternative (mkCase2)" (ppr alt)
+        rhs' | isDeadBinder bndr = rhs
+             | otherwise         = bindNonRec bndr orig_val rhs
+
+        orig_val = case con of
+                      DEFAULT    -> mk_orig new_bndr
+                      LitAlt l   -> Lit l
+                      DataAlt dc -> mkConApp2 dc (tyConAppArgs (idType bndr)) bs
+
+
+    re_sort :: [CoreAlt] -> [CoreAlt]  -- Re-sort the alternatives to
+    re_sort alts = sortBy cmpAlt alts  -- preserve the #case_invariants#
+
+    add_default :: [CoreAlt] -> [CoreAlt]
+    -- TagToEnum may change a boolean True/False set of alternatives
+    -- to LitAlt 0#/1# alterantives.  But literal alternatives always
+    -- have a DEFAULT (I think).  So add it.
+    add_default ((LitAlt {}, bs, rhs) : alts) = (DEFAULT, bs, rhs) : alts
+    add_default alts                          = alts
 
 --------------------------------------------------
 --      Catch-all

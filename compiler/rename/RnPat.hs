@@ -44,6 +44,11 @@ import HsSyn
 import TcRnMonad
 import TcHsSyn             ( hsOverLitName )
 import RnEnv
+import RnFixity
+import RnUtils             ( HsDocContext(..), newLocalBndrRn, bindLocalNames
+                           , warnUnusedMatches, newLocalBndrRn
+                           , checkDupAndShadowedNames, checkTupSize
+                           , unknownSubordinateErr )
 import RnTypes
 import PrelNames
 import TyCon               ( tyConName )
@@ -249,7 +254,8 @@ report unused variables at the binding level. So we must use bindLocalNames
 here, *not* bindLocalNameFV.  Trac #3943.
 
 
-Note: [Don't report shadowing for pattern synonyms]
+Note [Don't report shadowing for pattern synonyms]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 There is one special context where a pattern doesn't introduce any new binders -
 pattern synonym declarations. Therefore we don't check to see if pattern
 variables shadow existing identifiers as they are never bound to anything
@@ -408,17 +414,25 @@ rnPatAndThen mk (LitPat lit)
     normal_lit = do { liftCps (rnLit lit); return (LitPat lit) }
 
 rnPatAndThen _ (NPat (L l lit) mb_neg _eq _)
-  = do { lit'    <- liftCpsFV $ rnOverLit lit
-       ; mb_neg' <- liftCpsFV $ case mb_neg of
-                      Nothing -> return (Nothing, emptyFVs)
-                      Just _  -> do { (neg, fvs) <- lookupSyntaxName negateName
-                                    ; return (Just neg, fvs) }
+  = do { (lit', mb_neg') <- liftCpsFV $ rnOverLit lit
+       ; mb_neg' -- See Note [Negative zero]
+           <- let negative = do { (neg, fvs) <- lookupSyntaxName negateName
+                                ; return (Just neg, fvs) }
+                  positive = return (Nothing, emptyFVs)
+              in liftCpsFV $ case (mb_neg , mb_neg') of
+                                  (Nothing, Just _ ) -> negative
+                                  (Just _ , Nothing) -> negative
+                                  (Nothing, Nothing) -> positive
+                                  (Just _ , Just _ ) -> positive
        ; eq' <- liftCpsFV $ lookupSyntaxName eqName
        ; return (NPat (L l lit') mb_neg' eq' placeHolderType) }
 
 rnPatAndThen mk (NPlusKPat rdr (L l lit) _ _ _ _)
   = do { new_name <- newPatName mk rdr
-       ; lit'  <- liftCpsFV $ rnOverLit lit
+       ; (lit', _) <- liftCpsFV $ rnOverLit lit -- See Note [Negative zero]
+                                                -- We skip negateName as
+                                                -- negative zero doesn't make
+                                                -- sense in n + k patterns
        ; minus <- liftCpsFV $ lookupSyntaxName minusName
        ; ge    <- liftCpsFV $ lookupSyntaxName geName
        ; return (NPlusKPat (L (nameSrcSpan new_name) new_name)
@@ -740,13 +754,13 @@ rnHsRecUpdFields flds
 
            ; let fvs' = case sel of
                           Left sel_name -> fvs `addOneFV` sel_name
-                          Right [FieldOcc _ sel_name] -> fvs `addOneFV` sel_name
+                          Right [sel_name] -> fvs `addOneFV` sel_name
                           Right _       -> fvs
                  lbl' = case sel of
                           Left sel_name ->
                                      L loc (Unambiguous (L loc lbl) sel_name)
-                          Right [FieldOcc lbl sel_name] ->
-                                     L loc (Unambiguous lbl sel_name)
+                          Right [sel_name] ->
+                                     L loc (Unambiguous (L loc lbl) sel_name)
                           Right _ -> L loc (Ambiguous   (L loc lbl) PlaceHolder)
 
            ; return (L l (HsRecField { hsRecFieldLbl = lbl'
@@ -817,11 +831,31 @@ rnLit _ = return ()
 -- Turn a Fractional-looking literal which happens to be an integer into an
 -- Integer-looking literal.
 generalizeOverLitVal :: OverLitVal -> OverLitVal
-generalizeOverLitVal (HsFractional (FL {fl_text=src,fl_value=val}))
-    | denominator val == 1 = HsIntegral (SourceText src) (numerator val)
+generalizeOverLitVal (HsFractional (FL {fl_text=src,fl_neg=neg,fl_value=val}))
+    | denominator val == 1 = HsIntegral (IL {il_text=src,il_neg=neg,il_value=numerator val})
 generalizeOverLitVal lit = lit
 
-rnOverLit :: HsOverLit t -> RnM (HsOverLit Name, FreeVars)
+isNegativeZeroOverLit :: HsOverLit t -> Bool
+isNegativeZeroOverLit lit
+ = case ol_val lit of
+        HsIntegral i   -> 0 == il_value i && il_neg i
+        HsFractional f -> 0 == fl_value f && fl_neg f
+        _              -> False
+
+{-
+Note [Negative zero]
+~~~~~~~~~~~~~~~~~~~~~~~~~
+There were problems with negative zero in conjunction with Negative Literals
+extension. Numeric literal value is contained in Integer and Rational types
+inside IntegralLit and FractionalLit. These types cannot represent negative
+zero value. So we had to add explicit field 'neg' which would hold information
+about literal sign. Here in rnOverLit we use it to detect negative zeroes and
+in this case return not only literal itself but also negateName so that users
+can apply it explicitly. In this case it stays negative zero.  Trac #13211
+-}
+
+rnOverLit :: HsOverLit t ->
+             RnM ((HsOverLit Name, Maybe (HsExpr Name)), FreeVars)
 rnOverLit origLit
   = do  { opt_NumDecimals <- xoptM LangExt.NumDecimals
         ; let { lit@(OverLit {ol_val=val})
@@ -829,14 +863,20 @@ rnOverLit origLit
             | otherwise       = origLit
           }
         ; let std_name = hsOverLitName val
-        ; (SyntaxExpr { syn_expr = from_thing_name }, fvs)
+        ; (SyntaxExpr { syn_expr = from_thing_name }, fvs1)
             <- lookupSyntaxName std_name
         ; let rebindable = case from_thing_name of
                                 HsVar (L _ v) -> v /= std_name
                                 _             -> panic "rnOverLit"
-        ; return (lit { ol_witness = from_thing_name
-                      , ol_rebindable = rebindable
-                      , ol_type = placeHolderType }, fvs) }
+        ; let lit' = lit { ol_witness = from_thing_name
+                         , ol_rebindable = rebindable
+                         , ol_type = placeHolderType }
+        ; if isNegativeZeroOverLit lit'
+          then do { (SyntaxExpr { syn_expr = negate_name }, fvs2)
+                      <- lookupSyntaxName negateName
+                  ; return ((lit' { ol_val = negateOverLitVal val }, Just negate_name)
+                                  , fvs1 `plusFV` fvs2) }
+          else return ((lit', Nothing), fvs1) }
 
 {-
 ************************************************************************

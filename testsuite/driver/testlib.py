@@ -84,6 +84,8 @@ def setTestOpts( f ):
 #      test('test001', expect_fail, compile, [''])
 #
 # to expect failure for this test.
+#
+# type TestOpt = (name :: String, opts :: Object) -> IO ()
 
 def normal( name, opts ):
     return;
@@ -324,7 +326,7 @@ def _stats_num_field( name, opts, field, expecteds ):
             if b:
                 opts.stats_range_fields[field] = (expected, dev)
                 return
-        framework_fail(name, 'numfield-no-expected', 'No expected value found for ' + field + ' in num_field check')
+        framework_warn(name, 'numfield-no-expected', 'No expected value found for ' + field + ' in num_field check')
 
     else:
         (expected, dev) = expecteds
@@ -347,7 +349,7 @@ def _compiler_stats_num_field( name, opts, field, expecteds ):
             opts.compiler_stats_range_fields[field] = (expected, dev)
             return
 
-    framework_fail(name, 'numfield-no-expected', 'No expected value found for ' + field + ' in num_field check')
+    framework_warn(name, 'numfield-no-expected', 'No expected value found for ' + field + ' in num_field check')
 
 # -----
 
@@ -493,6 +495,13 @@ def no_check_hp(name, opts):
 
 # ----
 
+def filter_stdout_lines( regex ):
+    """ Filter lines of stdout with the given regular expression """
+    import re
+    def f( name, opts ):
+        _normalise_fun(name, opts, lambda s: '\n'.join(re.findall(regex, s)))
+    return f
+
 def normalise_slashes( name, opts ):
     _normalise_fun(name, opts, normalise_slashes_)
 
@@ -510,6 +519,12 @@ def normalise_errmsg_fun( *fs ):
 
 def _normalise_errmsg_fun( name, opts, *fs ):
     opts.extra_errmsg_normaliser =  join_normalisers(opts.extra_errmsg_normaliser, fs)
+
+def normalise_whitespace_fun(f):
+    return lambda name, opts: _normalise_whitespace_fun(name, opts, f)
+
+def _normalise_whitespace_fun(name, opts, f):
+    opts.whitespace_normaliser = f
 
 def normalise_version_( *pkgs ):
     def normalise_version__( str ):
@@ -615,7 +630,7 @@ def runTest(watcher, opts, name, func, args):
         test_common_work(watcher, name, opts, func, args)
 
 # name  :: String
-# setup :: TestOpts -> IO ()
+# setup :: [TestOpt] -> IO ()
 def test(name, setup, func, args):
     global aloneTests
     global parallelTests
@@ -760,7 +775,10 @@ def test_common_work(watcher, name, opts, func, args):
         t.n_tests_skipped += len(set(all_ways) - set(do_ways))
 
         if config.cleanup and do_ways:
-            cleanup()
+            try:
+                cleanup()
+            except Exception as e:
+                framework_fail(name, 'runTest', 'Unhandled exception during cleanup: ' + str(e))
 
         package_conf_cache_file_end_timestamp = get_package_cache_timestamp();
 
@@ -886,6 +904,13 @@ def framework_fail(name, way, reason):
     if_verbose(1, '*** framework failure for %s %s ' % (full_name, reason))
     t.framework_failures.append((directory, name, way, reason))
 
+def framework_warn(name, way, reason):
+    opts = getTestOpts()
+    directory = re.sub('^\\.[/\\\\]', '', opts.testdir)
+    full_name = name + '(' + way + ')'
+    if_verbose(1, '*** framework warning for %s %s ' % (full_name, reason))
+    t.framework_warnings.append((directory, name, way, reason))
+
 def badResult(result):
     try:
         if result['passFail'] == 'pass':
@@ -989,7 +1014,9 @@ def do_compile(name, way, should_fail, top_mod, extra_mods, extra_hc_opts, **kwa
                            join_normalisers(getTestOpts().extra_errmsg_normaliser,
                                             normalise_errmsg),
                            expected_stderr_file, actual_stderr_file,
-                           whitespace_normaliser=normalise_whitespace):
+                           whitespace_normaliser=getattr(getTestOpts(),
+                                                         "whitespace_normaliser",
+                                                         normalise_whitespace)):
         return failBecause('stderr mismatch')
 
     # no problems found, this test passed
@@ -1896,8 +1923,8 @@ if config.msys:
     import time
     def cleanup():
         testdir = getTestOpts().testdir
-        max_attemps = 5
-        retries = max_attemps
+        max_attempts = 5
+        retries = max_attempts
         def on_error(function, path, excinfo):
             # At least one test (T11489) removes the write bit from a file it
             # produces. Windows refuses to delete read-only files with a
@@ -1921,13 +1948,18 @@ if config.msys:
         # with an even more cryptic error.
         #
         # See Trac #13162
+        exception = None
         while retries > 0 and os.path.exists(testdir):
-            time.sleep((max_attemps-retries)*6)
-            shutil.rmtree(testdir, onerror=on_error, ignore_errors=False)
-            retries=-1
+            time.sleep((max_attempts-retries)*6)
+            try:
+                shutil.rmtree(testdir, onerror=on_error, ignore_errors=False)
+            except Exception as e:
+                exception = e
+            retries -= 1
 
         if retries == 0 and os.path.exists(testdir):
-            raise Exception("Unable to remove folder '" + testdir + "'. Unable to start current test.")
+            raise Exception("Unable to remove folder '%s': %s\nUnable to start current test."
+                            % (testdir, exception))
 else:
     def cleanup():
         testdir = getTestOpts().testdir
@@ -1983,6 +2015,8 @@ def summary(t, file, short=False):
                + '\n'
                + repr(len(t.framework_failures)).rjust(8)
                + ' caused framework failures\n'
+               + repr(len(t.framework_warnings)).rjust(8)
+               + ' caused framework warnings\n'
                + repr(len(t.unexpected_passes)).rjust(8)
                + ' unexpected passes\n'
                + repr(len(t.unexpected_failures)).rjust(8)
@@ -2006,6 +2040,10 @@ def summary(t, file, short=False):
     if t.framework_failures:
         file.write('Framework failures:\n')
         printTestInfosSummary(file, t.framework_failures)
+
+    if t.framework_warnings:
+        file.write('Framework warnings:\n')
+        printTestInfosSummary(file, t.framework_warnings)
 
     if stopping():
         file.write('WARNING: Testsuite run was terminated early\n')

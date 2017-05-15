@@ -156,13 +156,26 @@ again:
              THUNK_STATIC,
              THUNK_SELECTOR:
         {
-            // The thunk might evaluate to a function, so we have to come
-            // back here again to adjust its CCS if necessary.  The
-            // stg_restore_ccs_eval stack frame does that.
+            // We have a thunk of some kind, so evaluate it.
+
+            // The thunk might evaluate to a function, so we have to
+            // come back here again to adjust its CCS if necessary.
+            // Therefore we need to push a stack frame to look at the
+            // function that gets returned (a stg_restore_ccs_eval
+            // frame), and therefore we need a stack check.
             STK_CHK_GEN();
+
+            // We can't use the value of 'info' any more, because if
+            // STK_CHK_GEN() did a GC then the closure we're looking
+            // at may have changed, e.g. a THUNK_SELECTOR may have
+            // been evaluated by the GC.  So we reload the info
+            // pointer now.
+            untaggedfun = UNTAG(fun);
+            info = %INFO_PTR(untaggedfun);
+
             jump %ENTRY_CODE(info)
                 (stg_restore_cccs_eval_info, CCCS)
-                (UNTAG(fun));
+                (untaggedfun);
         }
         default:
         {
@@ -222,7 +235,7 @@ stg_PAP_apply /* no args => explicit stack */
   // profiling
   TICK_ENT_PAP();
   LDV_ENTER(pap);
-#ifdef PROFILING
+#if defined(PROFILING)
   ccall enterFunCCS(BaseReg "ptr", StgHeader_ccs(pap) "ptr");
 #endif
 
@@ -258,7 +271,7 @@ for:
   // Off we go!
   TICK_ENT_VIA_NODE();
 
-#ifdef NO_ARG_REGS
+#if defined(NO_ARG_REGS)
   jump %GET_ENTRY(UNTAG(R1)) [R1];
 #else
       W_ info;
@@ -336,7 +349,7 @@ for:
   // Off we go!
   TICK_ENT_VIA_NODE();
 
-#ifdef NO_ARG_REGS
+#if defined(NO_ARG_REGS)
   jump %GET_ENTRY(UNTAG(R1)) [R1];
 #else
       W_ info;
@@ -406,7 +419,7 @@ for:
   // Off we go!
   TICK_ENT_VIA_NODE();
 
-#ifdef NO_ARG_REGS
+#if defined(NO_ARG_REGS)
   jump %GET_ENTRY(UNTAG(R1)) [R1];
 #else
       W_ info;

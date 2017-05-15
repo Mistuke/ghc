@@ -26,7 +26,8 @@ module GhcMake(
         findExtraSigImports,
         implicitRequirements,
 
-        noModError, cyclicModuleErr
+        noModError, cyclicModuleErr,
+        moduleGraphNodes, SummaryNode
     ) where
 
 #include "HsVersions.h"
@@ -129,6 +130,12 @@ depanal excluded_mods allow_dup_roots = do
               text "Chasing modules from: ",
               hcat (punctuate comma (map pprTarget targets))])
 
+    -- Home package modules may have been moved or deleted, and new
+    -- source files may have appeared in the home package that shadow
+    -- external package modules, so we have to discard the existing
+    -- cached finder data.
+    liftIO $ flushFinderCaches hsc_env
+
     mod_graphE <- liftIO $ downsweep hsc_env old_graph
                                      excluded_mods allow_dup_roots
     mod_graph <- reportImportErrors mod_graphE
@@ -219,8 +226,9 @@ load' how_much mHscMessage mod_graph = do
     -- B.hs-boot in the module graph, but no B.hs
     -- The downsweep should have ensured this does not happen
     -- (see msDeps)
-    let all_home_mods = [ms_mod_name s
-                        | s <- mod_graph, not (isBootSummary s)]
+    let all_home_mods =
+          mkUniqSet [ ms_mod_name s
+                    | s <- mod_graph, not (isBootSummary s)]
     -- TODO: Figure out what the correct form of this assert is. It's violated
     -- when you have HsBootMerge nodes in the graph: then you'll have hs-boot
     -- files without corresponding hs files.
@@ -235,7 +243,7 @@ load' how_much mHscMessage mod_graph = do
         checkHowMuch _ = id
 
         checkMod m and_then
-            | m `elem` all_home_mods = and_then
+            | m `elementOfUniqSet` all_home_mods = and_then
             | otherwise = do
                     liftIO $ errorMsg dflags (text "no such module:" <+>
                                      quotes (ppr m))
@@ -655,7 +663,7 @@ unload hsc_env stable_linkables -- Unload everthing *except* 'stable_linkables'
 checkStability
         :: HomePackageTable   -- HPT from last compilation
         -> [SCC ModSummary]   -- current module graph (cyclic)
-        -> [ModuleName]       -- all home modules
+        -> UniqSet ModuleName -- all home modules
         -> ([ModuleName],     -- stableObject
             [ModuleName])     -- stableBCO
 
@@ -668,7 +676,8 @@ checkStability hpt sccs all_home_mods = foldl checkSCC ([],[]) sccs
      where
         scc = flattenSCC scc0
         scc_mods = map ms_mod_name scc
-        home_module m   = m `elem` all_home_mods && m `notElem` scc_mods
+        home_module m =
+          m `elementOfUniqSet` all_home_mods && m `notElem` scc_mods
 
         scc_allimps = nub (filter home_module (concatMap ms_home_allimps scc))
             -- all imports outside the current SCC, but in the home pkg
@@ -1570,7 +1579,7 @@ typecheckLoop dflags hsc_env mods = do
 
 reachableBackwards :: ModuleName -> [ModSummary] -> [ModSummary]
 reachableBackwards mod summaries
-  = [ ms | (ms,_,_) <- reachableG (transposeG graph) root ]
+  = [ node_payload node | node <- reachableG (transposeG graph) root ]
   where -- the rest just sets up the graph:
         (graph, lookup_node) = moduleGraphNodes False summaries
         root  = expectJust "reachableBackwards" (lookup_node HsBootFile mod)
@@ -1618,13 +1627,13 @@ topSortModuleGraph drop_hs_boot_nodes summaries mb_root_mod
                      | otherwise = throwGhcException (ProgramError "module does not exist")
             in graphFromEdgedVerticesUniq (seq root (reachableG graph root))
 
-type SummaryNode = (ModSummary, Int, [Int])
+type SummaryNode = Node Int ModSummary
 
 summaryNodeKey :: SummaryNode -> Int
-summaryNodeKey (_, k, _) = k
+summaryNodeKey = node_key
 
 summaryNodeSummary :: SummaryNode -> ModSummary
-summaryNodeSummary (s, _, _) = s
+summaryNodeSummary = node_payload
 
 moduleGraphNodes :: Bool -> [ModSummary]
   -> (Graph SummaryNode, HscSource -> ModuleName -> Maybe SummaryNode)
@@ -1642,11 +1651,12 @@ moduleGraphNodes drop_hs_boot_nodes summaries =
     node_map :: NodeMap SummaryNode
     node_map = Map.fromList [ ((moduleName (ms_mod s),
                                 hscSourceToIsBoot (ms_hsc_src s)), node)
-                            | node@(s, _, _) <- nodes ]
+                            | node <- nodes
+                            , let s = summaryNodeSummary node ]
 
     -- We use integers as the keys for the SCC algorithm
     nodes :: [SummaryNode]
-    nodes = [ (s, key, out_keys)
+    nodes = [ DigraphNode s key out_keys
             | (s, key) <- numbered_summaries
              -- Drop the hi-boot ones if told to do so
             , not (isBootSummary s && drop_hs_boot_nodes)
@@ -1911,6 +1921,12 @@ summariseFile hsc_env old_summaries file mb_phase obj_allowed maybe_buf
                         then liftIO $ getObjTimestamp location NotBoot
                         else return Nothing
                   hi_timestamp <- maybeGetIfaceDate dflags location
+
+                  -- We have to repopulate the Finder's cache because it
+                  -- was flushed before the downsweep.
+                  _ <- liftIO $ addHomeModuleToFinder hsc_env
+                    (moduleName (ms_mod old_summary)) (ms_location old_summary)
+
                   return old_summary{ ms_obj_date = obj_timestamp
                                     , ms_iface_date = hi_timestamp }
            else
@@ -2030,11 +2046,6 @@ summariseModule hsc_env old_summary_map is_boot (L loc wanted_mod)
                 new_summary location (ms_mod old_summary) src_fn src_timestamp
 
     find_it = do
-        -- Don't use the Finder's cache this time.  If the module was
-        -- previously a package module, it may have now appeared on the
-        -- search path, so we want to consider it to be a home module.  If
-        -- the module was previously a home module, it may have moved.
-        uncacheModule hsc_env wanted_mod
         found <- findImportedModule hsc_env wanted_mod Nothing
         case found of
              Found location mod
@@ -2212,7 +2223,7 @@ cyclicModuleErr mss
                          , nest 2 (show_path path) ]
   where
     graph :: [Node NodeKey ModSummary]
-    graph = [(ms, msKey ms, get_deps ms) | ms <- mss]
+    graph = [ DigraphNode ms (msKey ms) (get_deps ms) | ms <- mss]
 
     get_deps :: ModSummary -> [NodeKey]
     get_deps ms = ([ (unLoc m, IsBoot)  | m <- ms_home_srcimps ms ] ++

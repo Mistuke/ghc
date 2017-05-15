@@ -6,8 +6,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef TRACE_H
-#define TRACE_H
+#pragma once
 
 #include "rts/EventLogFormat.h"
 #include "Capability.h"
@@ -82,12 +81,12 @@ extern int TRACE_cap;
 //
 // -----------------------------------------------------------------------------
 
-#ifdef DEBUG
+#if defined(DEBUG)
 void traceBegin (const char *str, ...);
 void traceEnd (void);
 #endif
 
-#ifdef TRACING
+#if defined(TRACING)
 
 /*
  * Record a scheduler event
@@ -216,7 +215,7 @@ void traceThreadLabel_(Capability *cap,
 /*
  * Emit a debug message (only when DEBUG is defined)
  */
-#ifdef DEBUG
+#if defined(DEBUG)
 #define debugTrace(class, msg, ...)             \
     if (RTS_UNLIKELY(class)) {                  \
         trace_(msg, ##__VA_ARGS__);             \
@@ -225,7 +224,7 @@ void traceThreadLabel_(Capability *cap,
 #define debugTrace(class, str, ...) /* nothing */
 #endif
 
-#ifdef DEBUG
+#if defined(DEBUG)
 #define debugTraceCap(class, cap, msg, ...)      \
     if (RTS_UNLIKELY(class)) {                  \
         traceCap_(cap, msg, ##__VA_ARGS__);     \
@@ -285,7 +284,7 @@ void traceHeapProfBegin(StgWord8 profile_id);
 void traceHeapProfSampleBegin(StgInt era);
 void traceHeapProfSampleString(StgWord8 profile_id,
                                const char *label, StgWord residency);
-#ifdef PROFILING
+#if defined(PROFILING)
 void traceHeapProfCostCentre(StgWord32 ccID,
                              const char *label,
                              const char *module,
@@ -766,7 +765,7 @@ INLINE_HEADER void traceEventCreateSparkThread(Capability  *cap      STG_UNUSED,
 
 INLINE_HEADER void traceSparkCounters(Capability *cap STG_UNUSED)
 {
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     if (RTS_UNLIKELY(TRACE_spark_sampled)) {
         traceSparkCounters_(cap, cap->spark_stats, sparkPoolSize(cap->sparks));
     }
@@ -868,5 +867,3 @@ INLINE_HEADER void traceTaskDelete(Task *task STG_UNUSED)
 }
 
 #include "EndPrivate.h"
-
-#endif /* TRACE_H */

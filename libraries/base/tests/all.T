@@ -189,6 +189,7 @@ test('T9681', normal, compile_fail, [''])
 test('T8089',
      [exit_code(99), run_timeout_multiplier(0.01)],
      compile_and_run, [''])
+test('T8684', expect_broken(8684), compile_and_run, [''])
 test('T9826',normal, compile_and_run,[''])
 test('T9848',
         [ stats_num_field('bytes allocated',
@@ -211,3 +212,5 @@ test('T13191',
         , only_ways(['normal'])],
       compile_and_run,
       ['-O'])
+test('T13525', when(opsys('mingw32'), skip), compile_and_run, [''])
+test('T13097', normal, compile_and_run, [''])

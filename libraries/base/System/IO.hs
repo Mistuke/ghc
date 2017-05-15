@@ -224,7 +224,7 @@ import Control.Exception.Base
 import Data.Bits
 import Data.Maybe
 import Foreign.C.Error
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 import Foreign.C.String
 #endif
 import Foreign.C.Types
@@ -403,7 +403,7 @@ withBinaryFile name mode = bracket (openBinaryFile name mode) hClose
 fixIO :: (a -> IO a) -> IO a
 fixIO k = do
     m <- newEmptyMVar
-    ans <- unsafeInterleaveIO (takeMVar m)
+    ans <- unsafeDupableInterleaveIO (readMVar m)
     result <- k ans
     putMVar m result
     return result
@@ -413,12 +413,18 @@ fixIO k = do
 -- computation a few times before it notices the loop, which is wrong.
 --
 -- NOTE2: the explicit black-holing with an IORef ran into trouble
--- with multiple threads (see #5421), so now we use an MVar.  I'm
--- actually wondering whether we should use readMVar rather than
--- takeMVar, just in case it ends up being executed multiple times,
--- but even then it would have to be masked to protect against async
--- exceptions.  Ugh.  What we really need here is an IVar, or an
--- atomic readMVar, or even STM.  All these seem like overkill.
+-- with multiple threads (see #5421), so now we use an MVar. We used
+-- to use takeMVar with unsafeInterleaveIO. This, however, uses noDuplicate#,
+-- which is not particularly cheap. Better to use readMVar, which can be
+-- performed in multiple threads safely, and to use unsafeDupableInterleaveIO
+-- to avoid the noDuplicate cost.
+--
+-- What we'd ideally want is probably an IVar, but we don't quite have those.
+-- STM TVars look like an option at first, but I don't think they are:
+-- we'd need to be able to write to the variable in an IO context, which can
+-- only be done using 'atomically', and 'atomically' is not allowed within
+-- unsafePerformIO. We can't know if someone will try to use the result
+-- of fixIO with unsafePerformIO!
 --
 -- See also System.IO.Unsafe.unsafeFixIO.
 --
@@ -441,7 +447,8 @@ fixIO k = do
 openTempFile :: FilePath   -- ^ Directory in which to create the file
              -> String     -- ^ File name template. If the template is \"foo.ext\" then
                            -- the created file will be \"fooXXX.ext\" where XXX is some
-                           -- random number.
+                           -- random number. Note that this should not contain any path
+                           -- separator characters.
              -> IO (FilePath, Handle)
 openTempFile tmp_dir template
     = openTempFile' "openTempFile" tmp_dir template False 0o600
@@ -465,7 +472,10 @@ openBinaryTempFileWithDefaultPermissions tmp_dir template
 
 openTempFile' :: String -> FilePath -> String -> Bool -> CMode
               -> IO (FilePath, Handle)
-openTempFile' loc tmp_dir template binary mode = findTempName
+openTempFile' loc tmp_dir template binary mode
+    | pathSeparator `elem` template
+    = fail $ "openTempFile': Template string must not contain path separator characters: "++template
+    | otherwise = findTempName
   where
     -- We split off the last extension, so we can use .foo.ext files
     -- for temporary files (hidden on Unix OSes). Unfortunately we're
@@ -542,7 +552,7 @@ openNewFile filepath binary mode = do
       errno <- getErrno
       case errno of
         _ | errno == eEXIST -> return FileExists
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
         -- If c_open throws EACCES on windows, it could mean that filepath is a
         -- directory. In this case, we want to return FileExists so that the
         -- enclosing openTempFile can try again instead of failing outright.
@@ -561,13 +571,13 @@ openNewFile filepath binary mode = do
         _ -> return (OpenNewError errno)
     else return (NewFileCreated fd)
 
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 foreign import ccall "file_exists" c_fileExists :: CString -> IO Bool
 #endif
 
 -- XXX Should use filepath library
 pathSeparator :: Char
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 pathSeparator = '\\'
 #else
 pathSeparator = '/'

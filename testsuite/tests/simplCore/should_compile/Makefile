@@ -2,6 +2,12 @@ TOP=../../..
 include $(TOP)/mk/boilerplate.mk
 include $(TOP)/mk/test.mk
 
+T13468:
+	$(RM) -f T13468.o T13468.hi
+	-'$(TEST_HC)' $(TEST_HC_OPTS) -O -c -ddump-simpl T13468.hs | grep 'Error'
+        # Expecting no output from the grep, hence "-"
+        # If the case branch is not eliminated, we get a patError
+
 T3990:
 	$(RM) -f T3990.o T3990.hi
 	'$(TEST_HC)' $(TEST_HC_OPTS) -O -c -ddump-simpl T3990.hs | grep 'test_case'
@@ -212,3 +218,15 @@ str-rules:
 .PHONY: T13340
 T13340:
 	'$(TEST_HC)' $(TEST_HC_OPTS) -c -O T13340.hs -ddump-simpl -dsuppress-all | grep -c '\+#'
+
+
+# We expect to see all dictionaries specialized away.
+.PHONY: T11272
+T11272:
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c -O T11272a.hs
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c -O -ddump-prep T11272.hs | { ! grep Ord ;}
+
+# We expect to see a $wfoo worker that doesn't take any dictionaries.
+.PHONY: T12600
+T12600:
+	'$(TEST_HC)' $(TEST_HC_OPTS) -c -O -ddump-prep -dsuppress-all -dsuppress-uniques -dno-suppress-type-signatures -dppr-cols=200 T12600.hs | grep "wfoo" | head -n 1

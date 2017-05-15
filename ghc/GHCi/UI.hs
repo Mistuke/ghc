@@ -64,7 +64,7 @@ import SrcLoc
 import qualified Lexer
 
 import StringBuffer
-import Outputable hiding ( printForUser, printForUserPartWay, bold )
+import Outputable hiding ( printForUser, printForUserPartWay )
 
 -- Other random utilities
 import BasicTypes hiding ( isTopLevel )
@@ -104,7 +104,7 @@ import Data.Time.Format ( formatTime, defaultTimeLocale )
 import Data.Version ( showVersion )
 
 import Exception hiding (catch)
-import Foreign
+import Foreign hiding (void)
 import GHC.Stack hiding (SrcLoc(..))
 
 import System.Directory
@@ -122,7 +122,7 @@ import Text.Read.Lex (isSymbolChar)
 
 import Unsafe.Coerce
 
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS)
 import System.Posix hiding ( getEnv )
 #else
 import qualified System.Win32
@@ -186,15 +186,15 @@ ghciCommands = map mkCmd [
   ("issafe",    keepGoing' isSafeCmd,           completeModule),
   ("kind",      keepGoing' (kindOfType False),  completeIdentifier),
   ("kind!",     keepGoing' (kindOfType True),   completeIdentifier),
-  ("load",      keepGoingPaths (loadModule_ False), completeHomeModuleOrFile),
-  ("load!",     keepGoingPaths (loadModule_ True), completeHomeModuleOrFile),
+  ("load",      keepGoingPaths loadModule_,     completeHomeModuleOrFile),
+  ("load!",     keepGoingPaths loadModuleDefer, completeHomeModuleOrFile),
   ("list",      keepGoing' listCmd,             noCompletion),
   ("module",    keepGoing moduleCmd,            completeSetModule),
   ("main",      keepGoing runMain,              completeFilename),
   ("print",     keepGoing printCmd,             completeExpression),
   ("quit",      quit,                           noCompletion),
-  ("reload",    keepGoing' (reloadModule False), noCompletion),
-  ("reload!",   keepGoing' (reloadModule True), noCompletion),
+  ("reload",    keepGoing' reloadModule,        noCompletion),
+  ("reload!",   keepGoing' reloadModuleDefer,   noCompletion),
   ("run",       keepGoing runRun,               completeFilename),
   ("script",    keepGoing' scriptCmd,           completeFilename),
   ("set",       keepGoing setCmd,               completeSetOptions),
@@ -379,7 +379,7 @@ findEditor :: IO String
 findEditor = do
   getEnv "EDITOR"
     `catchIO` \_ -> do
-#if mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
         win <- System.Win32.getWindowsDirectory
         return (win </> "notepad.exe")
 #else
@@ -669,7 +669,7 @@ checkFileAndDirPerms file = do
     d -> d
 
 checkPerms :: FilePath -> IO Bool
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 checkPerms _ = return True
 #else
 checkPerms file =
@@ -720,7 +720,7 @@ formatCurrentTime format =
 
 getUserName :: IO String
 getUserName = do
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
   getEnv "USERNAME"
     `catchIO` \e -> do
       putStrLn $ show e
@@ -920,7 +920,7 @@ runCommands' eh sourceErrorHandler gCmd = gmask $ \unmask -> do
 -- A result of Nothing means there was no more input to process.
 -- Otherwise the result is Just b where b is True if the command succeeded;
 -- this is relevant only to ghc -e, which will exit with status 1
--- if the commmand was unsuccessful. GHCi will continue in either case.
+-- if the command was unsuccessful. GHCi will continue in either case.
 runOneCommand :: (SomeException -> GHCi Bool) -> InputT GHCi (Maybe String)
             -> InputT GHCi (Maybe Bool)
 runOneCommand eh gCmd = do
@@ -1409,6 +1409,11 @@ changeDirectory dir = do
   GHC.workingDirectoryChanged
   dir' <- expandPath dir
   liftIO $ setCurrentDirectory dir'
+  dflags <- getDynFlags
+  -- With -fexternal-interpreter, we have to change the directory of the subprocess too.
+  -- (this gives consistent behaviour with and without -fexternal-interpreter)
+  when (gopt Opt_ExternalInterpreter dflags) $
+    lift $ enqueueCommands ["System.Directory.setCurrentDirectory " ++ show dir']
 
 trySuccess :: GHC.GhcMonad m => m SuccessFlag -> m SuccessFlag
 trySuccess act =
@@ -1439,7 +1444,7 @@ editFile str =
      code <- liftIO $ system (cmd ++ cmdArgs)
 
      when (code == ExitSuccess)
-       $ reloadModule False ""
+       $ reloadModule ""
 
 -- The user didn't specify a file so we pick one for them.
 -- Our strategy is to pick the first module that failed to load,
@@ -1599,21 +1604,27 @@ checkModule m = do
 
 -- | Sets '-fdefer-type-errors' if 'defer' is true, executes 'load' and unsets
 -- '-fdefer-type-errors' again if it has not been set before.
-deferredLoad :: Bool -> InputT GHCi SuccessFlag -> InputT GHCi ()
-deferredLoad defer load = do
-  -- Force originalFlags to avoid leaking the associated HscEnv
-  !originalFlags <- getDynFlags
-  when defer $ Monad.void $
-    GHC.setProgramDynFlags $ setGeneralFlag' Opt_DeferTypeErrors originalFlags
-  Monad.void $ load
-  Monad.void $ GHC.setProgramDynFlags $ originalFlags
+wrapDeferTypeErrors :: InputT GHCi a -> InputT GHCi a
+wrapDeferTypeErrors load =
+  gbracket
+    (do
+      -- Force originalFlags to avoid leaking the associated HscEnv
+      !originalFlags <- getDynFlags
+      void $ GHC.setProgramDynFlags $
+         setGeneralFlag' Opt_DeferTypeErrors originalFlags
+      return originalFlags)
+    (\originalFlags -> void $ GHC.setProgramDynFlags originalFlags)
+    (\_ -> load)
 
 loadModule :: [(FilePath, Maybe Phase)] -> InputT GHCi SuccessFlag
 loadModule fs = timeIt (const Nothing) (loadModule' fs)
 
 -- | @:load@ command
-loadModule_ :: Bool -> [FilePath] -> InputT GHCi ()
-loadModule_ defer fs = deferredLoad defer (loadModule (zip fs (repeat Nothing)))
+loadModule_ :: [FilePath] -> InputT GHCi ()
+loadModule_ fs = void $ loadModule (zip fs (repeat Nothing))
+
+loadModuleDefer :: [FilePath] -> InputT GHCi ()
+loadModuleDefer = wrapDeferTypeErrors . loadModule_
 
 loadModule' :: [(FilePath, Maybe Phase)] -> InputT GHCi SuccessFlag
 loadModule' files = do
@@ -1649,12 +1660,14 @@ addModule files = do
   return ()
 
 -- | @:reload@ command
-reloadModule :: Bool -> String -> InputT GHCi ()
-reloadModule defer m = deferredLoad defer $
-                       doLoadAndCollectInfo True loadTargets
+reloadModule :: String -> InputT GHCi ()
+reloadModule m = void $ doLoadAndCollectInfo True loadTargets
   where
     loadTargets | null m    = LoadAllTargets
                 | otherwise = LoadUpTo (GHC.mkModuleName m)
+
+reloadModuleDefer :: String -> InputT GHCi ()
+reloadModuleDefer = wrapDeferTypeErrors . reloadModule
 
 -- | Load/compile targets and (optionally) collect module-info
 --
@@ -1788,7 +1801,7 @@ modulesLoadedMsg ok mods = do
   dflags <- getDynFlags
   unqual <- GHC.getPrintUnqual
   let mod_name mod = do
-        is_interpreted <- GHC.isModuleInterpreted mod
+        is_interpreted <- GHC.moduleIsBootOrNotObjectLinkable mod
         return $ if is_interpreted
                   then ppr (GHC.ms_mod mod)
                   else ppr (GHC.ms_mod mod)
@@ -2592,13 +2605,6 @@ setOptions wds =
       mapM_ setOpt plus_opts
       -- then, dynamic flags
       when (not (null minus_opts)) $ newDynFlags False minus_opts
-
-packageFlagsChanged :: DynFlags -> DynFlags -> Bool
-packageFlagsChanged idflags1 idflags0 =
-    packageFlags idflags1 /= packageFlags idflags0 ||
-    ignorePackageFlags idflags1 /= ignorePackageFlags idflags0 ||
-    pluginPackageFlags idflags1 /= pluginPackageFlags idflags0 ||
-    trustFlags idflags1 /= trustFlags idflags0
 
 newDynFlags :: Bool -> [String] -> GHCi ()
 newDynFlags interactive_only minus_opts = do
@@ -3527,8 +3533,7 @@ listAround pan do_highlight = do
           prefixed = zipWith ($) highlighted bs_line_nos
           output   = BS.intercalate (BS.pack "\n") prefixed
 
-      utf8Decoded <- liftIO $ BS.useAsCStringLen output
-                        $ \(p,n) -> utf8DecodeString (castPtr p) n
+      let utf8Decoded = utf8DecodeByteString output
       liftIO $ putStrLn utf8Decoded
   where
         file  = GHC.srcSpanFile pan

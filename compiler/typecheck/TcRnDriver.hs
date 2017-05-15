@@ -49,10 +49,12 @@ import Inst( deeplyInstantiate )
 import TcUnify( checkConstraints )
 import RnTypes
 import RnExpr
+import RnUtils ( HsDocContext(..) )
+import RnFixity ( lookupFixityRn )
 import MkId
 import TidyPgm    ( globaliseAndTidyId )
 import TysWiredIn ( unitTy, mkListTy )
-#ifdef GHCI
+#if defined(GHCI)
 import DynamicLoading ( loadPlugins )
 import Plugins ( tcPlugin )
 #endif
@@ -99,7 +101,7 @@ import ErrUtils
 import Id
 import VarEnv
 import Module
-import UniqDFM
+import UniqFM
 import Name
 import NameEnv
 import NameSet
@@ -116,7 +118,7 @@ import Class
 import BasicTypes hiding( SuccessFlag(..) )
 import CoAxiom
 import Annotations
-import Data.List ( sortBy )
+import Data.List ( sortBy, sort )
 import Data.Ord
 import FastString
 import Maybes
@@ -304,7 +306,7 @@ tcRnImports hsc_env import_decls
   = do  { (rn_imports, rdr_env, imports, hpc_info) <- rnImports import_decls ;
 
         ; this_mod <- getModule
-        ; let { dep_mods :: DModuleNameEnv (ModuleName, IsBootInterface)
+        ; let { dep_mods :: ModuleNameEnv (ModuleName, IsBootInterface)
               ; dep_mods = imp_dep_mods imports
 
                 -- We want instance declarations from all home-package
@@ -315,7 +317,7 @@ tcRnImports hsc_env import_decls
                 -- modules batch (@--make@) compiled before this one, but
                 -- which are not below this one.
               ; want_instances :: ModuleName -> Bool
-              ; want_instances mod = mod `elemUDFM` dep_mods
+              ; want_instances mod = mod `elemUFM` dep_mods
                                    && mod /= moduleName this_mod
               ; (home_insts, home_fam_insts) = hptInstances hsc_env
                                                             want_instances
@@ -324,7 +326,7 @@ tcRnImports hsc_env import_decls
                 -- Record boot-file info in the EPS, so that it's
                 -- visible to loadHiBootInterface in tcRnSrcDecls,
                 -- and any other incrementally-performed imports
-        ; updateEps_ (\eps -> eps { eps_is_boot = udfmToUfm dep_mods }) ;
+        ; updateEps_ (\eps -> eps { eps_is_boot = dep_mods }) ;
 
                 -- Update the gbl env
         ; updGblEnv ( \ gbl ->
@@ -1951,7 +1953,7 @@ type Plan = TcM PlanResult
 runPlans :: [Plan] -> TcM PlanResult
 runPlans []     = panic "runPlans"
 runPlans [p]    = p
-runPlans (p:ps) = tryTcLIE_ (runPlans ps) p
+runPlans (p:ps) = tryTcDiscardingErrs (runPlans ps) p
 
 -- | Typecheck (and 'lift') a stmt entered by the user in GHCi into the
 -- GHCi 'environment'.
@@ -1971,7 +1973,7 @@ tcUserStmt (L loc (BodyStmt expr _ _ _))
         ; uniq <- newUnique
         ; interPrintName <- getInteractivePrintName
         ; let fresh_it  = itName uniq loc
-              matches   = [mkMatch (FunRhs (L loc fresh_it) Prefix) [] rn_expr
+              matches   = [mkMatch (mkPrefixFunRhs (L loc fresh_it)) [] rn_expr
                                    (noLoc emptyLocalBinds)]
               -- [it = expr]
               the_bind  = L loc $ (mkTopFunBind FromSource (L loc fresh_it) matches) { bind_fvs = fvs }
@@ -2012,7 +2014,7 @@ tcUserStmt (L loc (BodyStmt expr _ _ _))
                        ; when (isUnitTy $ it_ty) failM
                        ; return stuff },
 
-                        -- Plan B; a naked bind statment
+                        -- Plan B; a naked bind statement
                     tcGhciStmts [bind_stmt],
 
                         -- Plan C; check that the let-binding is typeable all by itself.
@@ -2530,10 +2532,10 @@ pprTcGblEnv (TcGblEnv { tcg_type_env  = type_env,
          , vcat (map ppr rules)
          , vcat (map ppr vects)
          , text "Dependent modules:" <+>
-                pprUDFM (imp_dep_mods imports) ppr
+                pprUFM (imp_dep_mods imports) (ppr . sort)
          , text "Dependent packages:" <+>
                 ppr (S.toList $ imp_dep_pkgs imports)]
-  where         -- The use of sortBy is just to reduce unnecessary
+  where         -- The use of sort is just to reduce unnecessary
                 -- wobbling in testsuite output
 
 ppr_types :: TypeEnv -> SDoc
@@ -2620,7 +2622,7 @@ withTcPlugins hsc_env m =
        return (solve s, stop s)
 
 loadTcPlugins :: HscEnv -> IO [TcPlugin]
-#ifndef GHCI
+#if !defined(GHCI)
 loadTcPlugins _ = return []
 #else
 loadTcPlugins hsc_env =

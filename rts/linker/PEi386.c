@@ -51,7 +51,7 @@
 #define USED_IF_x86_64_HOST_ARCH    STG_UNUSED
 #endif
 
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 
 #include "RtsUtils.h"
 #include "RtsSymbolInfo.h"
@@ -670,7 +670,7 @@ cstring_from_section_name (uint8_t* name, uint8_t* strtab)
 }
 
 /* See Note [mingw-w64 name decoration scheme] */
-#ifndef x86_64_HOST_ARCH
+#if !defined(x86_64_HOST_ARCH)
 static void
 zapTrailingAtSign ( uint8_t* sym )
 {
@@ -1358,9 +1358,11 @@ ocResolve_PEi386 ( ObjectCode* oc )
          sym = (COFF_symbol*)
                myindex ( sizeof_COFF_symbol,
                          symtab, reltab_j->SymbolTableIndex );
+#if defined(x86_64_HOST_ARCH)
          uint64_t symIndex = ((uint64_t)myindex(sizeof_COFF_symbol, symtab,
                                                 reltab_j->SymbolTableIndex)
                                         - (uint64_t)symtab) / sizeof_COFF_symbol;
+#endif
 
          IF_DEBUG(linker,
                   debugBelch(
@@ -1556,7 +1558,7 @@ SymbolAddr *lookupSymbol_PEi386(SymbolName *lbl)
         SymbolAddr* sym;
 
 /* See Note [mingw-w64 name decoration scheme] */
-#ifndef x86_64_HOST_ARCH
+#if !defined(x86_64_HOST_ARCH)
         zapTrailingAtSign ( (unsigned char*)lbl );
 #endif
         sym = lookupSymbolInDLLs((unsigned char*)lbl);

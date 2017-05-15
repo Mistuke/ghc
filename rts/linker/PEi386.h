@@ -1,5 +1,4 @@
-#ifndef LINKER_PE_I386_H
-#define LINKER_PE_I386_H
+#pragma once
 
 #include "Rts.h"
 #include "LinkerInternals.h"
@@ -83,7 +82,7 @@ struct _IndirectAddr {
 } IndirectAddr;
 
 /* See Note [mingw-w64 name decoration scheme] */
-#ifndef x86_64_HOST_ARCH
+#if !defined(x86_64_HOST_ARCH)
 #define STRIP_LEADING_UNDERSCORE 1
 #else
 #define STRIP_LEADING_UNDERSCORE 0
@@ -107,5 +106,3 @@ See #9218
 
 
 #include "EndPrivate.h"
-
-#endif /* LINKER_PE_I386_H */

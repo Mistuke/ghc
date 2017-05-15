@@ -573,7 +573,7 @@ failNonStd dflags srcspan = dieWith dflags srcspan $
   text "Cannot load" <+> compWay <+>
      text "objects when GHC is built" <+> ghciWay $$
   text "To fix this, either:" $$
-  text "  (1) Use -fexternal-interprter, or" $$
+  text "  (1) Use -fexternal-interpreter, or" $$
   text "  (2) Build the program twice: once" <+>
                        ghciWay <> text ", and then" $$
   text "      with" <+> compWay <+>
@@ -1422,7 +1422,7 @@ searchForLibUsingGcc :: DynFlags -> String -> [FilePath] -> IO (Maybe FilePath)
 searchForLibUsingGcc dflags so dirs = do
    -- GCC does not seem to extend the library search path (using -L) when using
    -- --print-file-name. So instead pass it a new base location.
-   str <- askCc dflags (map (FileOption "-B") dirs
+   str <- askLd dflags (map (FileOption "-B") dirs
                           ++ [Option "--print-file-name", Option so])
    let file = case lines str of
                 []  -> ""

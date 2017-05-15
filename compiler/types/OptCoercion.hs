@@ -220,13 +220,24 @@ opt_co4 env sym rep r (CoVarCo cv)
   | Just co <- lookupCoVar (lcTCvSubst env) cv
   = opt_co4_wrap (zapLiftingContext env) sym rep r co
 
-  | Just cv1 <- lookupInScope (lcInScopeSet env) cv
-  = ASSERT( isCoVar cv1 ) wrapRole rep r $ wrapSym sym (CoVarCo cv1)
-                -- cv1 might have a substituted kind!
+  | ty1 `eqType` ty2   -- See Note [Optimise CoVarCo to Refl]
+  = Refl (chooseRole rep r) ty1
 
-  | otherwise = WARN( True, text "opt_co: not in scope:" <+> ppr cv $$ ppr env)
-                ASSERT( isCoVar cv )
-                wrapRole rep r $ wrapSym sym (CoVarCo cv)
+  | otherwise
+  = ASSERT( isCoVar cv1 )
+    wrapRole rep r $ wrapSym sym $
+    CoVarCo cv1
+
+  where
+    Pair ty1 ty2 = coVarTypes cv1
+
+    cv1 = case lookupInScope (lcInScopeSet env) cv of
+             Just cv1 -> cv1
+             Nothing  -> WARN( True, text "opt_co: not in scope:"
+                                     <+> ppr cv $$ ppr env)
+                         cv
+          -- cv1 might have a substituted kind!
+
 
 opt_co4 env sym rep r (AxiomInstCo con ind cos)
     -- Do *not* push sym inside top-level axioms
@@ -335,6 +346,15 @@ opt_co4 env sym rep r (AxiomRuleCo co cs)
     wrapSym sym $
     AxiomRuleCo co (zipWith (opt_co2 env False) (coaxrAsmpRoles co) cs)
 
+{- Note [Optimise CoVarCo to Refl]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+If we have (c :: t~t) we can optimise it to Refl. That increases the
+chances of floating the Refl upwards; e.g. Maybe c --> Refl (Maybe t)
+
+We do so here in optCoercion, not in mkCoVarCo; see Note [mkCoVarCo]
+in Coercion.
+-}
+
 -------------
 -- | Optimize a phantom coercion. The input coercion may not necessarily
 -- be a phantom, but the output sure will be.
@@ -343,6 +363,20 @@ opt_phantom env sym co
   = opt_univ env sym (PhantomProv (mkKindCo co)) Phantom ty1 ty2
   where
     Pair ty1 ty2 = coercionKind co
+
+{- Note [Differing kinds]
+   ~~~~~~~~~~~~~~~~~~~~~~
+The two types may not have the same kind (although that would be very unusual).
+But even if they have the same kind, and the same type constructor, the number
+of arguments in a `CoTyConApp` can differ. Consider
+
+  Any :: forall k. k
+
+  Any * Int                      :: *
+  Any (*->*) Maybe Int  :: *
+
+Hence the need to compare argument lengths; see Trac #13658
+ -}
 
 opt_univ :: LiftingContext -> SymFlag -> UnivCoProvenance -> Role
          -> Type -> Type -> Coercion
@@ -358,6 +392,7 @@ opt_univ env sym prov role oty1 oty2
   | Just (tc1, tys1) <- splitTyConApp_maybe oty1
   , Just (tc2, tys2) <- splitTyConApp_maybe oty2
   , tc1 == tc2
+  , equalLength tys1 tys2 -- see Note [Differing kinds]
       -- NB: prov must not be the two interesting ones (ProofIrrel & Phantom);
       -- Phantom is already taken care of, and ProofIrrel doesn't relate tyconapps
   = let roles    = tyConRolesX role tc1
@@ -534,6 +569,11 @@ opt_trans_rule is in_co1@(TyConAppCo r1 tc1 cos1) in_co2@(TyConAppCo r2 tc2 cos2
   = ASSERT( r1 == r2 )
     fireTransRule "PushTyConApp" in_co1 in_co2 $
     mkTyConAppCo r1 tc1 (opt_transList is cos1 cos2)
+
+opt_trans_rule is in_co1@(FunCo r1 co1a co1b) in_co2@(FunCo r2 co2a co2b)
+  = ASSERT( r1 == r2 )   -- Just like the TyConAppCo/TyConAppCo case
+    fireTransRule "PushFun" in_co1 in_co2 $
+    mkFunCo r1 (opt_trans is co1a co2a) (opt_trans is co1b co2b)
 
 opt_trans_rule is in_co1@(AppCo co1a co1b) in_co2@(AppCo co2a co2b)
   = fireTransRule "TrPushApp" in_co1 in_co2 $
@@ -754,7 +794,7 @@ checkAxInstCo _ = Nothing
 
 -----------
 wrapSym :: SymFlag -> Coercion -> Coercion
-wrapSym sym co | sym       = SymCo co
+wrapSym sym co | sym       = mkSymCo co
                | otherwise = co
 
 -- | Conditionally set a role to be representational

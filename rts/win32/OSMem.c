@@ -74,7 +74,7 @@ allocNew(uint32_t n) {
         rec=0;
         if (GetLastError() == ERROR_NOT_ENOUGH_MEMORY) {
 
-            errorBelch("Out of memory");
+            errorBelch("Out of memory\n");
             stg_exit(EXIT_HEAPOVERFLOW);
         } else {
             sysErrorBelch(
@@ -441,7 +441,7 @@ void setExecutable (void *p, W_ len, bool exec)
     }
 }
 
-#ifdef USE_LARGE_ADDRESS_SPACE
+#if defined(USE_LARGE_ADDRESS_SPACE)
 
 static void* heap_base = NULL;
 

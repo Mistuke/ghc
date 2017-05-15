@@ -11,8 +11,8 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -- We never want to link against terminfo while bootstrapping.
-#ifdef BOOTSTRAPPING
-#ifdef WITH_TERMINFO
+#if defined(BOOTSTRAPPING)
+#if defined(WITH_TERMINFO)
 #undef WITH_TERMINFO
 #endif
 #endif
@@ -89,11 +89,11 @@ import System.Posix hiding (fdToHandle)
 import qualified System.Info(os)
 #endif
 
-#ifdef WITH_TERMINFO
+#if defined(WITH_TERMINFO)
 import System.Console.Terminfo as Terminfo
 #endif
 
-#ifdef mingw32_HOST_OS
+#if defined(mingw32_HOST_OS)
 # if defined(i386_HOST_ARCH)
 #  define WINDOWS_CCONV stdcall
 # elif defined(x86_64_HOST_ARCH)
@@ -1236,16 +1236,9 @@ convertPackageInfoToCacheFormat pkg =
        GhcPkg.componentId        = installedComponentId pkg,
        GhcPkg.instantiatedWith   = instantiatedWith pkg,
        GhcPkg.sourcePackageId    = sourcePackageId pkg,
-       GhcPkg.packageName        =
-        case sourcePackageName pkg of
-            Nothing -> packageName pkg
-            Just pn -> pn,
+       GhcPkg.packageName        = packageName pkg,
        GhcPkg.packageVersion     = Version.Version (versionNumbers (packageVersion pkg)) [],
-       GhcPkg.mungedPackageName  =
-         case sourcePackageName pkg of
-            Nothing -> Nothing
-            Just _  -> Just (packageName pkg),
-       GhcPkg.libName            =
+       GhcPkg.sourceLibName      =
          fmap (mkPackageName . unUnqualComponentName) (sourceLibName pkg),
        GhcPkg.depends            = depends pkg,
        GhcPkg.abiDepends         = map (\(AbiDependency k v) -> (k,unAbiHash v)) (abiDepends pkg),
@@ -1447,7 +1440,7 @@ listPackages verbosity my_flags mPackageName mModuleName = do
 
   if simple_output then show_simple stack else do
 
-#ifndef WITH_TERMINFO
+#if !defined(WITH_TERMINFO)
     mapM_ show_normal stack
 #else
     let

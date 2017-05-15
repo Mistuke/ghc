@@ -95,7 +95,6 @@ endif
 #   The stage number refers to the compiler stage the options are passed to.
 
 GhcDebugged=NO
-GhcDynamic=NO
 
 # GhcProfiled=YES means compile a profiled stage-2 compiler
 GhcProfiled=NO
@@ -184,8 +183,6 @@ OsSupportsNCG=$(strip $(patsubst $(TargetOS_CPP), YES, $(patsubst ios,,$(TargetO
 GhcWithNativeCodeGen := $(strip\
     $(if $(filter YESYESNO,\
 		  $(OsSupportsNCG)$(ArchSupportsNCG)$(GhcUnregisterised)),YES,NO))
-
-HaveLibDL = @HaveLibDL@
 
 # ArchSupportsSMP should be set iff there is support for that arch in
 # includes/stg/SMP.h
@@ -410,6 +407,7 @@ GhcRtsWithLibdw=$(strip $(if $(filter $(TargetArch_CPP),i386 x86_64),@UseLibdw@,
 #
 ################################################################################
 
+BINDIST               = NO
 BIN_DIST_NAME         = ghc-$(ProjectVersion)
 BIN_DIST_PREP_DIR     = bindistprep/$(BIN_DIST_NAME)
 BIN_DIST_PREP_TAR     = bindistprep/$(BIN_DIST_NAME)-$(TARGETPLATFORM).tar
@@ -522,11 +520,7 @@ SUPPORTS_THIS_UNIT_ID = @SUPPORTS_THIS_UNIT_ID@
 # needs to know which gcc you're using in order to perform its tests.
 
 GccVersion            = @GccVersion@
-ifeq "$(phase)" "0"
-CrossCompilePrefix    =
-else
-CrossCompilePrefix    = @CrossCompilePrefix@
-endif
+
 # TargetPlatformFull retains the string passed to configure so we have it in
 # the necessary format to pass to libffi's configure.
 TargetPlatformFull    = @TargetPlatformFull@
@@ -562,6 +556,11 @@ CrossCompiling        = @CrossCompiling@
 # See Note [CrossCompiling vs Stage1Only]
 # See Note [Stage1Only vs stage=1]
 Stage1Only = NO
+
+# Installed tools prefix:
+#    we add prefix to crosscompiler GHC only (ghc-stage1),
+#    not cross-built GHC (not ghc-stage2).
+CrossCompilePrefix    = $(if $(filter YES,$(Stage1Only)),@CrossCompilePrefix@,)
 
 # Install stage 2 by default, or stage 1 in the cross compiler
 # case. Can be changed to 3
@@ -781,9 +780,9 @@ STRIP_CMD      = strip
 endif
 PATCH_CMD      = @PatchCmd@
 TAR_CMD        = @TarCmd@
-BZIP2_CMD      = bzip2
-GZIP_CMD       = gzip
-XZ_CMD         = xz
+BZIP2_CMD      = @Bzip2Cmd@
+GZIP_CMD       = @GzipCmd@
+XZ_CMD         = @XzCmd@
 
 # xz is default compression
 TAR_COMP      ?= xz

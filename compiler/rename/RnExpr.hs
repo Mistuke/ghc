@@ -26,6 +26,12 @@ import HsSyn
 import TcRnMonad
 import Module           ( getModule )
 import RnEnv
+import RnFixity
+import RnUtils          ( HsDocContext(..), bindLocalNamesFV, checkDupNames
+                        , bindLocalNames
+                        , mapMaybeFvRn, mapFvRn
+                        , warnUnusedLocalBinds )
+import RnUnbound        ( reportUnboundName )
 import RnSplice         ( rnBracket, rnSpliceExpr, checkThLocalName )
 import RnTypes
 import RnPat
@@ -115,12 +121,12 @@ rnExpr (HsVar (L l v))
 
               | otherwise
               -> finishHsVar (L l name) ;
-            Just (Right [f@(FieldOcc (L _ fn) s)]) ->
-                      return (HsRecFld (ambiguousFieldOcc (FieldOcc (L l fn) s))
-                             , unitFV (selectorFieldOcc f)) ;
-           Just (Right fs@(_:_:_)) -> return (HsRecFld (Ambiguous (L l v)
-                                                        PlaceHolder)
-                                             , mkFVs (map selectorFieldOcc fs));
+            Just (Right [s]) ->
+              return ( HsRecFld (ambiguousFieldOcc (FieldOcc (L l v) s))
+                     , unitFV s) ;
+           Just (Right fs@(_:_:_)) ->
+              return ( HsRecFld (Ambiguous (L l v) PlaceHolder)
+                     , mkFVs fs);
            Just (Right [])         -> panic "runExpr/HsVar" } }
 
 rnExpr (HsIPVar v)
@@ -146,8 +152,11 @@ rnExpr (HsLit lit)
        ; return (HsLit lit, emptyFVs) }
 
 rnExpr (HsOverLit lit)
-  = do { (lit', fvs) <- rnOverLit lit
-       ; return (HsOverLit lit', fvs) }
+  = do { ((lit', mb_neg), fvs) <- rnOverLit lit -- See Note [Negative zero]
+       ; case mb_neg of
+              Nothing -> return (HsOverLit lit', fvs)
+              Just neg -> return ( HsApp (noLoc neg) (noLoc (HsOverLit lit'))
+                                 , fvs ) }
 
 rnExpr (HsApp fun arg)
   = do { (fun',fvFun) <- rnLExpr fun
@@ -824,6 +833,10 @@ rnStmt ctxt rnBody (L loc (BindStmt pat body _ _ _)) thing_inside
 
         ; xMonadFailEnabled <- fmap (xopt LangExt.MonadFailDesugaring) getDynFlags
         ; let getFailFunction
+                -- If the pattern is irrefutible (e.g.: wildcard, tuple,
+                -- ~pat, etc.) we should not need to fail.
+                | isIrrefutableHsPat pat
+                                    = return (noSyntaxExpr, emptyFVs)
                 -- For non-monadic contexts (e.g. guard patterns, list
                 -- comprehensions, etc.) we should not need to fail.
                 -- See Note [Failing pattern matches in Stmts]

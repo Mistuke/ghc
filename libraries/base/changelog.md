@@ -1,5 +1,14 @@
 # Changelog for [`base` package](http://hackage.haskell.org/package/base)
 
+## 4.11.0.0 *TBA*
+  * Bundled with GHC *TBA*
+
+  * Add `Alternative` instance for `ZipList` (#13520)
+
+  * Add instances `Num`, `Functor`, `Applicative`, `Monad`, `Semigroup`
+    and `Monoid` for `Data.Ord.Down` (#13097).
+
+
 ## 4.10.0.0 *April 2017*
   * Bundled with GHC *TBA*
 
@@ -83,6 +92,9 @@
 
   * `mkTyCon3` is no longer exported by `Data.Typeable`. This function is
     replaced by `Type.Reflection.Unsafe.mkTyCon`.
+
+  * `Data.List.NonEmpty.unfold` has been deprecated in favor of `unfoldr`,
+    which is functionally equivalent.
 
 ## 4.9.0.0  *May 2016*
 

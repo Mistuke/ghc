@@ -9,10 +9,9 @@
  *
  * --------------------------------------------------------------------------*/
 
-#ifndef RTSAPI_H
-#define RTSAPI_H
+#pragma once
 
-#ifdef __cplusplus
+#if defined(__cplusplus)
 extern "C" {
 #endif
 
@@ -237,7 +236,7 @@ extern DLL_IMPORT_RTS void hs_init_ghc (int *argc, char **argv[],   // program a
 extern DLL_IMPORT_RTS void shutdownHaskellAndExit (int exitCode, int fastExit)
     GNUC3_ATTRIBUTE(__noreturn__);
 
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS)
 extern void shutdownHaskellAndSignal (int sig, int fastExit)
      GNUC3_ATTRIBUTE(__noreturn__);
 #endif
@@ -442,8 +441,6 @@ extern StgWord base_GHCziTopHandler_runNonIO_closure[];
 
 /* ------------------------------------------------------------------------ */
 
-#ifdef __cplusplus
+#if defined(__cplusplus)
 }
 #endif
-
-#endif /* RTSAPI_H */

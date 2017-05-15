@@ -74,6 +74,7 @@ import Module
 import Id
 import VarEnv
 import OrdList
+import BasicTypes( ConTagZ )
 import Unique
 import UniqSupply
 import FastString
@@ -288,8 +289,8 @@ data ReturnKind
 --
 -- Since this case is so common I decided to make it more explicit and
 -- robust by programming the sharing directly, rather than relying on
--- the common-block elimiantor to catch it.  This makes
--- common-block-elimianteion an optional optimisation, and furthermore
+-- the common-block eliminator to catch it.  This makes
+-- common-block-elimination an optional optimisation, and furthermore
 -- generates less code in the first place that we have to subsequently
 -- clean up.
 --

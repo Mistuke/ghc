@@ -6,8 +6,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef LINKERINTERNALS_H
-#define LINKERINTERNALS_H
+#pragma once
 
 #include "Rts.h"
 #include "Hash.h"
@@ -50,6 +49,18 @@ typedef
         }
    SectionAlloc;
 
+/*
+ * Note [No typedefs for customizable types]
+ * Some pointer-to-struct types are defined opaquely
+ * first, and customized later to architecture/ABI-specific
+ * instantiations. Having the usual
+ *   typedef struct _Foo {...} Foo;
+ * wrappers is hard to get right with older versions of GCC,
+ * so just have a
+ *   struct Foo {...};
+ * and always refer to it with the 'struct' qualifier.
+ */
+
 typedef
    struct _Section {
       void*    start;              /* actual start of section in memory */
@@ -63,6 +74,11 @@ typedef
       StgWord mapped_offset;      /* offset from the image of mapped_start */
       void* mapped_start;         /* start of mmap() block */
       StgWord mapped_size;        /* size of mmap() block */
+
+      /* A customizable type to augment the Section type.
+       * See Note [No typedefs for customizable types]
+       */
+      struct SectionFormatInfo* info;
    }
    Section;
 
@@ -85,7 +101,16 @@ typedef struct ForeignExportStablePtr_ {
     struct ForeignExportStablePtr_ *next;
 } ForeignExportStablePtr;
 
-#if powerpc_HOST_ARCH || x86_64_HOST_ARCH || arm_HOST_ARCH
+#if defined(powerpc_HOST_ARCH) || defined(x86_64_HOST_ARCH) \
+    || defined(arm_HOST_ARCH)
+/* ios currently uses adjacent got tables, and no symbol extras */
+#if !defined(ios_HOST_OS)
+#define NEED_SYMBOL_EXTRAS 1
+#endif /* ios_HOST_OS */
+#endif
+
+/* iOS Simulator however, needs symbol extras for now (#13678) */
+#if defined(ios_HOST_OS) && defined(x86_64_HOST_ARCH)
 #define NEED_SYMBOL_EXTRAS 1
 #endif
 
@@ -93,17 +118,17 @@ typedef struct ForeignExportStablePtr_ {
  * address relocations on the PowerPC, x86_64 and ARM.
  */
 typedef struct {
-#ifdef powerpc_HOST_ARCH
+#if defined(powerpc_HOST_ARCH)
     struct {
         short lis_r12, hi_addr;
         short ori_r12_r12, lo_addr;
         long mtctr_r12;
         long bctr;
     } jumpIsland;
-#elif x86_64_HOST_ARCH
+#elif defined(x86_64_HOST_ARCH)
     uint64_t    addr;
     uint8_t     jumpIsland[6];
-#elif arm_HOST_ARCH
+#elif defined(arm_HOST_ARCH)
     uint8_t     jumpIsland[16];
 #endif
 } SymbolExtra;
@@ -132,6 +157,12 @@ typedef struct _ObjectCode {
 
     /* ptr to mem containing the object file image */
     char*      image;
+
+    /* A customizable type, that formats can use to augment ObjectCode
+     * See Note [No typedefs for customizable types]
+     */
+    struct ObjectCodeFormatInfo* info;
+
     /* non-zero if the object file was mmap'd, otherwise malloc'd */
     int        imageMapped;
 
@@ -155,13 +186,13 @@ typedef struct _ObjectCode {
        outside one of these is an error in the linker. */
     ProddableBlock* proddables;
 
-#ifdef ia64_HOST_ARCH
+#if defined(ia64_HOST_ARCH)
     /* Procedure Linkage Table for this object */
     void *plt;
     unsigned int pltIndex;
 #endif
 
-#if NEED_SYMBOL_EXTRAS
+#if defined(NEED_SYMBOL_EXTRAS)
     SymbolExtra    *symbol_extras;
     unsigned long   first_symbol_extra;
     unsigned long   n_symbol_extras;
@@ -184,7 +215,7 @@ typedef struct _ObjectCode {
 extern ObjectCode *objects;
 extern ObjectCode *unloaded_objects;
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
 extern Mutex linker_mutex;
 extern Mutex linker_unloaded_mutex;
 #endif
@@ -270,7 +301,7 @@ ObjectCode* mkOc( pathchar *path, char *image, int imageSize,
                   int misalignment
                   );
 
-#if defined (mingw32_HOST_OS)
+#if defined(mingw32_HOST_OS)
 /* We use myindex to calculate array addresses, rather than
    simply doing the normal subscript thing.  That's because
    some of the above structs have sizes which are not
@@ -299,12 +330,22 @@ char *cstring_from_section_name(
 #endif
 
 /* Which object file format are we targetting? */
-#if defined(linux_HOST_OS) || defined(solaris2_HOST_OS) || defined(freebsd_HOST_OS) || defined(kfreebsdgnu_HOST_OS) || defined(dragonfly_HOST_OS) || defined(netbsd_HOST_OS) || defined(openbsd_HOST_OS) || defined(gnu_HOST_OS)
+#if defined(linux_HOST_OS) || defined(solaris2_HOST_OS) \
+|| defined(linux_android_HOST_OS) \
+|| defined(freebsd_HOST_OS) || defined(kfreebsdgnu_HOST_OS) \
+|| defined(dragonfly_HOST_OS) || defined(netbsd_HOST_OS) \
+|| defined(openbsd_HOST_OS) || defined(gnu_HOST_OS)
 #  define OBJFORMAT_ELF
+#  include "linker/ElfTypes.h"
 #elif defined (mingw32_HOST_OS)
 #  define OBJFORMAT_PEi386
-#elif defined(darwin_HOST_OS)
+struct SectionFormatInfo { void* placeholder; };
+struct ObjectCodeFormatInfo { void* placeholder; };
+#elif defined(darwin_HOST_OS) || defined(ios_HOST_OS)
 #  define OBJFORMAT_MACHO
+#  include "linker/MachOTypes.h"
+#else
+#error "Unknown OBJECT_FORMAT for HOST_OS"
 #endif
 
 /* In order to simplify control flow a bit, some references to mmap-related
@@ -318,4 +359,3 @@ char *cstring_from_section_name(
 #endif
 
 #include "EndPrivate.h"
-#endif /* LINKERINTERNALS_H */

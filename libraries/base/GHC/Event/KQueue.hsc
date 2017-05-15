@@ -38,7 +38,7 @@ import Foreign.Storable (Storable(..))
 import GHC.Base
 import GHC.Enum (toEnum)
 import GHC.Num (Num(..))
-import GHC.Real (ceiling, floor, fromIntegral)
+import GHC.Real (quotRem, fromIntegral)
 import GHC.Show (Show(show))
 import GHC.Event.Internal (Timeout(..))
 import System.Posix.Internals (c_close)
@@ -56,7 +56,7 @@ import Data.Int (Int64)
 -- Handle brokenness on some BSD variants, notably OS X up to at least
 -- 10.6.  If NOTE_EOF isn't available, we have no way to receive a
 -- notification from the kernel when we reach EOF on a plain file.
-#ifndef NOTE_EOF
+#if !defined(NOTE_EOF)
 # define NOTE_EOF 0
 #endif
 
@@ -132,7 +132,7 @@ data Event = KEvent {
     , filter :: {-# UNPACK #-} !Filter
     , flags  :: {-# UNPACK #-} !Flag
     , fflags :: {-# UNPACK #-} !FFlag
-#ifdef netbsd_HOST_OS
+#if defined(netbsd_HOST_OS)
     , data_  :: {-# UNPACK #-} !Int64
 #else
     , data_  :: {-# UNPACK #-} !CIntPtr
@@ -265,13 +265,13 @@ withTimeSpec ts f
 
 fromTimeout :: Timeout -> TimeSpec
 fromTimeout Forever     = TimeSpec (-1) (-1)
-fromTimeout (Timeout s) = TimeSpec (toEnum sec) (toEnum nanosec)
+fromTimeout (Timeout s) = TimeSpec (toEnum sec') (toEnum nanosec')
   where
-    sec :: Int
-    sec     = floor s
+    (sec, nanosec) = s `quotRem` 1000000000
 
-    nanosec :: Int
-    nanosec = ceiling $ (s - fromIntegral sec) * 1000000000
+    nanosec', sec' :: Int
+    sec' = fromIntegral sec
+    nanosec' = fromIntegral nanosec
 
 toEvent :: Filter -> E.Event
 toEvent (Filter f)

@@ -35,7 +35,7 @@ module TcRnTypes(
         -- Renamer types
         ErrCtxt, RecFieldEnv,
         ImportAvails(..), emptyImportAvails, plusImportAvails,
-        WhereFrom(..), mkModDeps,
+        WhereFrom(..), mkModDeps, modDepsElts,
 
         -- Typechecker types
         TcTypeEnv, TcIdBinderStack, TcIdBinder(..),
@@ -85,7 +85,7 @@ module TcRnTypes(
         andWC, unionsWC, mkSimpleWC, mkImplicWC,
         addInsols, getInsolubles, insolublesOnly, addSimples, addImplics,
         tyCoVarsOfWC, dropDerivedWC, dropDerivedSimples, dropDerivedInsols,
-        tyCoVarsOfWCList,
+        tyCoVarsOfWCList, trulyInsoluble,
         isDroppableDerivedLoc, insolubleImplic,
         arisesFromGivens,
 
@@ -128,7 +128,11 @@ module TcRnTypes(
         -- Misc other types
         TcId, TcIdSet,
         Hole(..), holeOcc,
-        NameShape(..)
+        NameShape(..),
+
+        -- Role annotations
+        RoleAnnotEnv, emptyRoleAnnotEnv, mkRoleAnnotEnv,
+        lookupRoleAnnot, getRoleAnnots,
 
   ) where
 
@@ -165,7 +169,7 @@ import Module
 import SrcLoc
 import VarSet
 import ErrUtils
-import UniqDFM
+import UniqFM
 import UniqSupply
 import BasicTypes
 import Bag
@@ -176,6 +180,7 @@ import FastString
 import qualified GHC.LanguageExtensions as LangExt
 import Fingerprint
 import Util
+import PrelNames ( isUnboundName )
 
 import Control.Monad (ap, liftM, msum)
 #if __GLASGOW_HASKELL__ > 710
@@ -184,9 +189,11 @@ import qualified Control.Monad.Fail as MonadFail
 import Data.Set      ( Set )
 import qualified Data.Set as S
 
+import Data.List ( sort )
 import Data.Map ( Map )
 import Data.Dynamic  ( Dynamic )
 import Data.Typeable ( TypeRep )
+import Data.Maybe    ( mapMaybe )
 import GHCi.Message
 import GHCi.RemoteTypes
 
@@ -531,7 +538,31 @@ data TcGblEnv
         tcg_imports :: ImportAvails,
           -- ^ Information about what was imported from where, including
           -- things bound in this module. Also store Safe Haskell info
-          -- here about transative trusted packaage requirements.
+          -- here about transitive trusted package requirements.
+          --
+          -- There are not many uses of this field, so you can grep for
+          -- all them.
+          --
+          -- The ImportAvails records information about the following
+          -- things:
+          --
+          --    1. All of the modules you directly imported (tcRnImports)
+          --    2. The orphans (only!) of all imported modules in a GHCi
+          --       session (runTcInteractive)
+          --    3. The module that instantiated a signature
+          --    4. Each of the signatures that merged in
+          --
+          -- It is used in the following ways:
+          --    - imp_orphs is used to determine what orphan modules should be
+          --      visible in the context (tcVisibleOrphanMods)
+          --    - imp_finsts is used to determine what family instances should
+          --      be visible (tcExtendLocalFamInstEnv)
+          --    - To resolve the meaning of the export list of a module
+          --      (tcRnExports)
+          --    - imp_mods is used to compute usage info (mkIfaceTc, deSugar)
+          --    - imp_trust_own_pkg is used for Safe Haskell in interfaces
+          --      (mkIfaceTc, as well as in HscMain)
+          --    - To create the Dependencies field in interface (mkDependencies)
 
         tcg_dus       :: DefUses,   -- ^ What is defined in this module and what is used.
         tcg_used_gres :: TcRef [GlobalRdrElt],  -- ^ Records occurrences of imported entities
@@ -1210,7 +1241,7 @@ data ImportAvails
           -- different packages. (currently not the case, but might be in the
           -- future).
 
-        imp_dep_mods :: DModuleNameEnv (ModuleName, IsBootInterface),
+        imp_dep_mods :: ModuleNameEnv (ModuleName, IsBootInterface),
           -- ^ Home-package modules needed by the module being compiled
           --
           -- It doesn't matter whether any of these dependencies
@@ -1252,14 +1283,21 @@ data ImportAvails
       }
 
 mkModDeps :: [(ModuleName, IsBootInterface)]
-          -> DModuleNameEnv (ModuleName, IsBootInterface)
-mkModDeps deps = foldl add emptyUDFM deps
+          -> ModuleNameEnv (ModuleName, IsBootInterface)
+mkModDeps deps = foldl add emptyUFM deps
                where
-                 add env elt@(m,_) = addToUDFM env m elt
+                 add env elt@(m,_) = addToUFM env m elt
+
+modDepsElts
+  :: ModuleNameEnv (ModuleName, IsBootInterface)
+  -> [(ModuleName, IsBootInterface)]
+modDepsElts = sort . nonDetEltsUFM
+  -- It's OK to use nonDetEltsUFM here because sorting by module names
+  -- restores determinism
 
 emptyImportAvails :: ImportAvails
 emptyImportAvails = ImportAvails { imp_mods          = emptyModuleEnv,
-                                   imp_dep_mods      = emptyUDFM,
+                                   imp_dep_mods      = emptyUFM,
                                    imp_dep_pkgs      = S.empty,
                                    imp_trust_pkgs    = S.empty,
                                    imp_trust_own_pkg = False,
@@ -1282,7 +1320,7 @@ plusImportAvails
                   imp_trust_pkgs = tpkgs2, imp_trust_own_pkg = tself2,
                   imp_orphs = orphs2, imp_finsts = finsts2 })
   = ImportAvails { imp_mods          = plusModuleEnv_C (++) mods1 mods2,
-                   imp_dep_mods      = plusUDFM_C plus_mod_dep dmods1 dmods2,
+                   imp_dep_mods      = plusUFM_C plus_mod_dep dmods1 dmods2,
                    imp_dep_pkgs      = dpkgs1 `S.union` dpkgs2,
                    imp_trust_pkgs    = tpkgs1 `S.union` tpkgs2,
                    imp_trust_own_pkg = tself1 || tself2,
@@ -1374,7 +1412,7 @@ data TcIdSigInst
   = TISI { sig_inst_sig :: TcIdSigInfo
 
          , sig_inst_skols :: [(Name, TcTyVar)]
-               -- Instantiated type and kind variables SKOLEMS
+               -- Instantiated type and kind variables, SigTvs
                -- The Name is the Name that the renamer chose;
                --   but the TcTyVar may come from instantiating
                --   the type and hence have a different unique.
@@ -1424,7 +1462,7 @@ Moreover the kind of a wildcard in sig_inst_wcs may mention
 the universally-quantified tyvars sig_inst_skols
 e.g.   f :: t a -> t _
 Here we get
-   sig_inst_skole = [k:*, (t::k ->*), (a::k)]
+   sig_inst_skols = [k:*, (t::k ->*), (a::k)]
    sig_inst_tau   = t a -> t _22
    sig_inst_wcs   = [ _22::k ]
 -}
@@ -1493,14 +1531,14 @@ data Ct
   -- Atomic canonical constraints
   = CDictCan {  -- e.g.  Num xi
       cc_ev     :: CtEvidence, -- See Note [Ct/evidence invariant]
+
       cc_class  :: Class,
-      cc_tyargs :: [Xi],       -- cc_tyargs are function-free, hence Xi
-      cc_pend_sc :: Bool       -- True <=> (a) cc_class has superclasses
-                               --          (b) we have not (yet) added those
-                               --              superclasses as Givens
-           -- NB: cc_pend_sc is used for G/W/D.  For W/D the reason
-           --     we need superclasses is to expose possible improvement
-           --     via fundeps
+      cc_tyargs :: [Xi],   -- cc_tyargs are function-free, hence Xi
+
+      cc_pend_sc :: Bool   -- See Note [The superclass story] in TcCanonical
+                           -- True <=> (a) cc_class has superclasses
+                           --          (b) we have not (yet) added those
+                           --              superclasses as Givens
     }
 
   | CIrredEvCan {  -- These stand for yet-unusable predicates
@@ -1578,9 +1616,8 @@ holeOcc :: Hole -> OccName
 holeOcc (ExprHole uv)  = unboundVarOcc uv
 holeOcc (TypeHole occ) = occ
 
-{-
-Note [Hole constraints]
-~~~~~~~~~~~~~~~~~~~~~~~
+{- Note [Hole constraints]
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 CHoleCan constraints are used for two kinds of holes,
 distinguished by cc_hole:
 
@@ -1616,9 +1653,9 @@ of (cc_ev ct), and is fully rewritten wrt the substitution.   Eg for CDictCan,
 This holds by construction; look at the unique place where CDictCan is
 built (in TcCanonical).
 
-In contrast, the type of the evidence *term* (ccev_evtm or ctev_evar/dest) in
+In contrast, the type of the evidence *term* (ctev_dest / ctev_evar) in
 the evidence may *not* be fully zonked; we are careful not to look at it
-during constraint solving.  See Note [Evidence field of CtEvidence]
+during constraint solving. See Note [Evidence field of CtEvidence].
 -}
 
 mkNonCanonical :: CtEvidence -> Ct
@@ -1775,13 +1812,25 @@ dropDerivedSimples simples = mapMaybeBag dropDerivedCt simples
 dropDerivedCt :: Ct -> Maybe Ct
 dropDerivedCt ct
   = case ctEvFlavour ev of
-      Wanted WOnly -> Just (ct { cc_ev = ev_wd })
-      Wanted _     -> Just ct
+      Wanted WOnly -> Just (ct' { cc_ev = ev_wd })
+      Wanted _     -> Just ct'
       _            -> ASSERT( isDerivedCt ct ) Nothing
                       -- simples are all Wanted or Derived
   where
     ev    = ctEvidence ct
     ev_wd = ev { ctev_nosh = WDeriv }
+    ct'   = setPendingScDict ct -- See Note [Resetting cc_pend_sc]
+
+{- Note [Resetting cc_pend_sc]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+When we discard Derived constraints, in dropDerivedSimples, we must
+set the cc_pend_sc flag to True, so that if we re-process this
+CDictCan we will re-generate its derived superclasses. Otherwise
+we might miss some fundeps.  Trac #13662 showed this up.
+
+See Note [The superclass story] in TcCanonical.
+-}
+
 
 dropDerivedInsols :: Cts -> Cts
 -- See Note [Dropping derived constraints]
@@ -1792,31 +1841,36 @@ dropDerivedInsols insols = filterBag keep insols
       | otherwise      = True
 
 isDroppableDerivedLoc :: CtLoc -> Bool
--- Note [Dropping derived constraints]
+-- See Note [Dropping derived constraints]
 isDroppableDerivedLoc loc
   = case ctLocOrigin loc of
       HoleOrigin {}    -> False
       KindEqOrigin {}  -> False
       GivenOrigin {}   -> False
-      FunDepOrigin1 {} -> False
+
+      -- See Note [Dropping derived constraints]
+      -- For fundeps, drop wanted/wanted interactions
       FunDepOrigin2 {} -> False
-      _                -> True
+      FunDepOrigin1 _ loc1 _ loc2
+        | isGivenLoc loc1 || isGivenLoc loc2 -> False
+        | otherwise                          -> True
+      _ -> True
 
 arisesFromGivens :: Ct -> Bool
 arisesFromGivens ct
   = case ctEvidence ct of
-      CtGiven {} -> True
-      CtWanted {} -> False
-      CtDerived { ctev_loc = loc } -> from_given loc
-  where
-   from_given :: CtLoc -> Bool
-   from_given loc = from_given_origin (ctLocOrigin loc)
+      CtGiven {}                   -> True
+      CtWanted {}                  -> False
+      CtDerived { ctev_loc = loc } -> isGivenLoc loc
 
-   from_given_origin :: CtOrigin -> Bool
-   from_given_origin (GivenOrigin {})          = True
-   from_given_origin (FunDepOrigin1 _ l1 _ l2) = from_given l1 && from_given l2
-   from_given_origin (FunDepOrigin2 _ o1 _ _)  = from_given_origin o1
-   from_given_origin _                         = False
+isGivenLoc :: CtLoc -> Bool
+isGivenLoc loc = isGivenOrigin (ctLocOrigin loc)
+
+isGivenOrigin :: CtOrigin -> Bool
+isGivenOrigin (GivenOrigin {})          = True
+isGivenOrigin (FunDepOrigin1 _ l1 _ l2) = isGivenLoc l1 && isGivenLoc l2
+isGivenOrigin (FunDepOrigin2 _ o1 _ _)  = isGivenOrigin o1
+isGivenOrigin _                         = False
 
 {- Note [Dropping derived constraints]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1832,19 +1886,19 @@ see dropDerivedWC.  For example
 
 But (tiresomely) we do keep *some* Derived insolubles:
 
- * Insoluble kind equalities (e.g. [D] * ~ (* -> *)) may arise from
-   a type equality a ~ Int#, say.  In future they'll be Wanted, not Derived,
-   but at the moment they are Derived.
+ * Type holes are derived constraints, because they have no evidence
+   and we want to keep them, so we get the error report
 
  * Insoluble derived equalities (e.g. [D] Int ~ Bool) may arise from
-   functional dependency interactions, either between Givens or
-   Wanteds.  It seems sensible to retain these:
-   - For Givens they reflect unreachable code
-   - For Wanteds it is arguably better to get a fundep error than
-     a no-instance error (Trac #9612)
+   functional dependency interactions:
+      - Given or Wanted interacting with an instance declaration (FunDepOrigin2)
+      - Given/Given interactions (FunDepOrigin1); this reflects unreachable code
+      - Given/Wanted interactions (FunDepOrigin1); see Trac #9612
 
- * Type holes are derived constraints because they have no evidence
-   and we want to keep them so we get the error report
+   But for Wanted/Wanted interactions we do /not/ want to report an
+   error (Trac #13506).  Consider [W] C Int Int, [W] C Int Bool, with
+   a fundep on class C.  We don't want to report an insoluble Int~Bool;
+   c.f. "wanteds do not rewrite wanteds".
 
 Moreover, we keep *all* derived insolubles under some circumstances:
 
@@ -1852,7 +1906,7 @@ Moreover, we keep *all* derived insolubles under some circumstances:
     generalise.  Example: [W] a ~ Int, [W] a ~ Bool
     We get [D] Int ~ Bool, and indeed the constraints are insoluble,
     and we want simplifyInfer to see that, even though we don't
-    ultimately want to generate an (inexplicable) error message from
+    ultimately want to generate an (inexplicable) error message from it
 
 To distinguish these cases we use the CtOrigin.
 
@@ -1975,6 +2029,12 @@ isPendingScDict :: Ct -> Maybe Ct
 isPendingScDict ct@(CDictCan { cc_pend_sc = True })
                   = Just (ct { cc_pend_sc = False })
 isPendingScDict _ = Nothing
+
+setPendingScDict :: Ct -> Ct
+-- Set the cc_pend_sc flag to True
+setPendingScDict ct@(CDictCan { cc_pend_sc = False })
+                    = ct { cc_pend_sc = True }
+setPendingScDict ct = ct
 
 superClassesMightHelp :: Ct -> Bool
 -- ^ True if taking superclasses of givens, or of wanteds (to perhaps
@@ -2153,7 +2213,7 @@ trulyInsoluble :: Ct -> Bool
 --   a) type holes, arising from PartialTypeSignatures,
 --   b) "true" expression holes arising from TypedHoles
 --
--- A "expression hole" or "type hole" constraint isn't really an error
+-- An "expression hole" or "type hole" constraint isn't really an error
 -- at all; it's a report saying "_ :: Int" here.  But an out-of-scope
 -- variable masquerading as expression holes IS treated as truly
 -- insoluble, so that it trumps other errors during error reporting.
@@ -2367,6 +2427,16 @@ For Givens we make new EvVars and bind them immediately. Two main reasons:
     (see evTermCoercion), so the easy thing is to bind it to an Id.
 
 So a Given has EvVar inside it rather than (as previously) an EvTerm.
+
+Note [Given in ctEvCoercion]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+When retrieving the evidence from a Given equality, we update the type of the EvVar
+from the ctev_pred field. In Note [Evidence field of CtEvidence], we claim that
+the type of the evidence is never looked at -- but this isn't true in the case of
+a coercion that is used in a type. (See the comments in Note [Flattening] in TcFlatten
+about the FTRNotFollowed case of flattenTyVar.) So, right here where we are retrieving
+the coercion from a Given, we update the type to make sure it's zonked.
+
 -}
 
 -- | A place for type-checking evidence to go after it is generated.
@@ -2374,12 +2444,15 @@ So a Given has EvVar inside it rather than (as previously) an EvTerm.
 -- EvVarDest.
 data TcEvDest
   = EvVarDest EvVar         -- ^ bind this var to the evidence
+              -- EvVarDest is always used for non-type-equalities
+              -- e.g. class constraints
+
   | HoleDest  CoercionHole  -- ^ fill in this hole with the evidence
+              -- HoleDest is always used for type-equalities
               -- See Note [Coercion holes] in TyCoRep
 
 data CtEvidence
   = CtGiven    -- Truly given, not depending on subgoals
-               -- NB: Spontaneous unifications belong here
       { ctev_pred :: TcPredType      -- See Note [Ct/evidence invariant]
       , ctev_evar :: EvVar           -- See Note [Evidence field of CtEvidence]
       , ctev_loc  :: CtLoc }
@@ -2420,13 +2493,19 @@ ctEvTerm :: CtEvidence -> EvTerm
 ctEvTerm ev@(CtWanted { ctev_dest = HoleDest _ }) = EvCoercion $ ctEvCoercion ev
 ctEvTerm ev = EvId (ctEvId ev)
 
+-- Always returns a coercion whose type is precisely ctev_pred of the CtEvidence.
+-- See also Note [Given in ctEvCoercion]
 ctEvCoercion :: CtEvidence -> Coercion
-ctEvCoercion ev@(CtWanted { ctev_dest = HoleDest hole, ctev_pred = pred })
-  = case getEqPredTys_maybe pred of
-      Just (role, ty1, ty2) -> mkHoleCo hole role ty1 ty2
-      _                     -> pprPanic "ctEvTerm" (ppr ev)
-ctEvCoercion (CtGiven { ctev_evar = ev_id }) = mkTcCoVarCo ev_id
-ctEvCoercion ev = pprPanic "ctEvCoercion" (ppr ev)
+ctEvCoercion (CtGiven { ctev_pred = pred_ty, ctev_evar = ev_id })
+  = mkTcCoVarCo (setVarType ev_id pred_ty)  -- See Note [Given in ctEvCoercion]
+ctEvCoercion (CtWanted { ctev_dest = dest, ctev_pred = pred })
+  | HoleDest hole <- dest
+  , Just (role, ty1, ty2) <- getEqPredTys_maybe pred
+  = -- ctEvCoercion is only called on type equalities
+    -- and they always have HoleDests
+    mkHoleCo hole role ty1 ty2
+ctEvCoercion ev
+  = pprPanic "ctEvCoercion" (ppr ev)
 
 ctEvId :: CtEvidence -> TcId
 ctEvId (CtWanted { ctev_dest = EvVarDest ev }) = ev
@@ -3393,3 +3472,31 @@ data TcPluginResult
     -- and the evidence for them is recorded.
     -- The second field contains new work, that should be processed by
     -- the constraint solver.
+
+{- *********************************************************************
+*                                                                      *
+                        Role annotations
+*                                                                      *
+********************************************************************* -}
+
+type RoleAnnotEnv = NameEnv (LRoleAnnotDecl Name)
+
+mkRoleAnnotEnv :: [LRoleAnnotDecl Name] -> RoleAnnotEnv
+mkRoleAnnotEnv role_annot_decls
+ = mkNameEnv [ (name, ra_decl)
+             | ra_decl <- role_annot_decls
+             , let name = roleAnnotDeclName (unLoc ra_decl)
+             , not (isUnboundName name) ]
+       -- Some of the role annots will be unbound;
+       -- we don't wish to include these
+
+emptyRoleAnnotEnv :: RoleAnnotEnv
+emptyRoleAnnotEnv = emptyNameEnv
+
+lookupRoleAnnot :: RoleAnnotEnv -> Name -> Maybe (LRoleAnnotDecl Name)
+lookupRoleAnnot = lookupNameEnv
+
+getRoleAnnots :: [Name] -> RoleAnnotEnv -> ([LRoleAnnotDecl Name], RoleAnnotEnv)
+getRoleAnnots bndrs role_env
+  = ( mapMaybe (lookupRoleAnnot role_env) bndrs
+    , delListFromNameEnv role_env bndrs )

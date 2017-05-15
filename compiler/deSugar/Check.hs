@@ -19,6 +19,7 @@ module Check (
 
 import TmOracle
 
+import BasicTypes
 import DynFlags
 import HsSyn
 import TcHsSyn
@@ -91,7 +92,7 @@ liftD m = ListT $ \sk fk -> m >>= \a -> sk a fk
 
 -- Pick the first match complete covered match or otherwise the "best" match.
 -- The best match is the one with the least uncovered clauses, ties broken
--- by the number of inaccessible clauses followed by number of redudant
+-- by the number of inaccessible clauses followed by number of redundant
 -- clauses
 getResult :: PmM PmResult -> DsM PmResult
 getResult ls = do
@@ -580,7 +581,7 @@ translatePat fam_insts pat = case pat of
     | otherwise -> do
         ps      <- translatePat fam_insts p
         (xp,xe) <- mkPmId2Forms ty
-        let g = mkGuard ps (HsWrap wrapper (unLoc xe))
+        let g = mkGuard ps (mkHsWrap wrapper (unLoc xe))
         return [xp,g]
 
   -- (n + k)  ===>   x (True <- x >= k) (n <- x-k)
@@ -668,15 +669,20 @@ translateNPat :: FamInstEnvs
 translateNPat fam_insts (OverLit val False _ ty) mb_neg outer_ty
   | not type_change, isStringTy ty, HsIsString src s <- val, Nothing <- mb_neg
   = translatePat fam_insts (LitPat (HsString src s))
-  | not type_change, isIntTy    ty, HsIntegral src i <- val
-  = translatePat fam_insts (mk_num_lit HsInt src i)
-  | not type_change, isWordTy   ty, HsIntegral src i <- val
-  = translatePat fam_insts (mk_num_lit HsWordPrim src i)
+  | not type_change, isIntTy    ty, HsIntegral i <- val
+  = translatePat fam_insts
+                 (LitPat $ case mb_neg of
+                             Nothing -> HsInt i
+                             Just _  -> HsInt (negateIntegralLit i))
+  | not type_change, isWordTy   ty, HsIntegral i <- val
+  = translatePat fam_insts
+                 (LitPat $ case mb_neg of
+                             Nothing -> HsWordPrim (il_text i) (il_value i)
+                             Just _  -> let ni = negateIntegralLit i in
+                                        HsWordPrim (il_text ni) (il_value ni))
   where
     type_change = not (outer_ty `eqType` ty)
-    mk_num_lit c src i = LitPat $ case mb_neg of
-      Nothing -> c src i
-      Just _  -> c src (-i)
+
 translateNPat _ ol mb_neg _
   = return [PmLit { pm_lit_lit = PmOLit (isJust mb_neg) ol }]
 
@@ -1032,7 +1038,7 @@ mkPmVars tys = mapM mkPmVar tys
 -- | Generate a fresh `Id` of a given type
 mkPmId :: Type -> DsM Id
 mkPmId ty = getUniqueM >>= \unique ->
-  let occname = mkVarOccFS (fsLit (show unique))
+  let occname = mkVarOccFS $ fsLit "$pm"
       name    = mkInternalName unique occname noSrcSpan
   in  return (mkLocalId name ty)
 

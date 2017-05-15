@@ -105,7 +105,6 @@ import Binary
 import Fingerprint
 import Exception
 import UniqSet
-import UniqDFM
 import Packages
 
 import Control.Monad
@@ -163,7 +162,6 @@ mkIfaceTc :: HscEnv
           -> IO (ModIface, Bool)
 mkIfaceTc hsc_env maybe_old_fingerprint safe_mode mod_details
   tc_result@TcGblEnv{ tcg_mod = this_mod,
-                      tcg_semantic_mod = semantic_mod,
                       tcg_src = hsc_src,
                       tcg_imports = imports,
                       tcg_rdr_env = rdr_env,
@@ -180,7 +178,14 @@ mkIfaceTc hsc_env maybe_old_fingerprint safe_mode mod_details
           let hpc_info = emptyHpcInfo other_hpc_info
           used_th <- readIORef tc_splice_used
           dep_files <- (readIORef dependent_files)
-          usages <- mkUsageInfo hsc_env semantic_mod (imp_mods imports) used_names dep_files merged
+          -- Do NOT use semantic module here; this_mod in mkUsageInfo
+          -- is used solely to decide if we should record a dependency
+          -- or not.  When we instantiate a signature, the semantic
+          -- module is something we want to record dependencies for,
+          -- but if you pass that in here, we'll decide it's the local
+          -- module and does not need to be recorded as a dependency.
+          -- See Note [Identity versus semantic module]
+          usages <- mkUsageInfo hsc_env this_mod (imp_mods imports) used_names dep_files merged
           mkIface_ hsc_env maybe_old_fingerprint
                    this_mod hsc_src
                    used_th deps rdr_env
@@ -439,8 +444,8 @@ addFingerprints hsc_env mb_old_fingerprint iface0 new_decls
         where extras = declExtras fix_fn ann_fn non_orph_rules non_orph_insts
                                   non_orph_fis decl
 
-       edges :: [(IfaceDeclABI, Unique, [Unique])]
-       edges = [ (abi, getUnique (getOccName decl), out)
+       edges :: [ Node Unique IfaceDeclABI ]
+       edges = [ DigraphNode abi (getUnique (getOccName decl)) out
                | decl <- new_decls
                , let abi = declABI decl
                , let out = localOccs $ freeNamesDeclABI abi
@@ -1214,14 +1219,14 @@ checkVersions hsc_env mod_summary iface
        -- We do this regardless of compilation mode, although in --make mode
        -- all the dependent modules should be in the HPT already, so it's
        -- quite redundant
-       ; updateEps_ $ \eps  -> eps { eps_is_boot = udfmToUfm mod_deps }
+       ; updateEps_ $ \eps  -> eps { eps_is_boot = mod_deps }
        ; recomp <- checkList [checkModUsage this_pkg u | u <- mi_usages iface]
        ; return (recomp, Just iface)
     }}}}}}
   where
     this_pkg = thisPackage (hsc_dflags hsc_env)
     -- This is a bit of a hack really
-    mod_deps :: DModuleNameEnv (ModuleName, IsBootInterface)
+    mod_deps :: ModuleNameEnv (ModuleName, IsBootInterface)
     mod_deps = mkModDeps (dep_mods (mi_deps iface))
 
 -- | Check if an hsig file needs recompilation because its
@@ -1394,7 +1399,7 @@ checkModUsage _this_pkg UsageFile{ usg_file_path = file,
  where
    recomp = RecompBecause (file ++ " changed")
    handle =
-#ifdef DEBUG
+#if defined(DEBUG)
        \e -> pprTrace "UsageFile" (text (show e)) $ return recomp
 #else
        \_ -> return recomp -- if we can't find the file, just recompile, don't fail

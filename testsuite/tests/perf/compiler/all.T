@@ -39,7 +39,7 @@ test('T1969',
              # 2013-11-13 17 (x86/Windows, 64bit machine)
              # 2015-07-11 21 (x86/Linux, 64bit machine) use +RTS -G1
              # 2016-04-06 30 (x86/Linux, 64bit machine)
-           (wordsize(64), 83, 20)]),
+           (wordsize(64), 61, 20)]),
              #            28 (amd64/Linux)
              #            34 (amd64/Linux)
              # 2012-09-20 23 (amd64/Linux)
@@ -54,6 +54,7 @@ test('T1969',
              # 2016-10-20 68, (amd64/Linux) allow top-level string literals
              #                See the comment 16 on #8472.
              # 2017-02-17 83  (amd64/Linux) Type-indexed Typeable
+             # 2017-03-31 61  (amd64/Linux) Fix memory leak in simplifier
       compiler_stats_num_field('max_bytes_used',
           [(platform('i386-unknown-mingw32'), 5719436, 20),
                                  # 2010-05-17 5717704 (x86/Windows)
@@ -61,15 +62,17 @@ test('T1969',
                                  # 2013-02-10 5030080 (x86/Windows)
                                  # 2013-11-13 7295012 (x86/Windows, 64bit machine)
                                  # 2014-04-24 5719436 (x86/Windows, 64bit machine)
-           (wordsize(32), 9093608, 1),
+           (wordsize(32), 9418680, 1),
              #            6707308 (x86/OS X)
              # 2009-12-31 6149572 (x86/Linux)
              # 2014-01-22 6429864 (x86/Linux)
              # 2014-06-29 5949188 (x86/Linux)
-             # 2015-07-11 6241108 (x86/Linux, 64bit machine) use +RTS -G1
-             # 2016-04-06 9093608 (x86/Linux, 64bit machine)
+             # 2015-07-11 6241108 (x86/Linux, 64-bit machine) use +RTS -G1
+             # 2016-04-06 9093608 (x86/Linux, 64-bit machine)
+             # 2017-03-24 9261052 (x86/Linux, 64-bit machine)
+             # 2017-04-06 9418680 (x86/Linux, 64-bit machine)
 
-           (wordsize(64), 19924328, 15)]),
+           (wordsize(64), 16679176, 15)]),
              # 2014-09-10 10463640, 10  # post-AMP-update (somewhat stabelish)
                # looks like the peak is around ~10M, but we're
                # unlikely to GC exactly on the peak.
@@ -83,6 +86,7 @@ test('T1969',
              # 2016-10-12 17285216 (amd64/Linux) it's not entirely clear why
              # 2017-02-01 19924328 (amd64/Linux) Join points (#12988)
              # 2017-02-14 16393848 Early inline patch
+             # 2017-03-31 16679176 Fix memory leak in simplifier
 
       compiler_stats_num_field('bytes allocated',
           [(platform('i386-unknown-mingw32'), 301784492, 5),
@@ -91,7 +95,7 @@ test('T1969',
                                  # 2013-02-10 310633884 (x86/Windows)
                                  # 2013-11-13 317975916 (x86/Windows, 64bit machine)
                                  # 2014-04-04 301784492 (x86/Windows, 64bit machine)
-           (wordsize(32), 344730660, 1),
+           (wordsize(32), 324586096, 1),
              #            221667908 (x86/OS X)
              #            274932264 (x86/Linux)
              # 2012-10-08 303930948 (x86/Linux, new codegen)
@@ -100,7 +104,8 @@ test('T1969',
              # 2014-06-29 303300692 (x86/Linux)
              # 2015-07-11 288699104 (x86/Linux, 64-bit machine) use +RTS -G1
              # 2016-04-06 344730660 (x86/Linux, 64-bit machine)
-           (wordsize(64), 695354904, 5)]),
+             # 2017-03-24 324586096 (x86/Linux, 64-bit machine)
+           (wordsize(64), 659863176, 5)]),
              # 2009-11-17 434845560 (amd64/Linux)
              # 2009-12-08 459776680 (amd64/Linux)
              # 2010-05-17 519377728 (amd64/Linux)
@@ -123,6 +128,7 @@ test('T1969',
              # 2015-10-28 756138176 (x86_64/Linux) inst-decl defaults go via typechecker (#12220)
              # 2017-02-17 831733376 (x86_64/Linux) Type-indexed Typeable
              # 2017-02-25 695354904 (x86_64/Linux) Early inlining patch
+             # 2017-04-21 659863176 (x86_64/Linux) Unknown
       only_ways(['normal']),
 
       extra_hc_opts('-dcore-lint -static'),
@@ -202,7 +208,7 @@ test('T3294',
             # 2014-09-10: 2709595808 (amd64/Linux) post-AMP cleanup
             # 2016-07-11: 2664479936 (Windows) before fix for #12227
             # 2016-07-11: 2739731144 (Windows) after fix for #12227 (ignoring)
-            # 2016-02-17: 2758641264 (amd64/Linux) (Type indexed Typeable)
+            # 2017-02-17: 2758641264 (amd64/Linux) (Type indexed Typeable)
       conf_3294,
 
       # Use `+RTS -G1` for more stable residency measurements. Note [residency].
@@ -234,16 +240,18 @@ test('T4801',
 #            # 2014-10-13: 48 stricter seqDmdType
 
       compiler_stats_num_field('bytes allocated',
-          [(platform('x86_64-apple-darwin'), 465653312, 10),
+          [(platform('x86_64-apple-darwin'), 417302064, 10),
            # prev:       510938976 (amd64/OS X):
            # 2015-12-11: 465653312 (amd64/OS X) Update, bump tolerance to +/-10%
+           # 2017-03-24: 417302064 (amd64/OS X) Correlated with Linux improvement
 
-           (wordsize(32), 239556572, 10),
+           (wordsize(32), 199856388, 10),
            # prev:        185669232 (x86/OSX)
            # 2014-01-22:  211198056 (x86/Linux)
            # 2014-09-03:  185242032 (Windows laptop)
            # 2014-12-01:  203962148 (Windows laptop)
            # 2016-04-06:  239556572 (x86/Linux)
+           # 2017-03-24:  199856388 (x86/Linux)
            (wordsize(64), 388898280, 10)]),
             # prev:       360243576 (amd64/Linux)
             # 19/10/2012: 447190832 (amd64/Linux) (-fPIC turned on)
@@ -288,12 +296,14 @@ test('T4801',
 
 test('T3064',
      [compiler_stats_num_field('peak_megabytes_allocated',# Note [residency]
-          [(wordsize(32), 28, 20),
+          [(wordsize(32), 36, 20),
             # expected value: 14 (x86/Linux 28-06-2012):
             # 2013-11-13:     18 (x86/Windows, 64bit machine)
             # 2014-01-22:     23 (x86/Linux)
             # 2014-12-22:     23 (x86/Linux) death to silent superclasses
-            # 2015-07-11      28 (x86/Linux, 64-bit machine) use +RTS -G1
+            # 2015-07-11:     28 (x86/Linux, 64-bit machine) use +RTS -G1
+            # 2017-04-06:     36 (x86/Linux, 64-bit machine) it's unclear
+
            (wordsize(64), 66, 20)]),
             # (amd64/Linux):            18
             # (amd64/Linux) 2012-02-07: 26
@@ -311,7 +321,7 @@ test('T3064',
             # (amd64/Linux) 2016-10-25: 66: Presumably creep
 
       compiler_stats_num_field('bytes allocated',
-          [(wordsize(32), 153261024, 10),
+          [(wordsize(32), 134044092, 10),
             # 2011-06-28: 56380288  (x86/Linux)
             # 2012-10-30: 111189536 (x86/Windows)
             # 2013-11-13: 146626504 (x86/Windows, 64bit machine)
@@ -319,8 +329,9 @@ test('T3064',
             # 2014-12-01: 162457940 (Windows)
             # 2014-12-22: 122836340 (Windows) Death to silent superclasses
             # 2016-04-06: 153261024 (x86/Linux) probably wildcard refactor
+            # 2017-03-24: 134044092 (x86/Linux, 64-bit machine) Update
 
-           (wordsize(64), 259815560, 5)]),
+           (wordsize(64), 281509496, 5)]),
             # (amd64/Linux) (2011-06-28):  73259544
             # (amd64/Linux) (2013-02-07): 224798696
             # (amd64/Linux) (2013-08-02): 236404384, increase from roles
@@ -345,6 +356,8 @@ test('T3064',
             #                                        of zonkTcType (Trac #11882)
             # (amd64/Darwin) (2017-01-23): 306222424 Presumably creep from recent changes (Typeable?)
             # (amd64/Linux) (2017-02-14): 259815560  Early inline patch: 9% improvement
+            # (amd64/Linux) (2017-03-31): 265950920  Fix memory leak in simplifier
+            # (amd64/Linux) (2017-05-01): 281509496  Avoid excessive space usage from unfoldings in CoreTidy
 
 ###################################
 # deactivated for now, as this metric became too volatile recently
@@ -429,7 +442,7 @@ test('T5631',
         # 2014-04-04:     346389856 (x86 Windows, 64 bit machine)
         # 2014-12-01:     390199244 (Windows laptop)
         # 2016-04-06:     570137436 (amd64/Linux) many reasons
-           (wordsize(64), 1065147968, 5)]),
+           (wordsize(64), 1037482512, 5)]),
         # expected value: 774595008 (amd64/Linux):
         # expected value: 735486328 (amd64/Linux) 2012/12/12:
         # expected value: 690742040 (amd64/Linux) Call Arity improvements
@@ -443,6 +456,7 @@ test('T5631',
         # 2016-11-10:     1077429456 (amd64/Linux) Stop -dno-debug-output suppressing -ddump-tc-trace
         # 2017-02-17:     1517484488 (amd64/Linux) Type-indexed Typeable
         # 2017-03-03:     1065147968 (amd64/Linux) Share Typeable KindReps
+        # 2017-03-31:     1037482512 (amd64/Linux) Fix memory leak in simplifier
        only_ways(['normal'])
       ],
      compile,
@@ -450,7 +464,9 @@ test('T5631',
 
 test('parsing001',
      [compiler_stats_num_field('bytes allocated',
-          [(wordsize(32), 274000576, 10),
+          [(wordsize(32), 232777056, 10),
+        # Initial:        274000576
+        # 2017-03-24:     232777056
            (wordsize(64), 463931280, 5)]),
         # expected value: 587079016 (amd64/Linux)
         # 2016-09-01:     581551384 (amd64/Linux) Restore w/w limit (#11565)
@@ -465,7 +481,7 @@ test('T783',
      [ only_ways(['normal']),  # no optimisation for this one
       # expected value: 175,569,928 (x86/Linux)
       compiler_stats_num_field('bytes allocated',
-          [(wordsize(32), 249332816, 5),
+          [(wordsize(32), 225911912, 5),
             # 2012-10-08: 226907420 (x86/Linux)
             # 2013-02-10: 329202116 (x86/Windows)
             # 2013-02-10: 338465200 (x86/OSX)
@@ -473,6 +489,7 @@ test('T783',
             # 2014-09-03: 223377364 (Windows) better specialisation, raft of core-to-core optimisations
             # 2014-12-22: 235002220 (Windows) not sure why
             # 2016-04-06: 249332816 (x86/Linux, 64-bit machine)
+            # 2017-03-24: 225911912 (x86/Linux, 64-bit machine)
 
            (wordsize(64), 436978192, 10)]),
             # prev:       349263216 (amd64/Linux)
@@ -512,13 +529,15 @@ test('T783',
 test('T5321Fun',
      [ only_ways(['normal']),  # no optimisation for this one
        compiler_stats_num_field('bytes allocated',
-           [(wordsize(32), 279922360, 10),
+           [(wordsize(32), 244387620, 10),
              # prev:       300000000
              # 2012-10-08: 344416344 x86/Linux
              #  (increase due to new codegen)
              # 2014-09-03: 299656164     (specialisation and inlining)
              # 2014-12-10: 206406188     #  Improvements in constraint solver
              # 2016-04-06: 279922360 x86/Linux
+             # 2017-03-24: 244387620 x86/Linux (64-bit machine)
+
             (wordsize(64), 488295304, 5)])
              # prev:       585521080
              # 2012-08-29: 713385808     #  (increase due to new codegen)
@@ -558,6 +577,7 @@ test('T5321FD',
             # 2014-07-31: 211699816 (Windows) (-11%)
             #  (due to better optCoercion, 5e7406d9, #9233)
             # 2016-04-06: 250757460 (x86/Linux)
+
            (wordsize(64), 477840432, 10)])
             # prev:       418306336
             # 29/08/2012: 492905640
@@ -586,12 +606,13 @@ test('T5642',
      [ only_ways(['normal']),
        normal,
        compiler_stats_num_field('bytes allocated',
-           [(wordsize(32), 462677300, 10),
+           [(wordsize(32), 413517560, 10),
                      # sample from x86/Linux
             # prev:        650000000
             # 2014-09-03:  753045568
             # 2014-12-10:  641085256 Improvements in constraints solver
             # 2016-04-06:  462677300
+            # 2017-03-24:  413517560 (x86/Linux, 64-bit machine)
 
             (wordsize(64),  838316496, 10)])
             # prev:        1300000000
@@ -616,16 +637,18 @@ test('T5642',
 test('T5837',
      [ only_ways(['normal']),
       compiler_stats_num_field('bytes allocated',
-          [(wordsize(32), 24199320, 10),
+          [(wordsize(32), 27028956, 10),
              # 40000000 (x86/Linux)
              # 2013-11-13:  45520936 (x86/Windows, 64bit machine)
              # 2014-09-03:  37096484 (Windows laptop, w/w for INLINABLE things
              # 2014-12-01: 135914136 (Windows laptop, regression see below)
              # 2014-12-08: 115905208  Constraint solver perf improvements (esp kick-out)
              # 2016-04-06: 24199320  (x86/Linux, 64-bit machine) TypeInType
+             # 2017-03-24: 27028956  (x86/Linux, 64-bit machine)
 
            (platform('x86_64-unknown-mingw32'), 59161648, 7),
-             # 2017-02-19                        59161648 (x64/Windows) - Unknown
+             # 2017-02-19                       59161648 (x64/Windows) - Unknown
+             # 2017-04-21                       54985248 (x64/Windows) - Unknown
 
            (wordsize(64), 52625920, 7)])
              # sample: 3926235424 (amd64/Linux, 15/2/2012)
@@ -677,7 +700,7 @@ test('T6048',
             # 2014-12-01: 49987836 (x86 Windows)
             # 2016-04-06: 55701280 (x86/Linux, 64-bit machine)
 
-           (wordsize(64), 115714216, 10)])
+           (wordsize(64), 90996312, 10)])
              # 2012-09-18  97247032 amd64/Linux
              # 2014-01-16 108578664 amd64/Linux (unknown, likely foldl-via-foldr)
              # 2014-01-18  95960720 amd64/Linux Call Arity improvements
@@ -690,16 +713,19 @@ test('T6048',
              # 2016-03-11 108225624 amd64/Linux unknown reason sadly; likely gradual creep.
              # 2016-11-25  94327392 amd64/Linux Back down again hooray; still not sure why
              # 2017-02-17 115715592 amd64/Linux Type-indexed Typeable
+             # 2017-04-28 90996312 Join point refactoring
       ],
       compile,[''])
 
 test('T9020',
      [ only_ways(['optasm']),
       compiler_stats_num_field('bytes allocated',
-          [(wordsize(32), 343005716, 10),
+          [(wordsize(32), 249904136, 10),
            # Original:    381360728
            # 2014-07-31:  343005716 (Windows) (general round of updates)
-           (wordsize(64), 500707080, 10)])
+           # 2017-03-24:  249904136 (x86/Linux, 64-bit machine)
+
+           (wordsize(64), 423163832, 10)])
            # prev:        795469104
            # 2014-07-17:  728263536 (general round of updates)
            # 2014-09-10:  785871680 post-AMP-cleanup
@@ -711,13 +737,15 @@ test('T9020',
            # 2017-02-03:  764866144 Join points
            # 2017-02-14:  500707080 Early inline patch; 35% decrease!
            #                        Program size collapses in first simplification
+           # 2017-03-31:  493596312 Fix memory leak in simplifier
+           # 2017-04-28:  423163832  Remove exponential behaviour in simplifier
       ],
       compile,[''])
 
 test('T9675',
      [ only_ways(['optasm']),
        compiler_stats_num_field('max_bytes_used', # Note [residency]
-          [(wordsize(64), 38776008, 15),
+          [(wordsize(64), 17675240, 15),
           # 2014-10-13    29596552
           # 2014-10-13    26570896   seq the DmdEnv in seqDmdType as well
           # 2014-10-13    18582472   different machines giving different results..
@@ -725,13 +753,15 @@ test('T9675',
           # 2015-06-21    28056344   switch to `+RTS -G1`, tighten bound to 15%
           # 2015-10-28    23776640   emit Typeable at definition site
           # 2015-12-11    30837312   TypeInType (see #11196)
-          # 2016-04-14    38776008   Final demand analyzer run
+          # 2016-03-14    38776008   Final demand analyzer run
+          # 2016-04-01    29871032   Fix leaks in demand analysis
+          # 2016-04-30    17675240   Fix leaks in tidy unfoldings
            (wordsize(32), 18043224, 15)
           # 2015-07-11    15341228   (x86/Linux, 64-bit machine) use +RTS -G1
           # 2016-04-06    18043224   (x86/Linux, 64-bit machine)
           ]),
        compiler_stats_num_field('peak_megabytes_allocated', # Note [residency]
-          [(wordsize(64), 121, 15),
+          [(wordsize(64), 63, 15),
           # 2014-10-13    66
           # 2014-10-13    58         seq the DmdEnv in seqDmdType as well
           # 2014-10-13    49         different machines giving different results...
@@ -742,6 +772,7 @@ test('T9675',
           # 2015-12-11    113        TypeInType (see #11196)
           # 2016-04-14    144        Final demand analyzer run
           # 2016-07-26    121        Unboxed sums?
+          # 2017-04-30    63         Fix leaks in tidy unfoldings
             (wordsize(32), 56, 15)
           # 2015-07-11    56         (x86/Linux, 64-bit machine) use +RTS -G1
           ]),
@@ -752,8 +783,10 @@ test('T9675',
           # 2017-02-17    731171072  Type-indexed Typeable
           # 2017-03-13    656137960  Put join ceiling underneath lambdas?
 
-          ,(wordsize(32), 279480696, 10)
+          ,(wordsize(32), 322901484, 10)
           # 2015-07-11    279480696  (x86/Linux, 64-bit machine) use +RTS -G1
+          # 2017-03-24    322901484  (x86/Linux, 64-bit machine)
+
           ]),
 
        # Use `+RTS -G1` for more stable residency measurements. Note [residency].
@@ -775,9 +808,10 @@ test('T9872a',
           # 2017-02-17    3298422648    Type-indexed Typeable
           # 2017-02-25    3005891848    Early inlining patch
 
-           (wordsize(32), 1740903516, 5)
+           (wordsize(32), 1493198244, 5)
           # was           1325592896
           # 2016-04-06    1740903516    x86/Linux
+          # 2017-03-24    1493198244    x86/Linux, 64-bit machine
           ]),
       ],
      compile_fail,
@@ -796,9 +830,10 @@ test('T9872b',
           # 2016-09-15:   4069522928    Fix #12422
           # 2017-02-14    3730686224    Early inlining: 5% improvement
 
-           (wordsize(32), 2422750696, 5)
+           (wordsize(32), 1894037608, 5)
           # was           1700000000
           # 2016-04-06    2422750696    x86/Linux
+          # 2017-03-24    1894037608    x86/Linux, 64-bit machine
           ]),
       ],
      compile_fail,
@@ -816,9 +851,10 @@ test('T9872c',
           # 2016-09-15:   3702580928    Fixing #12422
           # 2017-02-14    3404346032    Early inlining: 5% improvement
 
-           (wordsize(32), 2257242896, 5)
+           (wordsize(32), 1727582260, 5)
           # was           1500000000
           # 2016-04-06    2257242896
+          # 2017-03-24    1727582260    x86/Linux, 64-bit machine
           ]),
       ],
      compile_fail,
@@ -840,10 +876,11 @@ test('T9872d',
           # 2017-02-25    498855104   Early inlining
           # 2017-03-03    462817352   Share Typeable KindReps
 
-           (wordsize(32), 264566040, 5)
+           (wordsize(32), 232954000, 5)
           # some date     328810212
           # 2015-07-11    350369584
           # 2016-04-06    264566040   x86/Linux
+          # 2017-03-24    232954000   x86/Linux, 64-bit machine
           ]),
       ],
      compile,
@@ -864,9 +901,10 @@ test('T9961',
           # 2016-12-19    571246936   x64_64/Linux   Join points (#12988)
           # 2017-02-14    498326216   Early inline patch; 13% improvement
 
-           (wordsize(32), 275264188, 5)
+           (wordsize(32), 255409052, 5)
           # was           375647160
           # 2016-04-06    275264188   x86/Linux
+          # 2017-03-24    255409052   x86/Linux, 64-bit machine
           ]),
       ],
      compile,
@@ -875,7 +913,7 @@ test('T9961',
 test('T9233',
     [ only_ways(['normal']),
       compiler_stats_num_field('bytes allocated',
-        [(wordsize(64),  974530192, 5),
+        [(wordsize(64),  924299320, 5),
          # 2015-08-04    999826288     initial value
          # 2016-04-14   1066246248     Final demand analyzer run
          # 2016-06-18    984268712     shuffling around of Data.Functor.Identity
@@ -886,9 +924,11 @@ test('T9233',
          # 2017-02-01    894486272     Join points
          # 2017-02-07    884436192     Another improvement to SetLevels
          # 2017-02-17    974530192     Type-indexed Typeable
+         # 2017-03-21    924299320     It's unclear
 
-         (wordsize(32),  515672240, 5)   # Put in your value here if you hit this
+         (wordsize(32),  460112888, 5)
          # 2016-04-06    515672240     (x86/Linux) initial value
+         # 2017-03-24    460112888     x86/Linux, 64-bit machine
         ]),
       extra_clean(['T9233a.hi', 'T9233a.o'])
     ],
@@ -898,7 +938,7 @@ test('T9233',
 test('T10370',
      [ only_ways(['optasm']),
        compiler_stats_num_field('max_bytes_used', # Note [residency]
-          [(wordsize(64), 41291976, 15),
+          [(wordsize(64), 31524048, 15),
           # 2015-10-22    19548720
           # 2016-02-24    22823976   Changing Levity to RuntimeRep; not sure why this regresses though, even after some analysis
           # 2016-04-14    28256896   final demand analyzer run
@@ -914,20 +954,24 @@ test('T10370',
           # 2017-02-17    51126304   Type-indexed Typeable
           # 2017-02-27    43455848   Likely drift from recent simplifier improvements
           # 2017-02-25    41291976   Early inline patch
+          # 2017-04-30    31524048   Fix leaks in tidy unfoldings
 
-           (wordsize(32), 11371496, 15),
+           (wordsize(32), 19276304, 15),
           # 2015-10-22    11371496
+          # 2017-03-24    19276304 (x86/Linux, 64-bit machine)
           ]),
        compiler_stats_num_field('peak_megabytes_allocated', # Note [residency]
-          [(wordsize(64), 154, 15),
+          [(wordsize(64), 117, 15),
           # 2015-10-22     76
           # 2016-04-14    101 final demand analyzer run
           # 2016-08-08    121 see above
           # 2017-01-18    146 Allow top-level string literals in Core
           # 2017-02-17    187 Type-indexed Typeable
           # 2017-02-25    154 Early inline patch
-           (wordsize(32),  39, 15),
+          # 2017-04-30    117 Fix leaks in tidy unfoldings
+           (wordsize(32),  69, 15),
           # 2015-10-22     39
+          # 2017-03-24     69
           ]),
        # Use `+RTS -G1` for more stable residency measurements. Note [residency].
        extra_hc_opts('+RTS -G1 -RTS')
@@ -968,11 +1012,13 @@ test('T12227',
 test('T12425',
      [ only_ways(['optasm']),
        compiler_stats_num_field('bytes allocated',
-          [(wordsize(64), 142256192, 5),
-          # initial:    125831400
-          # 2017-01-18: 133380960  Allow top-level string literals in Core
-          # 2017-02-17: 153611448  Type-indexed Typeable
-          # 2017-03-03: 142256192  Share Typeable KindReps
+          [(wordsize(64), 127500136, 5),
+          # initial:      125831400
+          # 2017-01-18:   133380960  Allow top-level string literals in Core
+          # 2017-02-17:   153611448  Type-indexed Typeable
+          # 2017-03-03:   142256192  Share Typeable KindReps
+          # 2017-03-21:   134334800  Unclear
+          # 2017-04-28:   127500136  Remove exponential behaviour in simplifier
           ]),
      ],
      compile,
@@ -981,9 +1027,10 @@ test('T12425',
 test('T12234',
      [ only_ways(['optasm']),
        compiler_stats_num_field('bytes allocated',
-          [(platform('x86_64-unknown-mingw32'), 89180624, 5),
+          [(platform('x86_64-unknown-mingw32'), 79889200, 5),
           # initial:      83032768
-          # 2017-02-19                          89180624 (x64/Windows) - Unknown
+          # 2017-02-19    89180624 (x64/Windows) - Unknown
+          # 2017-02-25    79889200 (x64/Windows) - Early inline patch
            (wordsize(64), 80245640, 5),
           # initial:      72958288
           # 2016-01-17:   76848856  (x86-64, Linux. drift?)
@@ -999,12 +1046,13 @@ test('T12234',
 test('T13035',
      [ only_ways(['normal']),
        compiler_stats_num_field('bytes allocated',
-          [(wordsize(64), 98390488, 5),
+          [(wordsize(64), 93249744, 5),
           # 2017-01-05   90595208  initial
           # 2017-01-19   95269000  Allow top-level string literals in Core
           # 2017-02-05   88806416  Probably OccAnal fixes
           # 2017-02-17   103890200 Type-indexed Typeable
           # 2017-02-25   98390488  Early inline patch
+          # 2017-03-21   93249744  It's unclear
           ]),
      ],
      compile,
@@ -1013,11 +1061,13 @@ test('T13035',
 test('T13056',
      [ only_ways(['optasm']),
        compiler_stats_num_field('bytes allocated',
-         [(wordsize(64), 440548592, 5),
+         [(wordsize(64), 440548592, 10),
          # 2017-01-06    520166912 initial
          # 2017-01-31    546800240 Join points (#12988)
          # 2017-02-07    524611224 new SetLevels
          # 2017-02-14    440548592 Early inline patch: 16% improvement
+         # 2017-04-21    417860736 (darwin)
+         # 2017-04-22    Increase to +/- 10% (Darwin and Linux differ significantly)
          ]),
      ],
      compile,
@@ -1036,3 +1086,25 @@ test('T12707',
      ],
      compile,
      [''])
+
+test('T13379',
+     [ compiler_stats_num_field('bytes allocated',
+          [(wordsize(64), 411597856, 10),
+          # initial:    411597856
+          # widen window to 10%, Darwin had 449080520, a 9.1% difference
+          ]),
+     ],
+     compile,
+     [''])
+
+test('MultiLayerModules',
+     [ compiler_stats_num_field('bytes allocated',
+          [(wordsize(64), 6956533312, 10),
+          # initial:    12139116496
+          # 2017-05-12: 6956533312   Revert "Use a deterministic map for imp_dep_mods"
+          ]),
+       pre_cmd('./genMultiLayerModules'),
+       extra_files(['genMultiLayerModules']),
+     ],
+     multimod_compile,
+     ['MultiLayerModules', '-v0'])

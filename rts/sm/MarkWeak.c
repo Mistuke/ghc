@@ -155,6 +155,7 @@ traverseWeakPtrList(void)
 
       // otherwise, fall through...
   }
+  /* fallthrough */
 
   case WeakPtrs:
   {
@@ -359,7 +360,7 @@ static void tidyThreadList (generation *gen)
     }
 }
 
-#ifdef DEBUG
+#if defined(DEBUG)
 static void checkWeakPtrSanity(StgWeak *hd, StgWeak *tl)
 {
     StgWeak *w, *prev;
@@ -411,7 +412,7 @@ markWeakPtrList ( void )
         for (w = gen->weak_ptr_list; w != NULL; w = w->link) {
             // w might be WEAK, EVACUATED, or DEAD_WEAK (actually CON_STATIC) here
 
-#ifdef DEBUG
+#if defined(DEBUG)
             {   // careful to do this assertion only reading the info ptr
                 // once, because during parallel GC it might change under our feet.
                 const StgInfoTable *info;

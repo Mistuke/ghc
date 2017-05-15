@@ -6,7 +6,7 @@
 Buffers for scanning string input stored in external arrays.
 -}
 
-{-# LANGUAGE CPP, MagicHash, UnboxedTuples #-}
+{-# LANGUAGE BangPatterns, CPP, MagicHash, UnboxedTuples #-}
 {-# OPTIONS_GHC -O #-}
 -- We always optimise this, otherwise performance of a non-optimised
 -- compiler is severely affected
@@ -32,10 +32,12 @@ module StringBuffer
         stepOn,
         offsetBytes,
         byteDiff,
+        atLine,
 
         -- * Conversion
         lexemeToString,
         lexemeToFastString,
+        decodePrevNChars,
 
          -- * Parsing integers
         parseUnsignedInteger,
@@ -239,6 +241,43 @@ byteDiff s1 s2 = cur s2 - cur s1
 atEnd :: StringBuffer -> Bool
 atEnd (StringBuffer _ l c) = l == c
 
+-- | Computes a 'StringBuffer' which points to the first character of the
+-- wanted line. Lines begin at 1.
+atLine :: Int -> StringBuffer -> Maybe StringBuffer
+atLine line sb@(StringBuffer buf len _) =
+  inlinePerformIO $
+    withForeignPtr buf $ \p -> do
+      p' <- skipToLine line len p
+      if p' == nullPtr
+        then return Nothing
+        else
+          let
+            delta = p' `minusPtr` p
+          in return $ Just (sb { cur = delta
+                               , len = len - delta
+                               })
+
+skipToLine :: Int -> Int -> Ptr Word8 -> IO (Ptr Word8)
+skipToLine !line !len !op0 = go 1 op0
+  where
+    !opend = op0 `plusPtr` len
+
+    go !i_line !op
+      | op >= opend    = pure nullPtr
+      | i_line == line = pure op
+      | otherwise      = do
+          w <- peek op :: IO Word8
+          case w of
+            10 -> go (i_line + 1) (plusPtr op 1)
+            13 -> do
+              -- this is safe because a 'StringBuffer' is
+              -- guaranteed to have 3 bytes sentinel values.
+              w' <- peek (plusPtr op 1) :: IO Word8
+              case w' of
+                10 -> go (i_line + 1) (plusPtr op 2)
+                _  -> go (i_line + 1) (plusPtr op 1)
+            _  -> go i_line (plusPtr op 1)
+
 -- -----------------------------------------------------------------------------
 -- Conversion
 
@@ -250,9 +289,7 @@ lexemeToString :: StringBuffer
                -> String
 lexemeToString _ 0 = ""
 lexemeToString (StringBuffer buf _ cur) bytes =
-  inlinePerformIO $
-    withForeignPtr buf $ \ptr ->
-      utf8DecodeString (ptr `plusPtr` cur) bytes
+  utf8DecodeStringLazy buf cur bytes
 
 lexemeToFastString :: StringBuffer
                    -> Int               -- ^ @n@, the number of bytes
@@ -262,6 +299,20 @@ lexemeToFastString (StringBuffer buf _ cur) len =
    inlinePerformIO $
      withForeignPtr buf $ \ptr ->
        return $! mkFastStringBytes (ptr `plusPtr` cur) len
+
+-- | Return the previous @n@ characters (or fewer if we are less than @n@
+-- characters into the buffer.
+decodePrevNChars :: Int -> StringBuffer -> String
+decodePrevNChars n (StringBuffer buf _ cur) =
+    inlinePerformIO $ withForeignPtr buf $ \p0 ->
+      go p0 n "" (p0 `plusPtr` (cur - 1))
+  where
+    go :: Ptr Word8 -> Int -> String -> Ptr Word8 -> IO String
+    go buf0 n acc p | n == 0 || buf0 >= p = return acc
+    go buf0 n acc p = do
+        p' <- utf8PrevChar p
+        let (c,_) = utf8DecodeChar p'
+        go buf0 (n - 1) (c:acc) p'
 
 -- -----------------------------------------------------------------------------
 -- Parsing integer strings in various bases

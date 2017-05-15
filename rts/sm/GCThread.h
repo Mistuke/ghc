@@ -11,8 +11,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef SM_GCTHREAD_H
-#define SM_GCTHREAD_H
+#pragma once
 
 #include "WSDeque.h"
 #include "GetTime.h" // for Ticks
@@ -120,7 +119,7 @@ typedef struct gen_workspace_ {
 typedef struct gc_thread_ {
     Capability *cap;
 
-#ifdef THREADED_RTS
+#if defined(THREADED_RTS)
     OSThreadId id;                 // The OS thread that this struct belongs to
     SpinLock   gc_spin;
     SpinLock   mut_spin;
@@ -208,5 +207,3 @@ extern ThreadLocalKey gctKey;
 #endif
 
 #include "EndPrivate.h"
-
-#endif // SM_GCTHREAD_H

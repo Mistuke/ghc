@@ -145,19 +145,20 @@ test('T7796', [], run_command, ['$MAKE -s --no-print-directory T7796'])
 test('T5550', omit_ways(prof_ways), compile, [''])
 test('T7865', normal, run_command, ['$MAKE -s --no-print-directory T7865'])
 test('T7785', only_ways(['optasm']), compile, ['-ddump-rules'])
-test('T7702', 
+test('T7702',
      [extra_files(['T7702plugin']),
       pre_cmd('$MAKE -s --no-print-directory -C T7702plugin package.T7702 TOP={top}'),
-      clean_cmd('$MAKE -s --no-print-directory -C T7702plugin clean.T7702'), 
-      # we say 18mb peak allocated +/- 70% because other compiler flags have 
-      # a large effect on allocation which is hard to separate from the 
-      # allocation done by the plugin... but a regression allocates > 90mb 
+      clean_cmd('$MAKE -s --no-print-directory -C T7702plugin clean.T7702'),
+      # we say 18mb peak allocated +/- 70% because other compiler flags have
+      # a large effect on allocation which is hard to separate from the
+      # allocation done by the plugin... but a regression allocates > 90mb
       compiler_stats_num_field('peak_megabytes_allocated',
-          [(wordsize(32), 18, 70), (wordsize(64), 18, 70)]) 
-     ], 
-     compile, 
+          [(wordsize(32), 18, 70), (wordsize(64), 18, 70)])
+     ],
+     compile,
      ['-v0 -package-db T7702plugin/pkg.T7702/local.package.conf -fplugin T7702Plugin -package T7702plugin ' + config.plugin_way_flags])
 
+test('T7944', normal, compile, ['-O2'])
 test('T7995',
      # RULE doesn't seem to fire unless optimizations are turned on.
      # This seems reasonable, so I've required it for the test. -- EZY 20130720
@@ -235,7 +236,7 @@ test('T13025',
      normal,
      run_command,
      ['$MAKE -s --no-print-directory T13025'])
-test('T13143', normal, compile, ['-O -ddump-simpl -dsuppress-uniques'])
+test('T13143', only_ways(['optasm']), compile, ['-O -ddump-simpl -dsuppress-uniques'])
 test('T13156', normal, run_command, ['$MAKE -s --no-print-directory T13156'])
 test('T11444', normal, compile, [''])
 test('str-rules',
@@ -252,3 +253,18 @@ test('T13338', only_ways(['optasm']), compile, ['-dcore-lint'])
 test('T13367', normal, run_command, ['$MAKE -s --no-print-directory T13367'])
 test('T13417', normal, compile, ['-O'])
 test('T13413', normal, compile, [''])
+test('T13429', normal, compile, [''])
+test('T13410', normal, compile, ['-O2'])
+test('T13468',
+     normal,
+     run_command,
+     ['$MAKE -s --no-print-directory T13468'])
+test('T13543', normal, compile, ['-ddump-str-signatures'])
+test('T11272',
+     normal,
+     run_command,
+     ['$MAKE -s --no-print-directory T11272'])
+test('T12600',
+     normal,
+     run_command,
+     ['$MAKE -s --no-print-directory T12600'])

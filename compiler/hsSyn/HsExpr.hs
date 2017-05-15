@@ -689,6 +689,9 @@ data HsExpr id
 
   ---------------------------------------
   -- Finally, HsWrap appears only in typechecker output
+  -- The contained Expr is *NOT* itself an HsWrap.
+  -- See Note [Detecting forced eta expansion] in DsExpr. This invariant
+  -- is maintained by HsUtils.mkHsWrap.
 
   |  HsWrap     HsWrapper    -- TRANSLATION
                 (HsExpr id)
@@ -1612,7 +1615,7 @@ type GuardLStmt id = LStmt id (LHsExpr id)
 -- | Guard Statement
 type GuardStmt  id = Stmt  id (LHsExpr id)
 
--- | Ghci Located Statemnt
+-- | Ghci Located Statement
 type GhciLStmt  id = LStmt id (LHsExpr id)
 
 -- | Ghci Statement
@@ -2498,13 +2501,13 @@ instance (Outputable id, Outputable (NameOrRdrName id))
 -- Used to generate the string for a *runtime* error message
 matchContextErrString :: Outputable id
                       => HsMatchContext id -> SDoc
-matchContextErrString (FunRhs (L _ fun) _) = text "function" <+> ppr fun
-matchContextErrString CaseAlt              = text "case"
-matchContextErrString IfAlt                = text "multi-way if"
-matchContextErrString PatBindRhs           = text "pattern binding"
-matchContextErrString RecUpd               = text "record update"
-matchContextErrString LambdaExpr           = text "lambda"
-matchContextErrString ProcExpr             = text "proc"
+matchContextErrString (FunRhs (L _ fun) _)       = text "function" <+> ppr fun
+matchContextErrString CaseAlt                    = text "case"
+matchContextErrString IfAlt                      = text "multi-way if"
+matchContextErrString PatBindRhs                 = text "pattern binding"
+matchContextErrString RecUpd                     = text "record update"
+matchContextErrString LambdaExpr                 = text "lambda"
+matchContextErrString ProcExpr                   = text "proc"
 matchContextErrString ThPatSplice                = panic "matchContextErrString"  -- Not used at runtime
 matchContextErrString ThPatQuote                 = panic "matchContextErrString"  -- Not used at runtime
 matchContextErrString PatSyn                     = panic "matchContextErrString"  -- Not used at runtime

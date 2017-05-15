@@ -50,85 +50,23 @@ Note [Canonicalization]
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 Canonicalization converts a simple constraint to a canonical form. It is
-unary (i.e. treats individual constraints one at a time), does not do
-any zonking, but lives in TcS monad because it needs to create fresh
-variables (for flattening) and consult the inerts (for efficiency).
+unary (i.e. treats individual constraints one at a time).
 
-The execution plan for canonicalization is the following:
+Constraints originating from user-written code come into being as
+CNonCanonicals (except for CHoleCans, arising from holes). We know nothing
+about these constraints. So, first:
 
-  1) Decomposition of equalities happens as necessary until we reach a
-     variable or type family in one side. There is no decomposition step
-     for other forms of constraints.
+     Classify CNonCanoncal constraints, depending on whether they
+     are equalities, class predicates, or other.
 
-  2) If, when we decompose, we discover a variable on the head then we
-     look at inert_eqs from the current inert for a substitution for this
-     variable and contine decomposing. Hence we lazily apply the inert
-     substitution if it is needed.
+Then proceed depending on the shape of the constraint. Generally speaking,
+each constraint gets flattened and then decomposed into one of several forms
+(see type Ct in TcRnTypes).
 
-  3) If no more decomposition is possible, we deeply apply the substitution
-     from the inert_eqs and continue with flattening.
+When an already-canonicalized constraint gets kicked out of the inert set,
+it must be recanonicalized. But we know a bit about its shape from the
+last time through, so we can skip the classification step.
 
-  4) During flattening, we examine whether we have already flattened some
-     function application by looking at all the CTyFunEqs with the same
-     function in the inert set. The reason for deeply applying the inert
-     substitution at step (3) is to maximise our chances of matching an
-     already flattened family application in the inert.
-
-The net result is that a constraint coming out of the canonicalization
-phase cannot be rewritten any further from the inerts (but maybe /it/ can
-rewrite an inert or still interact with an inert in a further phase in the
-simplifier.
-
-Note [Caching for canonicals]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Our plan with pre-canonicalization is to be able to solve a constraint
-really fast from existing bindings in TcEvBinds. So one may think that
-the condition (isCNonCanonical) is not necessary.  However consider
-the following setup:
-
-InertSet = { [W] d1 : Num t }
-WorkList = { [W] d2 : Num t, [W] c : t ~ Int}
-
-Now, we prioritize equalities, but in our concrete example
-(should_run/mc17.hs) the first (d2) constraint is dealt with first,
-because (t ~ Int) is an equality that only later appears in the
-worklist since it is pulled out from a nested implication
-constraint. So, let's examine what happens:
-
-   - We encounter work item (d2 : Num t)
-
-   - Nothing is yet in EvBinds, so we reach the interaction with inerts
-     and set:
-              d2 := d1
-    and we discard d2 from the worklist. The inert set remains unaffected.
-
-   - Now the equation ([W] c : t ~ Int) is encountered and kicks-out
-     (d1 : Num t) from the inerts.  Then that equation gets
-     spontaneously solved, perhaps. We end up with:
-        InertSet : { [G] c : t ~ Int }
-        WorkList : { [W] d1 : Num t}
-
-   - Now we examine (d1), we observe that there is a binding for (Num
-     t) in the evidence binds and we set:
-             d1 := d2
-     and end up in a loop!
-
-Now, the constraints that get kicked out from the inert set are always
-Canonical, so by restricting the use of the pre-canonicalizer to
-NonCanonical constraints we eliminate this danger. Moreover, for
-canonical constraints we already have good caching mechanisms
-(effectively the interaction solver) and we are interested in reducing
-things like superclasses of the same non-canonical constraint being
-generated hence I don't expect us to lose a lot by introducing the
-(isCNonCanonical) restriction.
-
-A similar situation can arise in TcSimplify, at the end of the
-solve_wanteds function, where constraints from the inert set are
-returned as new work -- our substCt ensures however that if they are
-not rewritten by subst, they remain canonical and hence we will not
-attempt to solve them from the EvBinds. If on the other hand they did
-get rewritten and are now non-canonical they will still not match the
-EvBinds, so we are again good.
 -}
 
 -- Top-level canonicalization
@@ -223,18 +161,19 @@ canClass ev cls tys pend_sc
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 We need to add superclass constraints for two reasons:
 
-* For givens, they give us a route to to proof.  E.g.
+* For givens [G], they give us a route to to proof.  E.g.
     f :: Ord a => a -> Bool
     f x = x == x
   We get a Wanted (Eq a), which can only be solved from the superclass
   of the Given (Ord a).
 
-* For wanteds, they may give useful functional dependencies.  E.g.
+* For wanteds [W], and deriveds [WD], [D], they may give useful
+  functional dependencies.  E.g.
      class C a b | a -> b where ...
      class C a b => D a b where ...
-  Now a Wanted constraint (D Int beta) has (C Int beta) as a superclass
+  Now a [W] constraint (D Int beta) has (C Int beta) as a superclass
   and that might tell us about beta, via C's fundeps.  We can get this
-  by generateing a Derived (C Int beta) constraint.  It's derived because
+  by generating a [D] (C Int beta) constraint.  It's derived because
   we don't actually have to cough up any evidence for it; it's only there
   to generate fundep equalities.
 
@@ -289,11 +228,19 @@ So here's the plan:
 4. Go round to (2) again.  This loop (2,3,4) is implemented
    in TcSimplify.simpl_loop.
 
-We try to terminate the loop by flagging which class constraints
-(given or wanted) are potentially un-expanded.  This is what the
-cc_pend_sc flag is for in CDictCan.  So in Step 3 we only expand
-superclasses for constraints with cc_pend_sc set to true (i.e.
+The cc_pend_sc flag in a CDictCan records whether the superclasses of
+this constraint have been expanded.  Specifically, in Step 3 we only
+expand superclasses for constraints with cc_pend_sc set to true (i.e.
 isPendingScDict holds).
+
+Why do we do this?  Two reasons:
+
+* To avoid repeated work, by repeatedly expanding the superclasses of
+  same constraint,
+
+* To terminate the above loop, at least in the -XNoRecursiveSuperClasses
+  case.  If there are recursive superclasses we could, in principle,
+  expand forever, always encountering new constraints.
 
 When we take a CNonCanonical or CIrredCan, but end up classifying it
 as a CDictCan, we set the cc_pend_sc flag to False.
@@ -595,8 +542,8 @@ can_eq_nc'
 
 -- Expand synonyms first; see Note [Type synonyms and canonicalization]
 can_eq_nc' flat _rdr_env _envs ev eq_rel ty1 ps_ty1 ty2 ps_ty2
-  | Just ty1' <- coreView ty1 = can_eq_nc flat ev eq_rel ty1' ps_ty1 ty2  ps_ty2
-  | Just ty2' <- coreView ty2 = can_eq_nc flat ev eq_rel ty1  ps_ty1 ty2' ps_ty2
+  | Just ty1' <- tcView ty1 = can_eq_nc flat ev eq_rel ty1' ps_ty1 ty2  ps_ty2
+  | Just ty2' <- tcView ty2 = can_eq_nc flat ev eq_rel ty1  ps_ty1 ty2' ps_ty2
 
 -- need to check for reflexivity in the ReprEq case.
 -- See Note [Eager reflexivity check]
@@ -1439,11 +1386,12 @@ canEqTyVar2 dflags ev eq_rel swapped tv1 xi2
     CTyEqCan { cc_ev = new_new_ev, cc_tyvar = tv1
              , cc_rhs = xi2'', cc_eq_rel = eq_rel }
 
-  | otherwise  -- Occurs check error (or a forall)
-  = do { traceTcS "canEqTyVar2 occurs check error" (ppr tv1 $$ ppr xi2)
+  | otherwise  -- For some reason (occurs check, or forall) we can't unify
+               -- We must not use it for further rewriting!
+  = do { traceTcS "canEqTyVar2 can't unify" (ppr tv1 $$ ppr xi2)
        ; rewriteEqEvidence ev swapped xi1 xi2 co1 co2
          `andWhenContinue` \ new_ev ->
-         if eq_rel == NomEq || isTyVarUnderDatatype tv1 xi2
+         if isInsolubleOccursCheck eq_rel tv1 xi2
          then do { emitInsoluble (mkNonCanonical new_ev)
              -- If we have a ~ [a], it is not canonical, and in particular
              -- we don't want to rewrite existing inerts with it, otherwise
@@ -1456,7 +1404,7 @@ canEqTyVar2 dflags ev eq_rel swapped tv1 xi2
              -- We might learn that b is the newtype Id.
              -- But, the occurs-check certainly prevents the equality from being
              -- canonical, and we might loop if we were to use it in rewriting.
-         else do { traceTcS "Occurs-check in representational equality"
+         else do { traceTcS "Possibly-soluble occurs check"
                            (ppr xi1 $$ ppr xi2)
                  ; continueWith (CIrredEvCan { cc_ev = new_ev }) } }
   where
@@ -1738,7 +1686,7 @@ may reflect the result of unification alpha := ty, so new_pred might
 not _look_ the same as old_pred, and it's vital to proceed from now on
 using new_pred.
 
-The flattener preserves type synonyms, so they should appear in new_pred
+qThe flattener preserves type synonyms, so they should appear in new_pred
 as well as in old_pred; that is important for good error messages.
  -}
 
@@ -1865,8 +1813,8 @@ unifyWanted loc Phantom ty1 ty2
 unifyWanted loc role orig_ty1 orig_ty2
   = go orig_ty1 orig_ty2
   where
-    go ty1 ty2 | Just ty1' <- coreView ty1 = go ty1' ty2
-    go ty1 ty2 | Just ty2' <- coreView ty2 = go ty1 ty2'
+    go ty1 ty2 | Just ty1' <- tcView ty1 = go ty1' ty2
+    go ty1 ty2 | Just ty2' <- tcView ty2 = go ty1 ty2'
 
     go (FunTy s1 t1) (FunTy s2 t2)
       = do { co_s <- unifyWanted loc role s1 s2
@@ -1916,8 +1864,8 @@ unify_derived _   Phantom _        _        = return ()
 unify_derived loc role    orig_ty1 orig_ty2
   = go orig_ty1 orig_ty2
   where
-    go ty1 ty2 | Just ty1' <- coreView ty1 = go ty1' ty2
-    go ty1 ty2 | Just ty2' <- coreView ty2 = go ty1 ty2'
+    go ty1 ty2 | Just ty1' <- tcView ty1 = go ty1' ty2
+    go ty1 ty2 | Just ty2' <- tcView ty2 = go ty1 ty2'
 
     go (FunTy s1 t1) (FunTy s2 t2)
       = do { unify_derived loc role s1 s2

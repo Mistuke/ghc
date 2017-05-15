@@ -45,8 +45,11 @@ import Foreign.Marshal.Utils
 import GHC.IO.FD
 import GHC.IO.Handle.FD
 import GHC.Ptr
-import GHC.Real
 import GHC.Windows
+
+#else
+
+import GHC.IO (throwIO)
 
 #endif
 
@@ -123,15 +126,14 @@ lockImpl h ctx mode block = do
   FD{fdFD = fd} <- handleToFd h
   wh <- throwErrnoIf (== iNVALID_HANDLE_VALUE) ctx $ c_get_osfhandle fd
   allocaBytes sizeof_OVERLAPPED $ \ovrlpd -> do
-    fillBytes ovrlpd (fromIntegral sizeof_OVERLAPPED) 0
+    fillBytes ovrlpd 0 sizeof_OVERLAPPED
     let flags = cmode .|. (if block then 0 else #{const LOCKFILE_FAIL_IMMEDIATELY})
     -- We want to lock the whole file without looking up its size to be
     -- consistent with what flock does. According to documentation of LockFileEx
     -- "locking a region that goes beyond the current end-of-file position is
-    -- not an error", however some versions of Windows seem to have issues with
-    -- large regions and set ERROR_INVALID_LOCK_RANGE in such case for
-    -- mysterious reasons. Work around that by setting only low 32 bits.
-    fix $ \retry -> c_LockFileEx wh flags 0 0xffffffff 0x0 ovrlpd >>= \case
+    -- not an error", hence we pass maximum value as the number of bytes to
+    -- lock.
+    fix $ \retry -> c_LockFileEx wh flags 0 0xffffffff 0xffffffff ovrlpd >>= \case
       True  -> return True
       False -> getLastError >>= \err -> if
         | not block && err == #{const ERROR_LOCK_VIOLATION} -> return False

@@ -1,6 +1,3 @@
-#include <string.h>
-#include <stddef.h>
-
 #include <Rts.h>
 #include "PathUtils.h"
 
@@ -13,13 +10,17 @@
 /* Platform specific headers */
 #if defined(OBJFORMAT_PEi386)
 #  include "linker/PEi386.h"
-#elif defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+#elif defined(OBJFORMAT_MACHO)
 #  include "linker/MachO.h"
 #  include <regex.h>
 #  include <mach/machine.h>
 #  include <mach-o/fat.h>
+#elif defined(OBJFORMAT_ELF)
+#include "linker/Elf.h"
 #endif
 
+#include <string.h>
+#include <stddef.h>
 #include <ctype.h>
 
 #define FAIL(...) do {\
@@ -538,6 +539,12 @@ static HsInt loadArchive_ (pathchar *path)
 
             oc = mkOc(path, image, memberSize, false, archiveMemberName
                      , misalignment);
+#if defined(OBJFORMAT_MACHO)
+            ocInit_MachO( oc );
+#endif
+#if defined(OBJFORMAT_ELF)
+            ocInit_ELF( oc );
+#endif
 
             stgFree(archiveMemberName);
 

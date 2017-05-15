@@ -200,7 +200,7 @@ primop   IntMulMayOfloOp  "mulIntMayOflo#"
    {Return non-zero if there is any possibility that the upper word of a
     signed integer multiply might contain useful information.  Return
     zero only if you are completely sure that no overflow can occur.
-    On a 32-bit platform, the recommmended implementation is to do a
+    On a 32-bit platform, the recommended implementation is to do a
     32 x 32 -> 64 signed multiply, and subtract result[63:32] from
     (result[31] >>signed 31).  If this is zero, meaning that the
     upper word is merely a sign extension of the lower one, no
@@ -1910,20 +1910,34 @@ primop  NewMutVarOp "newMutVar#" GenPrimOp
    out_of_line = True
    has_side_effects = True
 
+-- Note [Why MutVar# ops can't fail]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+--
+-- We don't label readMutVar# or writeMutVar# as can_fail.
+-- This may seem a bit peculiar, because they surely *could*
+-- fail spectacularly if passed a pointer to unallocated memory.
+-- But MutVar#s are always correct by construction; we never
+-- test if a pointer is valid before using it with these operations.
+-- So we never have to worry about floating the pointer reference
+-- outside a validity test. At the moment, has_side_effects blocks
+-- up the relevant optimizations anyway, but we hope to draw finer
+-- distinctions soon, which should improve matters for readMutVar#
+-- at least.
+
 primop  ReadMutVarOp "readMutVar#" GenPrimOp
    MutVar# s a -> State# s -> (# State# s, a #)
    {Read contents of {\tt MutVar\#}. Result is not yet evaluated.}
    with
+   -- See Note [Why MutVar# ops can't fail]
    has_side_effects = True
-   can_fail         = True
 
 primop  WriteMutVarOp "writeMutVar#"  GenPrimOp
    MutVar# s a -> a -> State# s -> State# s
    {Write contents of {\tt MutVar\#}.}
    with
+   -- See Note [Why MutVar# ops can't fail]
    has_side_effects = True
    code_size = { primOpCodeSizeForeignCall } -- for the write barrier
-   can_fail         = True
 
 primop  SameMutVarOp "sameMutVar#" GenPrimOp
    MutVar# s a -> MutVar# s a -> Int#
@@ -2005,9 +2019,11 @@ primop  RaiseOp "raise#" GenPrimOp
 -- must be *precise* - we don't want the strictness analyser turning
 -- one kind of bottom into another, as it is allowed to do in pure code.
 --
--- We currently produce topRes, which is much too conservative (interfering
--- with dead code elimination, unfortunately), but nothing else we currently
--- have on tap is actually correct.
+-- But we *do* want to know that it returns bottom after
+-- being applied to two arguments, so that this function is strict in y
+--     f x y | x>0       = raiseIO blah
+--           | y>0       = return 1
+--           | otherwise = return 2
 --
 -- TODO Check that the above notes on @f@ are valid. The function successfully
 -- produces an IO exception when compiled without optimization. If we analyze
@@ -2019,7 +2035,7 @@ primop  RaiseOp "raise#" GenPrimOp
 primop  RaiseIOOp "raiseIO#" GenPrimOp
    a -> State# RealWorld -> (# State# RealWorld, b #)
    with
-   strictness  = { \ _arity -> mkClosedStrictSig [topDmd, topDmd] topRes }
+   strictness  = { \ _arity -> mkClosedStrictSig [topDmd, topDmd] exnRes }
    out_of_line = True
    has_side_effects = True
 
@@ -2256,7 +2272,7 @@ primop  WaitWriteOp "waitWrite#" GenPrimOp
    has_side_effects = True
    out_of_line      = True
 
-#ifdef mingw32_TARGET_OS
+#if defined(mingw32_TARGET_OS)
 primop  AsyncReadOp "asyncRead#" GenPrimOp
    Int# -> Int# -> Int# -> Addr# -> State# RealWorld-> (# State# RealWorld, Int#, Int# #)
    {Asynchronously read bytes from specified file descriptor.}
@@ -2344,7 +2360,7 @@ primop  IsCurrentThreadBoundOp "isCurrentThreadBound#" GenPrimOp
    has_side_effects = True
 
 primop  NoDuplicateOp "noDuplicate#" GenPrimOp
-   State# RealWorld -> State# RealWorld
+   State# s -> State# s
    with
    out_of_line = True
    has_side_effects = True
@@ -2366,6 +2382,11 @@ primtype Weak# b
 primop  MkWeakOp "mkWeak#" GenPrimOp
    o -> b -> (State# RealWorld -> (# State# RealWorld, c #))
      -> State# RealWorld -> (# State# RealWorld, Weak# b #)
+   { {\tt mkWeak# k v finalizer s} creates a weak reference to value {\tt k},
+     with an associated reference to some value {\tt v}. If {\tt k} is still
+     alive then {\tt v} can be retrieved using {\tt deRefWeak#}. Note that
+     the type of {\tt k} must be represented by a pointer (i.e. of kind {\tt
+     TYPE 'LiftedRep} or {\tt TYPE 'UnliftedRep}). }
    with
    has_side_effects = True
    out_of_line      = True
@@ -2699,7 +2720,7 @@ primop   AddrToAnyOp "addrToAny#" GenPrimOp
 
 primop   AnyToAddrOp "anyToAddr#" GenPrimOp
    a -> State# RealWorld -> (# State# RealWorld, Addr# #)
-   { Retrive the address of any Haskell value. This is
+   { Retrieve the address of any Haskell value. This is
      essentially an {\texttt unsafeCoerce\#}, but if implemented as such
      the core lint pass complains and fails to compile.
      As a primop, it is opaque to core/stg, and only appears
@@ -2814,8 +2835,9 @@ pseudoop   "unsafeCoerce#"
 
          * Casting {\tt Any} back to the real type
 
-         * Casting an unboxed type to another unboxed type of the same size
-           (but not coercions between floating-point and integral types)
+         * Casting an unboxed type to another unboxed type of the same size.
+           (Casting between floating-point and integral types does not work.
+           See the {\tt GHC.Float} module for functions to do work.)
 
          * Casting between two types that have the same runtime representation.  One case is when
            the two types differ only in "phantom" type parameters, for example

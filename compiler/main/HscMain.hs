@@ -344,7 +344,7 @@ hscParse' mod_summary
             -- that the parser gave us,
             --   - eliminate files beginning with '<'.  gcc likes to use
             --     pseudo-filenames like "<built-in>" and "<command-line>"
-            --   - normalise them (elimiante differences between ./f and f)
+            --   - normalise them (eliminate differences between ./f and f)
             --   - filter out the preprocessed source file
             --   - filter out anything beginning with tmpdir
             --   - remove duplicates
@@ -940,7 +940,8 @@ checkSafeImports dflags tcg_env
   where
     impInfo  = tcg_imports tcg_env     -- ImportAvails
     imports  = imp_mods impInfo        -- ImportedMods
-    imports' = moduleEnvToList imports -- (Module, [ImportedModsVal])
+    imports1 = moduleEnvToList imports -- (Module, [ImportedBy])
+    imports' = map (fmap importedByUser) imports1 -- (Module, [ImportedModsVal])
     pkgReqs  = imp_trust_pkgs impInfo  -- [UnitId]
 
     condense :: (Module, [ImportedModsVal]) -> Hsc (Module, SrcSpan, IsSafeImport)

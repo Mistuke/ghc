@@ -671,8 +671,12 @@ pprInstr (TEST format src dst) = sdocWithPlatform $ \platform ->
         -- (We could handle masks larger than a single byte too,
         -- but it would complicate the code considerably
         -- and tag checks are by far the most common case.)
+        -- The mask must have the high bit clear for this smaller encoding
+        -- to be completely equivalent to the original; in particular so
+        -- that the signed comparison condition bits are the same as they
+        -- would be if doing a full word comparison. See Trac #13425.
         (OpImm (ImmInteger mask), OpReg dstReg)
-          | 0 <= mask && mask < 256 -> minSizeOfReg platform dstReg
+          | 0 <= mask && mask < 128 -> minSizeOfReg platform dstReg
         _ -> format
   in pprFormatOpOp (sLit "test") format' src dst
   where
@@ -720,6 +724,7 @@ pprInstr (MUL format op1 op2) = pprFormatOpOp (sLit "mul") format op1 op2
 pprInstr (MUL2 format op) = pprFormatOp (sLit "mul") format op
 
 pprInstr (FDIV format op1 op2) = pprFormatOpOp (sLit "div") format op1 op2
+pprInstr (SQRT format op1 op2) = pprFormatOpReg (sLit "sqrt") format op1 op2
 
 pprInstr (CVTSS2SD from to)      = pprRegReg (sLit "cvtss2sd") from to
 pprInstr (CVTSD2SS from to)      = pprRegReg (sLit "cvtsd2ss") from to

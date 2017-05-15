@@ -44,7 +44,7 @@ import Maybes
 import Util
 import Name
 import Outputable
-import BasicTypes ( isGenerated, fl_value )
+import BasicTypes ( isGenerated, il_value, fl_value )
 import FastString
 import Unique
 import UniqDFM
@@ -159,7 +159,7 @@ corresponds roughly to @matchVarCon@.
 
 Note [Match Ids]
 ~~~~~~~~~~~~~~~~
-Most of the matching fuctions take an Id or [Id] as argument.  This Id
+Most of the matching functions take an Id or [Id] as argument.  This Id
 is the scrutinee(s) of the match. The desugared expression may
 sometimes use that Id in a local binding or as a case binder.  So it
 should not have an External name; Lint rejects non-top-level binders
@@ -662,7 +662,7 @@ is collected here, in @matchWrapper@.  This function takes as
 arguments:
 \begin{itemize}
 \item
-Typchecked @Matches@ (of a function definition, or a case or lambda
+Typechecked @Matches@ (of a function definition, or a case or lambda
 expression)---the main input;
 \item
 An error message to be inserted into any (runtime) pattern-matching
@@ -1093,15 +1093,15 @@ patGroup _ (WildPat {})                 = PgAny
 patGroup _ (BangPat {})                 = PgBang
 patGroup _ (NPat (L _ OverLit {ol_val=oval}) mb_neg _ _) =
   case (oval, isJust mb_neg) of
-   (HsIntegral _ i, False) -> PgN (fromInteger i)
-   (HsIntegral _ i, True ) -> PgN (-fromInteger i)
+   (HsIntegral   i, False) -> PgN (fromInteger (il_value i))
+   (HsIntegral   i, True ) -> PgN (-fromInteger (il_value i))
    (HsFractional r, False) -> PgN (fl_value r)
    (HsFractional r, True ) -> PgN (-fl_value r)
    (HsIsString _ s, _) -> ASSERT(isNothing mb_neg)
                           PgOverS s
 patGroup _ (NPlusKPat _ (L _ OverLit {ol_val=oval}) _ _ _ _) =
   case oval of
-   HsIntegral _ i -> PgNpK i
+   HsIntegral i -> PgNpK (il_value i)
    _ -> pprPanic "patGroup NPlusKPat" (ppr oval)
 patGroup _ (CoPat _ p _)                = PgCo  (hsPatType p) -- Type of innelexp pattern
 patGroup _ (ViewPat expr p _)           = PgView expr (hsPatType (unLoc p))

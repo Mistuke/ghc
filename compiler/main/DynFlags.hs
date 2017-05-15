@@ -24,7 +24,7 @@ module DynFlags (
         WarningFlag(..), WarnReason(..),
         Language(..),
         PlatformConstants(..),
-        FatalMessager, LogAction, FlushOut(..), FlushErr(..),
+        FatalMessager, LogAction, LogFinaliser, FlushOut(..), FlushErr(..),
         ProfAuto(..),
         glasgowExtsFlags,
         warningGroups, warningHierarchies,
@@ -42,15 +42,15 @@ module DynFlags (
         DynFlags(..),
         FlagSpec(..),
         HasDynFlags(..), ContainsDynFlags(..),
-        OverridingBool(..), overrideWith,
         RtsOptsEnabled(..), SxSResolveMode(..),
         HscTarget(..), isObjectTarget, defaultObjectTarget,
         targetRetainsAllBindings,
         GhcMode(..), isOneShot,
         GhcLink(..), isNoLink,
         PackageFlag(..), PackageArg(..), ModRenaming(..),
+        packageFlagsChanged,
         IgnorePackageFlag(..), TrustFlag(..),
-        PkgConfRef(..),
+        PackageDBFlag(..), PkgConfRef(..),
         Option(..), showOpt,
         DynLibLoader(..),
         fFlags, fLangFlags, xFlags,
@@ -58,6 +58,7 @@ module DynFlags (
         dynFlagDependencies,
         tablesNextToCode, mkTablesNextToCode,
         makeDynFlagsConsistent,
+        shouldUseColor,
 
         Way(..), mkBuildTag, wayRTSOnly, addWay', updateWays,
         wayGeneralFlags, wayUnsetGeneralFlags,
@@ -170,6 +171,7 @@ import Config
 import CmdLineParser
 import Constants
 import Panic
+import qualified PprColour as Col
 import Util
 import Maybes
 import MonadUtils
@@ -207,7 +209,7 @@ import qualified Data.Set as Set
 import Data.Word
 import System.FilePath
 import System.Directory
-import System.Environment (getEnv)
+import System.Environment (getEnv, lookupEnv)
 import System.IO
 import System.IO.Error
 import Text.ParserCombinators.ReadP hiding (char)
@@ -1282,16 +1284,8 @@ data DynLibLoader
 data RtsOptsEnabled = RtsOptsNone | RtsOptsSafeOnly | RtsOptsAll
   deriving (Show)
 
-data OverridingBool
-  = Auto
-  | Always
-  | Never
-  deriving Show
-
-overrideWith :: Bool -> OverridingBool -> Bool
-overrideWith b Auto   = b
-overrideWith _ Always = True
-overrideWith _ Never  = False
+shouldUseColor :: DynFlags -> Bool
+shouldUseColor dflags = overrideWith (canUseColor dflags) (useColor dflags)
 
 -- | Windows Side By Side Assembly configuration modes.
 data SxSResolveMode = SxSDefault   -- ^ Default mode means load boot libraries from

@@ -471,7 +471,10 @@ endif
 
 ifeq "$(WITH_TERMINFO)" "YES"
 PACKAGES_STAGE1 += terminfo
+else
+libraries/haskeline_CONFIGURE_OPTS += --flags=-terminfo
 endif
+
 PACKAGES_STAGE1 += haskeline
 PACKAGES_STAGE1 += ghci
 
@@ -905,9 +908,11 @@ endef
 
 install_bins: $(INSTALL_BINS) $(INSTALL_SCRIPTS)
 	$(INSTALL_DIR) "$(DESTDIR)$(bindir)"
+ifneq "$(INSTALL_BINS)" ""
 	for i in $(INSTALL_BINS); do \
 		$(INSTALL_PROGRAM) $(INSTALL_BIN_OPTS) $$i "$(DESTDIR)$(bindir)" ;  \
 	done
+endif
 ifneq "$(INSTALL_SCRIPTS)" ""
 	for i in $(INSTALL_SCRIPTS); do \
 		$(INSTALL_SCRIPT) $(INSTALL_OPTS) $$i "$(DESTDIR)$(bindir)" ;  \
@@ -925,7 +930,7 @@ ifneq "$(INSTALL_LIBEXECS)" ""
 	done
 # We rename ghc-stage2, so that the right program name is used in error
 # messages etc.
-ifeq "$(Windows_Host)" "NO"
+ifeq "$(Windows_Target)" "NO"
 	"$(MV)" "$(DESTDIR)$(ghclibexecdir)/bin/ghc-stage$(INSTALL_GHC_STAGE)" "$(DESTDIR)$(ghclibexecdir)/bin/ghc"
 endif
 endif
@@ -963,6 +968,12 @@ endif
 
 INSTALLED_PACKAGE_CONF=$(DESTDIR)$(topdir)/package.conf.d
 
+ifeq "$(BINDIST) $(CrossCompiling)" "NO YES"
+# when installing ghc-stage2 we can't run target's
+# 'ghc-pkg' and 'ghc-stage2' but those are needed for registration.
+INSTALLED_GHC_REAL=$(TOP)/inplace/bin/ghc-stage1
+INSTALLED_GHC_PKG_REAL=$(TOP)/$(ghc-pkg_DIST_BINARY)
+else # CrossCompiling
 # Install packages in the right order, so that ghc-pkg doesn't complain.
 # Also, install ghc-pkg first.
 ifeq "$(Windows_Host)" "NO"
@@ -972,6 +983,7 @@ else
 INSTALLED_GHC_REAL=$(DESTDIR)$(bindir)/ghc.exe
 INSTALLED_GHC_PKG_REAL=$(DESTDIR)$(bindir)/ghc-pkg.exe
 endif
+endif # CrossCompiling
 
 # Set the INSTALL_DISTDIR_p for each package; compiler is special
 $(foreach p,$(filter-out compiler,$(INSTALL_PACKAGES)),\

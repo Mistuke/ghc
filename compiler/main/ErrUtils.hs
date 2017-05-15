@@ -60,10 +60,11 @@ import Bag
 import Exception
 import Outputable
 import Panic
+import qualified PprColour as Col
 import SrcLoc
 import DynFlags
 import FastString (unpackFS)
-import StringBuffer (hGetStringBuffer, len, lexemeToString)
+import StringBuffer (atLine, hGetStringBuffer, len, lexemeToString)
 import Json
 
 import System.Directory
@@ -73,7 +74,6 @@ import Data.List
 import qualified Data.Set as Set
 import Data.IORef
 import Data.Maybe       ( fromMaybe )
-import Data.Monoid      ( mappend )
 import Data.Ord
 import Data.Time
 import Control.Monad
@@ -199,14 +199,22 @@ mkLocMessageAnn ann severity locn msg
       let locn' = if gopt Opt_ErrorSpans dflags
                   then ppr locn
                   else ppr (srcSpanStart locn)
+
+          sevColour = getSeverityColour severity (colScheme dflags)
+
+          -- Add optional information
+          optAnn = case ann of
+            Nothing -> text ""
+            Just i  -> text " [" <> coloured sevColour (text i) <> text "]"
+
           -- Add prefixes, like    Foo.hs:34: warning:
           --                           <the warning message>
           prefix = locn' <> colon <+>
                    coloured sevColour sevText <> optAnn
-      in bold (hang prefix 4 msg)
-  where
-    sevColour = colBold `mappend` getSeverityColour severity
 
+      in coloured (Col.sMessage (colScheme dflags)) (hang prefix 4 msg)
+
+  where
     sevText =
       case severity of
         SevWarning -> text "warning:"
@@ -214,59 +222,51 @@ mkLocMessageAnn ann severity locn msg
         SevFatal   -> text "fatal:"
         _          -> empty
 
-    -- Add optional information
-    optAnn = case ann of
-      Nothing -> text ""
-      Just i  -> text " [" <> coloured sevColour (text i) <> text "]"
-
-getSeverityColour :: Severity -> PprColour
-getSeverityColour SevWarning = colMagentaFg
-getSeverityColour SevError   = colRedFg
-getSeverityColour SevFatal   = colRedFg
-getSeverityColour _          = mempty
+getSeverityColour :: Severity -> Col.Scheme -> Col.PprColour
+getSeverityColour SevWarning = Col.sWarning
+getSeverityColour SevError   = Col.sError
+getSeverityColour SevFatal   = Col.sFatal
+getSeverityColour _          = const mempty
 
 getCaretDiagnostic :: Severity -> SrcSpan -> IO MsgDoc
 getCaretDiagnostic _ (UnhelpfulSpan _) = pure empty
 getCaretDiagnostic severity (RealSrcSpan span) = do
-  caretDiagnostic <$> getSrcLine (srcSpanFile span) (row - 1)
+  caretDiagnostic <$> getSrcLine (srcSpanFile span) row
 
   where
-
-    getSrcLine fn i = do
-      (getLine i <$> readFile' (unpackFS fn))
-        `catchIOError` \ _ ->
+    getSrcLine fn i =
+      getLine i (unpackFS fn)
+        `catchIOError` \_ ->
           pure Nothing
 
-    getLine i contents =
-      case drop i (lines contents) of
-        srcLine : _ -> Just srcLine
-        [] -> Nothing
-
-    readFile' fn = do
+    getLine i fn = do
       -- StringBuffer has advantages over readFile:
       -- (a) no lazy IO, otherwise IO exceptions may occur in pure code
       -- (b) always UTF-8, rather than some system-dependent encoding
       --     (Haskell source code must be UTF-8 anyway)
-      buf <- hGetStringBuffer fn
-      pure (fix <$> lexemeToString buf (len buf))
+      content <- hGetStringBuffer fn
+      case atLine i content of
+        Just at_line -> pure $
+          case lines (fix <$> lexemeToString at_line (len at_line)) of
+            srcLine : _ -> Just srcLine
+            _           -> Nothing
+        _ -> pure Nothing
 
     -- allow user to visibly see that their code is incorrectly encoded
     -- (StringBuffer.nextChar uses \0 to represent undecodable characters)
     fix '\0' = '\xfffd'
     fix c    = c
 
-    sevColour = colBold `mappend` getSeverityColour severity
-
-    marginColour = colBold `mappend` colBlueFg
-
     row = srcSpanStartLine span
     rowStr = show row
     multiline = row /= srcSpanEndLine span
 
-    stripNewlines = filter (/= '\n')
-
     caretDiagnostic Nothing = empty
     caretDiagnostic (Just srcLineWithNewline) =
+      sdocWithDynFlags $ \ dflags ->
+      let sevColour = getSeverityColour severity (colScheme dflags)
+          marginColour = Col.sMargin (colScheme dflags)
+      in
       coloured marginColour (text marginSpace) <>
       text ("\n") <>
       coloured marginColour (text marginRow) <>
@@ -278,7 +278,13 @@ getCaretDiagnostic severity (RealSrcSpan span) = do
 
       where
 
-        srcLine = stripNewlines srcLineWithNewline
+        fixWhitespace (i, c)
+          | c == '\n' = ""
+            -- show tabs in a device-independent manner #13664
+          | c == '\t' = replicate (8 - i `mod` 8) ' '
+          | otherwise = [c]
+
+        srcLine = concat (map fixWhitespace (zip [0..] srcLineWithNewline))
 
         start = srcSpanStartCol span - 1
         end | multiline = length srcLine

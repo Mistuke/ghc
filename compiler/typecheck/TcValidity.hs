@@ -41,7 +41,7 @@ import HsSyn            -- HsType
 import TcRnMonad        -- TcType, amongst others
 import TcEnv       ( tcGetInstEnvs )
 import FunDeps
-import InstEnv     ( ClsInst, lookupInstEnv, isOverlappable )
+import InstEnv     ( InstMatch, lookupInstEnv )
 import FamInstEnv  ( isDominatedBy, injectiveBranches,
                      InjectivityCheckResult(..) )
 import FamInst     ( makeInjectivityErrors )
@@ -518,7 +518,7 @@ check_syn_tc_app env ctxt rank ty tc tys
                 mapM_ check_arg tys
 
           else  -- In the liberal case (only for closed syns), expand then check
-          case coreView ty of
+          case tcView ty of
              Just ty' -> check_type env ctxt rank ty'
              Nothing  -> pprPanic "check_tau_type" (ppr ty)  }
 
@@ -717,7 +717,7 @@ check_pred_help :: Bool    -- True <=> under a type synonym
                 -> DynFlags -> UserTypeCtxt
                 -> PredType -> TcM ()
 check_pred_help under_syn env dflags ctxt pred
-  | Just pred' <- coreView pred  -- Switch on under_syn when going under a
+  | Just pred' <- tcView pred  -- Switch on under_syn when going under a
                                  -- synonym (Trac #9838, yuk)
   = check_pred_help True env dflags ctxt pred'
   | otherwise
@@ -810,7 +810,8 @@ check_class_pred env dflags ctxt pred cls tys
 
   | otherwise
   = do { check_arity
-       ; check_simplifiable_class_constraint
+       ; warn_simp <- woptM Opt_WarnSimplifiableClassConstraints
+       ; when warn_simp check_simplifiable_class_constraint
        ; checkTcM arg_tys_ok (predTyVarErr env pred) }
   where
     check_arity = checkTc (classArity cls == length tys)
@@ -833,25 +834,22 @@ check_class_pred env dflags ctxt pred cls tys
        | DataTyCtxt {} <- ctxt   -- Don't do this check for the "stupid theta"
        = return ()               -- of a data type declaration
        | otherwise
-       = do { instEnvs <- tcGetInstEnvs
-            ; let (matches, _, _) = lookupInstEnv False instEnvs cls tys
-                  bad_matches = [ inst | (inst,_) <- matches
-                                       , not (isOverlappable inst) ]
-            ; warnIf (Reason Opt_WarnSimplifiableClassConstraints)
-                     (not (null bad_matches))
-                     (simplifiable_constraint_warn bad_matches) }
+       = do { envs <- tcGetInstEnvs
+            ; case lookupInstEnv False envs cls tys of
+                 ([m], [], _) -> addWarnTc (Reason Opt_WarnSimplifiableClassConstraints)
+                                           (simplifiable_constraint_warn m)
+                 _ -> return () }
 
-    simplifiable_constraint_warn :: [ClsInst] -> SDoc
-    simplifiable_constraint_warn (match : _)
+    simplifiable_constraint_warn :: InstMatch -> SDoc
+    simplifiable_constraint_warn (match, _)
      = vcat [ hang (text "The constraint" <+> quotes (ppr (tidyType env pred)))
                  2 (text "matches an instance declaration")
             , ppr match
             , hang (text "This makes type inference for inner bindings fragile;")
                  2 (text "either use MonoLocalBinds, or simplify it using the instance") ]
-    simplifiable_constraint_warn [] = pprPanic "check_class_pred" (ppr pred)
 
 {- Note [Simplifiable given constraints]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 A type signature like
    f :: Eq [(a,b)] => a -> b
 is very fragile, for reasons described at length in TcInteract
@@ -862,9 +860,27 @@ fragility. But if we /infer/ the type of a local let-binding, things
 can go wrong (Trac #11948 is an example, discussed in the Note).
 
 So this warning is switched on only if we have NoMonoLocalBinds; in
-that case the warning discourages uses from writing simplifiable class
-constraints, at least unless the top-level instance is explicitly
-declared as OVERLAPPABLE.
+that case the warning discourages users from writing simplifiable
+class constraints.
+
+The warning only fires if the constraint in the signature
+matches the top-level instances in only one way, and with no
+unifiers -- that is, under the same circumstances that
+TcInteract.matchInstEnv fires an interaction with the top
+level instances.  For example (Trac #13526), consider
+
+  instance {-# OVERLAPPABLE #-} Eq (T a) where ...
+  instance                   Eq (T Char) where ..
+  f :: Eq (T a) => ...
+
+We don't want to complain about this, even though the context
+(Eq (T a)) matches an instance, because the user may be
+deliberately deferring the choice so that the Eq (T Char)
+has a chance to fire when 'f' is called.  And the fragility
+only matters when there's a risk that the instance might
+fire instead of the local 'given'; and there is no such
+risk in this case.  Just use the same rules as for instance
+firing!
 -}
 
 -------------------------
@@ -1921,7 +1937,7 @@ checkValidInferredKinds orig_kvs out_of_scope extra
 
 -- Free variables of a type, retaining repetitions, and expanding synonyms
 fvType :: Type -> [TyCoVar]
-fvType ty | Just exp_ty <- coreView ty = fvType exp_ty
+fvType ty | Just exp_ty <- tcView ty = fvType exp_ty
 fvType (TyVarTy tv)          = [tv]
 fvType (TyConApp _ tys)      = fvTypes tys
 fvType (LitTy {})            = []
@@ -1964,7 +1980,7 @@ fvProv (HoleProv h)        = pprPanic "fvProv falls into a hole" (ppr h)
 
 sizeType :: Type -> Int
 -- Size of a type: the number of variables and constructors
-sizeType ty | Just exp_ty <- coreView ty = sizeType exp_ty
+sizeType ty | Just exp_ty <- tcView ty = sizeType exp_ty
 sizeType (TyVarTy {})      = 1
 sizeType (TyConApp _ tys)  = sizeTypes tys + 1
 sizeType (LitTy {})        = 1
@@ -1981,7 +1997,7 @@ sizeTypes = sum . map sizeType
 --
 -- We are considering whether class constraints terminate.
 -- Equality constraints and constraints for the implicit
--- parameter class always termiante so it is safe to say "size 0".
+-- parameter class always terminate so it is safe to say "size 0".
 -- (Implicit parameter constraints always terminate because
 -- there are no instances for them---they are only solved by
 -- "local instances" in expressions).

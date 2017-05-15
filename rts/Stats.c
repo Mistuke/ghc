@@ -29,7 +29,7 @@ static Time
     start_exit_gc_elapsed, start_exit_gc_cpu,
     end_exit_cpu,   end_exit_elapsed;
 
-#ifdef PROFILING
+#if defined(PROFILING)
 static Time RP_start_time  = 0, RP_tot_time  = 0;  // retainer prof user time
 static Time RPe_start_time = 0, RPe_tot_time = 0;  // retainer prof elap time
 
@@ -37,7 +37,7 @@ static Time HC_start_time, HC_tot_time = 0;     // heap census prof user time
 static Time HCe_start_time, HCe_tot_time = 0;   // heap census prof elap time
 #endif
 
-#ifdef PROFILING
+#if defined(PROFILING)
 #define PROF_VAL(x)   (x)
 #else
 #define PROF_VAL(x)   0
@@ -90,7 +90,7 @@ mut_user_time( void )
     return mut_user_time_until(cpu);
 }
 
-#ifdef PROFILING
+#if defined(PROFILING)
 /*
   mut_user_time_during_RP() returns the MUT time during retainer profiling.
   The same is for mut_user_time_during_HC();
@@ -122,7 +122,7 @@ initStats0(void)
     end_exit_cpu     = 0;
     end_exit_elapsed  = 0;
 
-#ifdef PROFILING
+#if defined(PROFILING)
     RP_start_time  = 0;
     RP_tot_time  = 0;
     RPe_start_time = 0;
@@ -430,7 +430,7 @@ stat_endGC (Capability *cap, gc_thread *gct,
 /* -----------------------------------------------------------------------------
    Called at the beginning of each Retainer Profiliing
    -------------------------------------------------------------------------- */
-#ifdef PROFILING
+#if defined(PROFILING)
 void
 stat_startRP(void)
 {
@@ -446,11 +446,11 @@ stat_startRP(void)
    Called at the end of each Retainer Profiliing
    -------------------------------------------------------------------------- */
 
-#ifdef PROFILING
+#if defined(PROFILING)
 void
 stat_endRP(
   uint32_t retainerGeneration,
-#ifdef DEBUG_RETAINER
+#if defined(DEBUG_RETAINER)
   uint32_t maxCStackSize,
   int maxStackSize,
 #endif
@@ -464,7 +464,7 @@ stat_endRP(
 
   fprintf(prof_file, "Retainer Profiling: %d, at %f seconds\n",
     retainerGeneration, mut_user_time_during_RP());
-#ifdef DEBUG_RETAINER
+#if defined(DEBUG_RETAINER)
   fprintf(prof_file, "\tMax C stack size = %u\n", maxCStackSize);
   fprintf(prof_file, "\tMax auxiliary stack size = %u\n", maxStackSize);
 #endif
@@ -475,7 +475,7 @@ stat_endRP(
 /* -----------------------------------------------------------------------------
    Called at the beginning of each heap census
    -------------------------------------------------------------------------- */
-#ifdef PROFILING
+#if defined(PROFILING)
 void
 stat_startHeapCensus(void)
 {
@@ -490,7 +490,7 @@ stat_startHeapCensus(void)
 /* -----------------------------------------------------------------------------
    Called at the end of each heap census
    -------------------------------------------------------------------------- */
-#ifdef PROFILING
+#if defined(PROFILING)
 void
 stat_endHeapCensus(void)
 {
@@ -510,7 +510,7 @@ stat_endHeapCensus(void)
    were left unused when the heap-check failed.
    -------------------------------------------------------------------------- */
 
-#ifdef DEBUG
+#if defined(DEBUG)
 #define TICK_VAR_INI(arity) \
   StgInt SLOW_CALLS_##arity = 1; \
   StgInt RIGHT_ARITY_##arity = 1; \
@@ -708,7 +708,7 @@ stat_exit (void)
             statsPrintf("  GC      time  %7.3fs  (%7.3fs elapsed)\n",
                         TimeToSecondsDbl(gc_cpu), TimeToSecondsDbl(gc_elapsed));
 
-#ifdef PROFILING
+#if defined(PROFILING)
             statsPrintf("  RP      time  %7.3fs  (%7.3fs elapsed)\n",
                     TimeToSecondsDbl(RP_tot_time), TimeToSecondsDbl(RPe_tot_time));
             statsPrintf("  PROF    time  %7.3fs  (%7.3fs elapsed)\n",
@@ -718,7 +718,7 @@ stat_exit (void)
                     TimeToSecondsDbl(exit_cpu), TimeToSecondsDbl(exit_elapsed));
             statsPrintf("  Total   time  %7.3fs  (%7.3fs elapsed)\n\n",
                     TimeToSecondsDbl(tot_cpu), TimeToSecondsDbl(tot_elapsed));
-#ifndef THREADED_RTS
+#if !defined(THREADED_RTS)
             statsPrintf("  %%GC     time     %5.1f%%  (%.1f%% elapsed)\n\n",
                     TimeToSecondsDbl(gc_cpu)*100/TimeToSecondsDbl(tot_cpu),
                     TimeToSecondsDbl(gc_elapsed)*100/TimeToSecondsDbl(tot_elapsed));
@@ -757,35 +757,43 @@ stat_exit (void)
         }
 
         if (RtsFlags.GcFlags.giveStats == ONELINE_GC_STATS) {
-      char *fmt1, *fmt2;
-      if (RtsFlags.MiscFlags.machineReadable) {
-          fmt1 = " [(\"bytes allocated\", \"%llu\")\n";
-          fmt2 = " ,(\"num_GCs\", \"%d\")\n"
-                 " ,(\"average_bytes_used\", \"%ld\")\n"
-                 " ,(\"max_bytes_used\", \"%ld\")\n"
-                 " ,(\"num_byte_usage_samples\", \"%ld\")\n"
-                 " ,(\"peak_megabytes_allocated\", \"%lu\")\n"
-                 " ,(\"init_cpu_seconds\", \"%.3f\")\n"
-                 " ,(\"init_wall_seconds\", \"%.3f\")\n"
-                 " ,(\"mutator_cpu_seconds\", \"%.3f\")\n"
-                 " ,(\"mutator_wall_seconds\", \"%.3f\")\n"
-                 " ,(\"GC_cpu_seconds\", \"%.3f\")\n"
-                 " ,(\"GC_wall_seconds\", \"%.3f\")\n"
-                 " ]\n";
-      }
-      else {
-          fmt1 = "<<ghc: %llu bytes, ";
-          fmt2 = "%d GCs, %ld/%ld avg/max bytes residency (%ld samples), %luM in use, %.3f INIT (%.3f elapsed), %.3f MUT (%.3f elapsed), %.3f GC (%.3f elapsed) :ghc>>\n";
-      }
+          char *fmt;
+          if (RtsFlags.MiscFlags.machineReadable) {
+            fmt =
+                " [(\"bytes allocated\", \"%" FMT_Word64 "\")\n"
+                " ,(\"num_GCs\", \"%" FMT_Word32 "\")\n"
+                " ,(\"average_bytes_used\", \"%" FMT_Word64 "\")\n"
+                " ,(\"max_bytes_used\", \"%" FMT_Word64 "\")\n"
+                " ,(\"num_byte_usage_samples\", \"%" FMT_Word32 "\")\n"
+                " ,(\"peak_megabytes_allocated\", \"%" FMT_Word64 "\")\n"
+                " ,(\"init_cpu_seconds\", \"%.3f\")\n"
+                " ,(\"init_wall_seconds\", \"%.3f\")\n"
+                " ,(\"mutator_cpu_seconds\", \"%.3f\")\n"
+                " ,(\"mutator_wall_seconds\", \"%.3f\")\n"
+                " ,(\"GC_cpu_seconds\", \"%.3f\")\n"
+                " ,(\"GC_wall_seconds\", \"%.3f\")\n"
+                " ]\n";
+          }
+          else {
+            fmt =
+                "<<ghc: %" FMT_Word64 " bytes, "
+                "%" FMT_Word32 " GCs, "
+                "%" FMT_Word64 "/%" FMT_Word64 " avg/max bytes residency (%" FMT_Word32 " samples), "
+                "%" FMT_Word64 "M in use, "
+                "%.3f INIT (%.3f elapsed), "
+                "%.3f MUT (%.3f elapsed), "
+                "%.3f GC (%.3f elapsed) :ghc>>\n";
+          }
           /* print the long long separately to avoid bugginess on mingwin (2001-07-02, mingw-0.5) */
-          statsPrintf(fmt1, stats.allocated_bytes);
-          statsPrintf(fmt2,
+          statsPrintf(fmt,
+                    stats.allocated_bytes,
                     stats.gcs,
-                    stats.major_gcs == 0 ? 0 :
-                        stats.cumulative_live_bytes/stats.major_gcs,
+                     (uint64_t)
+                      (stats.major_gcs == 0 ? 0 :
+                       stats.cumulative_live_bytes/stats.major_gcs),
                     stats.max_live_bytes,
                     stats.major_gcs,
-                    (unsigned long)(peak_mblocks_allocated * MBLOCK_SIZE / (1024L * 1024L)),
+                    (uint64_t) (peak_mblocks_allocated * MBLOCK_SIZE / (1024L * 1024L)),
                     TimeToSecondsDbl(init_cpu), TimeToSecondsDbl(init_elapsed),
                     TimeToSecondsDbl(mut_cpu), TimeToSecondsDbl(mut_elapsed),
                     TimeToSecondsDbl(gc_cpu), TimeToSecondsDbl(gc_elapsed));

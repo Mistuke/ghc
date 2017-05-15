@@ -1,6 +1,17 @@
 #include "Rts.h"
 
-#if defined(linux_HOST_OS) || defined(solaris2_HOST_OS) || defined(freebsd_HOST_OS) || defined(kfreebsdgnu_HOST_OS) || defined(dragonfly_HOST_OS) || defined(netbsd_HOST_OS) || defined(openbsd_HOST_OS) || defined(gnu_HOST_OS)
+#if defined(linux_HOST_OS) || defined(solaris2_HOST_OS) \
+|| defined(linux_android_HOST_OS) \
+|| defined(freebsd_HOST_OS) || defined(kfreebsdgnu_HOST_OS) \
+|| defined(dragonfly_HOST_OS) || defined(netbsd_HOST_OS) \
+|| defined(openbsd_HOST_OS) || defined(gnu_HOST_OS)
+
+// It is essential that this is included before any <elf.h> is included. <elf.h>
+// defines R_XXX relocations, which would interfere with the COMPAT_R_XXX
+// relocations we generate.  E.g. COMPAT_ ## R_ARM_ARM32 would end up as
+// const unsigned COMPAT_3 = 0x03; instead of
+// const unsigned COMPAT_R_ARM_ARM32 = 0x03;
+#include "elf_compat.h"
 
 #include "RtsUtils.h"
 #include "RtsSymbolInfo.h"
@@ -10,17 +21,22 @@
 #include "linker/SymbolExtras.h"
 #include "sm/OSMem.h"
 #include "GetEnv.h"
+#include "linker/util.h"
+#include "linker/elf_util.h"
 
 #include <stdlib.h>
 #include <string.h>
-#ifdef HAVE_SYS_STAT_H
+#if defined(HAVE_SYS_STAT_H)
 #include <sys/stat.h>
 #endif
-#ifdef HAVE_SYS_TYPES_H
+#if defined(HAVE_SYS_TYPES_H)
 #include <sys/types.h>
 #endif
-#ifdef HAVE_FCNTL_H
+#if defined(HAVE_FCNTL_H)
 #include <fcntl.h>
+#endif
+#if defined(dragonfly_HOST_OS)
+#include <sys/tls.h>
 #endif
 
 /* on x86_64 we have a problem with relocating symbol references in
@@ -66,14 +82,7 @@
 #  define ELF_TARGET_386    /* Used inside <elf.h> */
 #elif defined(x86_64_HOST_ARCH)
 #  define ELF_TARGET_X64_64
-#  define ELF_64BIT
 #  define ELF_TARGET_AMD64 /* Used inside <elf.h> on Solaris 11 */
-#elif defined(powerpc64_HOST_ARCH) || defined(powerpc64le_HOST_ARCH)
-#  define ELF_64BIT
-#elif defined(ia64_HOST_ARCH)
-#  define ELF_64BIT
-#elif defined(aarch64_HOST_ARCH)
-#  define ELF_64BIT
 #endif
 
 #if !defined(openbsd_HOST_OS)
@@ -81,201 +90,6 @@
 #else
 /* openbsd elf has things in different places, with diff names */
 #  include <elf_abi.h>
-#  include <machine/reloc.h>
-#  define R_386_32    RELOC_32
-#  define R_386_PC32  RELOC_PC32
-#endif
-
-/* If elf.h doesn't define it */
-#  ifndef R_X86_64_PC64
-#    define R_X86_64_PC64 24
-#  endif
-
-/*
- * Workaround for libc implementations (e.g. eglibc) with incomplete
- * relocation lists
- */
-#ifndef R_ARM_THM_CALL
-#  define R_ARM_THM_CALL      10
-#endif
-#ifndef R_ARM_CALL
-#  define R_ARM_CALL      28
-#endif
-#ifndef R_ARM_JUMP24
-#  define R_ARM_JUMP24      29
-#endif
-#ifndef R_ARM_THM_JUMP24
-#  define R_ARM_THM_JUMP24      30
-#endif
-#ifndef R_ARM_TARGET1
-#  define R_ARM_TARGET1      38
-#endif
-#ifndef R_ARM_MOVW_ABS_NC
-#  define R_ARM_MOVW_ABS_NC      43
-#endif
-#ifndef R_ARM_MOVT_ABS
-#  define R_ARM_MOVT_ABS      44
-#endif
-#ifndef R_ARM_THM_MOVW_ABS_NC
-#  define R_ARM_THM_MOVW_ABS_NC   47
-#endif
-#ifndef R_ARM_THM_MOVT_ABS
-#  define R_ARM_THM_MOVT_ABS      48
-#endif
-#ifndef R_ARM_THM_JUMP11
-#  define R_ARM_THM_JUMP11      102
-#endif
-#ifndef R_ARM_THM_JUMP8
-#  define R_ARM_THM_JUMP8      103
-#endif
-
-/*
- * Define a set of types which can be used for both ELF32 and ELF64
- */
-
-#ifdef ELF_64BIT
-#define ELFCLASS    ELFCLASS64
-#define Elf_Addr    Elf64_Addr
-#define Elf_Word    Elf64_Word
-#define Elf_Sword   Elf64_Sword
-#define Elf_Half    Elf64_Half
-#define Elf_Ehdr    Elf64_Ehdr
-#define Elf_Phdr    Elf64_Phdr
-#define Elf_Shdr    Elf64_Shdr
-#define Elf_Sym     Elf64_Sym
-#define Elf_Rel     Elf64_Rel
-#define Elf_Rela    Elf64_Rela
-#ifndef ELF_ST_TYPE
-#define ELF_ST_TYPE ELF64_ST_TYPE
-#endif
-#ifndef ELF_ST_BIND
-#define ELF_ST_BIND ELF64_ST_BIND
-#endif
-#ifndef ELF_R_TYPE
-#define ELF_R_TYPE  ELF64_R_TYPE
-#endif
-#ifndef ELF_R_SYM
-#define ELF_R_SYM   ELF64_R_SYM
-#endif
-#else
-#define ELFCLASS    ELFCLASS32
-#define Elf_Addr    Elf32_Addr
-#define Elf_Word    Elf32_Word
-#define Elf_Sword   Elf32_Sword
-#define Elf_Half    Elf32_Half
-#define Elf_Ehdr    Elf32_Ehdr
-#define Elf_Phdr    Elf32_Phdr
-#define Elf_Shdr    Elf32_Shdr
-#define Elf_Sym     Elf32_Sym
-#define Elf_Rel     Elf32_Rel
-#define Elf_Rela    Elf32_Rela
-#ifndef ELF_ST_TYPE
-#define ELF_ST_TYPE ELF32_ST_TYPE
-#endif
-#ifndef ELF_ST_BIND
-#define ELF_ST_BIND ELF32_ST_BIND
-#endif
-#ifndef ELF_R_TYPE
-#define ELF_R_TYPE  ELF32_R_TYPE
-#endif
-#ifndef ELF_R_SYM
-#define ELF_R_SYM   ELF32_R_SYM
-#endif
-#endif
-
-
-/*
- * Functions to allocate entries in dynamic sections.  Currently we simply
- * preallocate a large number, and we don't check if a entry for the given
- * target already exists (a linear search is too slow).  Ideally these
- * entries would be associated with symbols.
- */
-
-/* These sizes sufficient to load HSbase + HShaskell98 + a few modules */
-#define GOT_SIZE            0x20000
-#define FUNCTION_TABLE_SIZE 0x10000
-#define PLT_SIZE            0x08000
-
-#ifdef ELF_NEED_GOT
-static Elf_Addr got[GOT_SIZE];
-static unsigned int gotIndex;
-static Elf_Addr gp_val = (Elf_Addr)got;
-
-static Elf_Addr
-allocateGOTEntry(Elf_Addr target)
-{
-   Elf_Addr *entry;
-
-   if (gotIndex >= GOT_SIZE)
-      barf("Global offset table overflow");
-
-   entry = &got[gotIndex++];
-   *entry = target;
-   return (Elf_Addr)entry;
-}
-#endif
-
-#ifdef ELF_FUNCTION_DESC
-typedef struct {
-   Elf_Addr ip;
-   Elf_Addr gp;
-} FunctionDesc;
-
-static FunctionDesc functionTable[FUNCTION_TABLE_SIZE];
-static unsigned int functionTableIndex;
-
-static Elf_Addr
-allocateFunctionDesc(Elf_Addr target)
-{
-   FunctionDesc *entry;
-
-   if (functionTableIndex >= FUNCTION_TABLE_SIZE)
-      barf("Function table overflow");
-
-   entry = &functionTable[functionTableIndex++];
-   entry->ip = target;
-   entry->gp = (Elf_Addr)gp_val;
-   return (Elf_Addr)entry;
-}
-
-static Elf_Addr
-copyFunctionDesc(Elf_Addr target)
-{
-   FunctionDesc *olddesc = (FunctionDesc *)target;
-   FunctionDesc *newdesc;
-
-   newdesc = (FunctionDesc *)allocateFunctionDesc(olddesc->ip);
-   newdesc->gp = olddesc->gp;
-   return (Elf_Addr)newdesc;
-}
-#endif
-
-#ifdef ELF_NEED_PLT
-
-typedef struct {
-   unsigned char code[sizeof(plt_code)];
-} PLTEntry;
-
-static Elf_Addr
-allocatePLTEntry(Elf_Addr target, ObjectCode *oc)
-{
-   PLTEntry *plt = (PLTEntry *)oc->plt;
-   PLTEntry *entry;
-
-   if (oc->pltIndex >= PLT_SIZE)
-      barf("Procedure table overflow");
-
-   entry = &plt[oc->pltIndex++];
-   memcpy(entry->code, plt_code, sizeof(entry->code));
-   PLT_RELOC(entry->code, target);
-   return (Elf_Addr)entry;
-}
-
-static unsigned int
-PLTSize(void)
-{
-   return (PLT_SIZE * sizeof(PLTEntry));
-}
 #endif
 
 /*
@@ -311,9 +125,9 @@ static Elf_Word elf_shnum(Elf_Ehdr* ehdr)
 
 static Elf_Word elf_shstrndx(Elf_Ehdr* ehdr)
 {
-   Elf_Shdr* shdr = (Elf_Shdr*) ((char*)ehdr + ehdr->e_shoff);
    Elf_Half shstrndx = ehdr->e_shstrndx;
 #if defined(SHN_XINDEX)
+   Elf_Shdr* shdr = (Elf_Shdr*) ((char*)ehdr + ehdr->e_shoff);
    return shstrndx != SHN_XINDEX ? shstrndx : shdr[0].sh_link;
 #else
    // some OSes do not support SHN_XINDEX yet, let's revert to
@@ -339,6 +153,160 @@ get_shndx_table(Elf_Ehdr* ehdr)
    return NULL;
 }
 #endif
+
+/*
+ * ocInit and ocDeinit
+ */
+
+void
+ocInit_ELF(ObjectCode * oc)
+{
+    oc->info = (struct ObjectCodeFormatInfo*)stgCallocBytes(
+            1, sizeof *oc->info,
+            "ocInit_Elf(ObjectCodeFormatInfo)");
+    // TODO: fill info
+    oc->info->elfHeader = (Elf_Ehdr *)oc->image;
+    oc->info->programHeader = (Elf_Phdr *) ((uint8_t*)oc->image
+                                            + oc->info->elfHeader->e_phoff);
+    oc->info->sectionHeader = (Elf_Shdr *) ((uint8_t*)oc->image
+                                            + oc->info->elfHeader->e_shoff);
+
+    oc->n_sections = elf_shnum(oc->info->elfHeader);
+
+    /* get the symbol table(s) */
+    for(int i=0; i < oc->n_sections; i++) {
+        if(SHT_REL  == oc->info->sectionHeader[i].sh_type) {
+            ElfRelocationTable *relTab = (ElfRelocationTable *)stgCallocBytes(
+                    1, sizeof(ElfRelocationTable),
+                    "ocInit_Elf(ElfRelocationTable");
+            relTab->index = i;
+
+            relTab->relocations =
+                (Elf_Rel*) ((uint8_t*)oc->info->elfHeader
+                                    + oc->info->sectionHeader[i].sh_offset);
+            relTab->n_relocations = oc->info->sectionHeader[i].sh_size
+                                    / sizeof(Elf_Rel);
+            relTab->targetSectionIndex = oc->info->sectionHeader[i].sh_info;
+
+            relTab->sectionHeader      = &oc->info->sectionHeader[i];
+
+            if(oc->info->relTable == NULL) {
+                oc->info->relTable = relTab;
+            } else {
+                ElfRelocationTable * tail = oc->info->relTable;
+                while(tail->next != NULL) tail = tail->next;
+                tail->next = relTab;
+            }
+
+        } else if(SHT_RELA == oc->info->sectionHeader[i].sh_type) {
+            ElfRelocationATable *relTab = (ElfRelocationATable *)stgCallocBytes(
+                    1, sizeof(ElfRelocationATable),
+                    "ocInit_Elf(ElfRelocationTable");
+            relTab->index = i;
+
+            relTab->relocations =
+                (Elf_Rela*) ((uint8_t*)oc->info->elfHeader
+                                     + oc->info->sectionHeader[i].sh_offset);
+            relTab->n_relocations = oc->info->sectionHeader[i].sh_size
+                                    / sizeof(Elf_Rela);
+            relTab->targetSectionIndex = oc->info->sectionHeader[i].sh_info;
+
+            relTab->sectionHeader      = &oc->info->sectionHeader[i];
+
+            if(oc->info->relaTable == NULL) {
+                oc->info->relaTable = relTab;
+            } else {
+                ElfRelocationATable * tail = oc->info->relaTable;
+                while(tail->next != NULL) tail = tail->next;
+                tail->next = relTab;
+            }
+
+        } else if(SHT_SYMTAB == oc->info->sectionHeader[i].sh_type) {
+
+            ElfSymbolTable *symTab = (ElfSymbolTable *)stgCallocBytes(
+                    1, sizeof(ElfSymbolTable),
+                    "ocInit_Elf(ElfSymbolTable");
+
+            symTab->index = i; /* store the original index, so we can later
+                                * find or assert that we are dealing with the
+                                * correct symbol table */
+
+            Elf_Sym *stab = (Elf_Sym*)((uint8_t*)oc->info->elfHeader
+                                       + oc->info->sectionHeader[i].sh_offset);
+            symTab->n_symbols = oc->info->sectionHeader[i].sh_size
+                                / sizeof(Elf_Sym);
+            symTab->symbols = (ElfSymbol *)stgCallocBytes(
+                    symTab->n_symbols, sizeof(ElfSymbol),
+                    "ocInit_Elf(ElfSymbol)");
+
+            /* get the strings table */
+            size_t lnkIdx = oc->info->sectionHeader[i].sh_link;
+            symTab->names = (char*)(uint8_t*)oc->info->elfHeader
+                            + oc->info->sectionHeader[lnkIdx].sh_offset;
+
+            /* build the ElfSymbols from the symbols */
+            for(size_t j=0; j < symTab->n_symbols; j++) {
+
+                symTab->symbols[j].name = stab[j].st_name == 0
+                                          ? "(noname)"
+                                          : symTab->names + stab[j].st_name;
+                symTab->symbols[j].elf_sym = &stab[j];
+                /* we don't have an address for this symbol yet; this will be
+                 * populated during ocGetNames. hence addr = NULL.
+                 */
+                symTab->symbols[j].addr  = NULL;
+                symTab->symbols[j].got_addr = NULL;
+            }
+
+            /* append the ElfSymbolTable */
+            if(oc->info->symbolTables == NULL) {
+                oc->info->symbolTables = symTab;
+            } else {
+                ElfSymbolTable * tail = oc->info->symbolTables;
+                while(tail->next != NULL) tail = tail->next;
+                tail->next = symTab;
+            }
+        }
+    }
+}
+
+void
+ocDeinit_ELF(ObjectCode * oc)
+{
+    /* free all ElfSymbolTables, and their associated
+     * ElfSymbols
+     */
+    if(oc->info != NULL) {
+        ElfSymbolTable * last = oc->info->symbolTables;
+
+        while(last != NULL) {
+            ElfSymbolTable * t = last;
+            last = last->next;
+            stgFree(t->symbols);
+            stgFree(t);
+        }
+
+        {
+            ElfRelocationTable *last = oc->info->relTable;
+            while (last != NULL) {
+                ElfRelocationTable *t = last;
+                last = last->next;
+                stgFree(t);
+            }
+        }
+
+        {
+            ElfRelocationATable *last = oc->info->relaTable;
+            while (last != NULL) {
+                ElfRelocationATable *t = last;
+                last = last->next;
+                stgFree(t);
+            }
+        }
+
+        stgFree(oc->info);
+    }
+}
 
 /*
  * Generic ELF functions
@@ -375,7 +343,7 @@ ocVerifyImage_ELF ( ObjectCode* oc )
    if (ehdr->e_ident[EI_DATA] == ELFDATA2MSB) {
        IF_DEBUG(linker,debugBelch( "Is big-endian\n" ));
    } else {
-       errorBelch("%s: unknown endiannness", oc->fileName);
+       errorBelch("%s: unknown endianness", oc->fileName);
        return 0;
    }
 
@@ -387,23 +355,25 @@ ocVerifyImage_ELF ( ObjectCode* oc )
 
    IF_DEBUG(linker,debugBelch( "Architecture is " ));
    switch (ehdr->e_machine) {
-#ifdef EM_ARM
+#if defined(EM_ARM)
       case EM_ARM:   IF_DEBUG(linker,debugBelch( "arm" )); break;
 #endif
       case EM_386:   IF_DEBUG(linker,debugBelch( "x86" )); break;
-#ifdef EM_SPARC32PLUS
+#if defined(EM_SPARC32PLUS)
       case EM_SPARC32PLUS:
 #endif
       case EM_SPARC: IF_DEBUG(linker,debugBelch( "sparc" )); break;
-#ifdef EM_IA_64
+#if defined(EM_IA_64)
       case EM_IA_64: IF_DEBUG(linker,debugBelch( "ia64" )); break;
 #endif
       case EM_PPC:   IF_DEBUG(linker,debugBelch( "powerpc32" )); break;
+#if defined(EM_PPC64)
       case EM_PPC64: IF_DEBUG(linker,debugBelch( "powerpc64" ));
           errorBelch("%s: RTS linker not implemented on PowerPC 64-bit",
                      oc->fileName);
           return 0;
-#ifdef EM_X86_64
+#endif
+#if defined(EM_X86_64)
       case EM_X86_64: IF_DEBUG(linker,debugBelch( "x86_64" )); break;
 #elif defined(EM_AMD64)
       case EM_AMD64: IF_DEBUG(linker,debugBelch( "amd64" )); break;
@@ -611,13 +581,13 @@ static int getSectionKind_ELF( Elf_Shdr *hdr, int *is_bss )
         /* .rodata-style section */
         return SECTIONKIND_CODE_OR_RODATA;
     }
-#ifndef openbsd_HOST_OS
+#if defined(SHT_INIT_ARRAY)
     if (hdr->sh_type == SHT_INIT_ARRAY
         && (hdr->sh_flags & SHF_ALLOC) && (hdr->sh_flags & SHF_WRITE)) {
        /* .init_array section */
         return SECTIONKIND_INIT_ARRAY;
     }
-#endif /* not OpenBSD */
+#endif /* not SHT_INIT_ARRAY */
     if (hdr->sh_type == SHT_NOBITS
         && (hdr->sh_flags & SHF_ALLOC) && (hdr->sh_flags & SHF_WRITE)) {
         /* .bss-style section */
@@ -817,7 +787,7 @@ ocGetNames_ELF ( ObjectCode* oc )
                isLocal = true;
                isWeak = false;
             } else { /* STB_GLOBAL or STB_WEAK */
-#ifdef ELF_FUNCTION_DESC
+#if defined(ELF_FUNCTION_DESC)
                /* dlsym() and the initialisation table both give us function
                 * descriptors, so to be consistent we store function descriptors
                 * in the symbol table */
@@ -887,21 +857,6 @@ end:
    return result;
 }
 
-#ifdef arm_HOST_ARCH
-// TODO: These likely belong in a library somewhere
-
-// Signed extend a number to a 32-bit int.
-static inline StgInt32 sign_extend32(uint32_t bits, StgWord32 x) {
-    return ((StgInt32) (x << (32 - bits))) >> (32 - bits);
-}
-
-// Does the given signed integer fit into the given bit width?
-static inline StgBool is_int(uint32_t bits, StgInt32 x) {
-    return bits > 32 || (-(1 << (bits-1)) <= x
-                         && x < (1 << (bits-1)));
-}
-#endif
-
 /* Do ELF relocations which lack an explicit addend.  All x86-linux
    and arm-linux relocations appear to be of this form. */
 static int
@@ -945,10 +900,10 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
 #endif
       Elf_Addr  S;
       void*     S_tmp;
-#ifdef i386_HOST_ARCH
+#if defined(i386_HOST_ARCH)
       Elf_Addr  value;
 #endif
-#ifdef arm_HOST_ARCH
+#if defined(arm_HOST_ARCH)
       int is_target_thm=0, T=0;
 #endif
 
@@ -985,16 +940,38 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
          }
          IF_DEBUG(linker,debugBelch( "`%s' resolves to %p\n", symbol, (void*)S ));
 
-#ifdef arm_HOST_ARCH
-         // Thumb instructions have bit 0 of symbol's st_value set
-         is_target_thm = S & 0x1;
-
-         T = sym.st_info & STT_FUNC && is_target_thm;
-
-         // Make sure we clear bit 0. Strictly speaking we should have done
-         // this to st_value above but I believe alignment requirements should
-         // ensure that no instructions start on an odd address
-         S &= ~1;
+#if defined(arm_HOST_ARCH)
+          /*
+           * 4.5.3 Symbol Values
+           *
+           * In addition to the normal rules for symbol values the following
+           * rules shall also apply to symbols of type STT_FUNC:
+           * - If the symbol addresses an ARM instruction, its value is the
+           *   address of the instruction (in a relocatable object, the
+           *   offset of the instruction from the start of the section
+           *   containing it).
+           * - If the symbol addresses a Thumb instruction, its value is the
+           *   address of the instruction with bit zero set (in a relocatable
+           *   object, the section offset with bit zero set).
+           * - For the purposes of relocation the value used shall be the
+           *   address of the instruction (st_value & ~1).
+           *
+           *  Note: This allows a linker to distinguish ARM and Thumb code
+           *        symbols without having to refer to the map. An ARM symbol
+           *        will always have an even value, while a Thumb symbol will
+           *        always have an odd value. However, a linker should strip
+           *        the discriminating bit from the value before using it for
+           *        relocation.
+           *
+           * (source: ELF for the ARM Architecture
+           *          ARM IHI 0044F, current through ABI release 2.10
+           *          24th November 2015)
+           */
+          if(ELF_ST_TYPE(sym.st_info) == STT_FUNC) {
+              is_target_thm = S & 0x1;
+              T = is_target_thm;
+              S &= ~1;
+          }
 #endif
       }
 
@@ -1003,31 +980,32 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
                              (void*)P, (void*)S, (void*)A, reloc_type ));
       checkProddableBlock ( oc, pP, sizeof(Elf_Word) );
 
-#ifdef i386_HOST_ARCH
+#if defined(i386_HOST_ARCH)
       value = S + A;
 #endif
 
       switch (reloc_type) {
 #        ifdef i386_HOST_ARCH
-         case R_386_32:   *pP = value;     break;
-         case R_386_PC32: *pP = value - P; break;
+         case COMPAT_R_386_32:   *pP = value;     break;
+         case COMPAT_R_386_PC32: *pP = value - P; break;
 #        endif
 
 #        ifdef arm_HOST_ARCH
-         case R_ARM_ABS32:
-         case R_ARM_TARGET1:  // Specified by Linux ARM ABI to be equivalent to ABS32
+         case COMPAT_R_ARM_ABS32:
+         // Specified by Linux ARM ABI to be equivalent to ABS32
+         case COMPAT_R_ARM_TARGET1:
             *(Elf32_Word *)P += S;
             *(Elf32_Word *)P |= T;
             break;
 
-         case R_ARM_REL32:
+         case COMPAT_R_ARM_REL32:
             *(Elf32_Word *)P += S;
             *(Elf32_Word *)P |= T;
             *(Elf32_Word *)P -= P;
             break;
 
-         case R_ARM_CALL:
-         case R_ARM_JUMP24:
+         case COMPAT_R_ARM_CALL:
+         case COMPAT_R_ARM_JUMP24:
          {
             // N.B. LLVM's LLD linker's relocation implement is a fantastic
             // resource
@@ -1046,30 +1024,36 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
             StgWord32 result = ((S + imm) | T) - P;
 
             const StgBool overflow = !is_int(26, (StgInt32) result);
-
             // Handle overflow and Thumb interworking
-            const StgBool needs_veneer = (is_target_thm && ELF_R_TYPE(info) == R_ARM_JUMP24) || overflow;
+            const StgBool needs_veneer =
+                (is_target_thm && ELF_R_TYPE(info) == COMPAT_R_ARM_JUMP24)
+                || overflow;
+
             if (needs_veneer) {
                // Generate veneer
-               // The +8 below is to undo the PC-bias compensation done by the object producer
-               SymbolExtra *extra = makeArmSymbolExtra(oc, ELF_R_SYM(info), S+imm+8, 0, is_target_thm);
+               // The +8 below is to undo the PC-bias compensation done by the
+               // object producer
+               SymbolExtra *extra = makeArmSymbolExtra(oc, ELF_R_SYM(info),
+                                                       S+imm+8, 0,
+                                                       is_target_thm);
                // The -8 below is to compensate for PC bias
                result = (StgWord32) ((StgInt32) extra->jumpIsland - P - 8);
                result &= ~1; // Clear thumb indicator bit
                if (!is_int(26, (StgInt32) result)) {
-                  errorBelch("Unable to fixup overflow'd R_ARM_CALL: jump island=%p, reloc=%p\n",
+                  errorBelch("Unable to fixup overflow'd R_ARM_CALL: "
+                             "jump island=%p, reloc=%p\n",
                              (void*) extra->jumpIsland, (void*) P);
                   return 0;
                }
             }
-
             // Update the branch target
             const StgWord32 imm24 = (result & 0x03fffffc) >> 2;
             *word = (*word & ~0x00ffffff)
                   | (imm24 & 0x00ffffff);
 
             // Change the relocated branch into a BLX if necessary
-            const StgBool switch_mode = is_target_thm && (reloc_type == R_ARM_CALL);
+            const StgBool switch_mode =
+                is_target_thm && (reloc_type == COMPAT_R_ARM_CALL);
             if (!needs_veneer && switch_mode) {
                const StgWord32 hBit = (result & 0x2) >> 1;
                // Change instruction to BLX
@@ -1079,8 +1063,8 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
             break;
          }
 
-         case R_ARM_MOVT_ABS:
-         case R_ARM_MOVW_ABS_NC:
+         case COMPAT_R_ARM_MOVT_ABS:
+         case COMPAT_R_ARM_MOVW_ABS_NC:
          {
             StgWord32 *word = (StgWord32 *)P;
             StgWord32 imm12 = *word & 0xfff;
@@ -1088,7 +1072,7 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
             StgInt32 offset = imm4 << 12 | imm12;
             StgWord32 result = (S + offset) | T;
 
-            if (reloc_type == R_ARM_MOVT_ABS)
+            if (reloc_type == COMPAT_R_ARM_MOVT_ABS)
                 result = (result & 0xffff0000) >> 16;
 
             StgWord32 result12 = result & 0xfff;
@@ -1097,8 +1081,8 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
             break;
          }
 
-         case R_ARM_THM_CALL:
-         case R_ARM_THM_JUMP24:
+         case COMPAT_R_ARM_THM_CALL:
+         case COMPAT_R_ARM_THM_JUMP24:
          {
             StgWord16 *upper = (StgWord16 *)P;
             StgWord16 *lower = (StgWord16 *)(P + 2);
@@ -1122,15 +1106,20 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
                imm -= 0x02000000;
 
             offset = ((imm + S) | T) - P;
-            overflow = offset <= (StgWord32)0xff000000 || offset >= (StgWord32)0x01000000;
+            overflow = offset <= (StgWord32)0xff000000
+                    || offset >= (StgWord32)0x01000000;
 
-            if ((!is_target_thm && ELF_R_TYPE(info) == R_ARM_THM_JUMP24) || overflow) {
+            if ((!is_target_thm && ELF_R_TYPE(info) == COMPAT_R_ARM_THM_JUMP24)
+                || overflow) {
                // Generate veneer
-               SymbolExtra *extra = makeArmSymbolExtra(oc, ELF_R_SYM(info), S+imm+4, 1, is_target_thm);
+               SymbolExtra *extra = makeArmSymbolExtra(oc, ELF_R_SYM(info),
+                                                       S+imm+4, 1,
+                                                       is_target_thm);
                offset = (StgWord32) &extra->jumpIsland - P - 4;
                sign = offset >> 31;
                to_thm = 1;
-            } else if (!is_target_thm && ELF_R_TYPE(info) == R_ARM_THM_CALL) {
+            } else if (!is_target_thm
+                       && ELF_R_TYPE(info) == COMPAT_R_ARM_THM_CALL) {
                offset &= ~0x3;
                to_thm = 0;
             }
@@ -1149,8 +1138,8 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
             break;
          }
 
-         case R_ARM_THM_MOVT_ABS:
-         case R_ARM_THM_MOVW_ABS_NC:
+         case COMPAT_R_ARM_THM_MOVT_ABS:
+         case COMPAT_R_ARM_THM_MOVW_ABS_NC:
          {
             StgWord16 *upper = (StgWord16 *)P;
             StgWord16 *lower = (StgWord16 *)(P + 2);
@@ -1161,9 +1150,9 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
 
             offset = (offset ^ 0x8000) - 0x8000; // Sign extend
             offset += S;
-            if (ELF_R_TYPE(info) == R_ARM_THM_MOVW_ABS_NC)
+            if (ELF_R_TYPE(info) == COMPAT_R_ARM_THM_MOVW_ABS_NC)
                    offset |= T;
-            else if (ELF_R_TYPE(info) == R_ARM_THM_MOVT_ABS)
+            else if (ELF_R_TYPE(info) == COMPAT_R_ARM_THM_MOVT_ABS)
                    offset >>= 16;
 
             *upper = ( (*upper & 0xfbf0)
@@ -1175,13 +1164,14 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
             break;
          }
 
-         case R_ARM_THM_JUMP8:
+         case COMPAT_R_ARM_THM_JUMP8:
          {
             StgWord16 *word = (StgWord16 *)P;
             StgWord offset = *word & 0x01fe;
             offset += S - P;
             if (!is_target_thm) {
-               errorBelch("%s: Thumb to ARM transition with JUMP8 relocation not supported\n",
+               errorBelch("%s: Thumb to ARM transition with JUMP8 relocation "
+                          "not supported\n",
                      oc->fileName);
                return 0;
             }
@@ -1191,13 +1181,14 @@ do_Elf_Rel_relocations ( ObjectCode* oc, char* ehdrC,
             break;
          }
 
-         case R_ARM_THM_JUMP11:
+         case COMPAT_R_ARM_THM_JUMP11:
          {
             StgWord16 *word = (StgWord16 *)P;
             StgWord offset = *word & 0x0ffe;
             offset += S - P;
             if (!is_target_thm) {
-               errorBelch("%s: Thumb to ARM transition with JUMP11 relocation not supported\n",
+               errorBelch("%s: Thumb to ARM transition with JUMP11 relocation "
+                          "not supported\n",
                      oc->fileName);
                return 0;
             }
@@ -1237,8 +1228,9 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
 #if defined(SHN_XINDEX)
    Elf_Word* shndx_table = get_shndx_table((Elf_Ehdr*)ehdrC);
 #endif
-#if defined(DEBUG) || defined(sparc_HOST_ARCH) || defined(powerpc_HOST_ARCH) || defined(x86_64_HOST_ARCH)
-   /* This #ifdef only serves to avoid unused-var warnings. */
+#if defined(DEBUG) || defined(sparc_HOST_ARCH) || defined(powerpc_HOST_ARCH) \
+    || defined(x86_64_HOST_ARCH)
+   /* This #if def only serves to avoid unused-var warnings. */
    Elf_Addr targ = (Elf_Addr) oc->sections[target_shndx].start;
 #endif
 
@@ -1255,13 +1247,15 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
    }
 
    for (j = 0; j < nent; j++) {
-#if defined(DEBUG) || defined(sparc_HOST_ARCH) || defined(powerpc_HOST_ARCH) || defined(x86_64_HOST_ARCH)
-      /* This #ifdef only serves to avoid unused-var warnings. */
+#if defined(DEBUG) || defined(sparc_HOST_ARCH) || defined(powerpc_HOST_ARCH) \
+    || defined(x86_64_HOST_ARCH)
+      /* This #if def only serves to avoid unused-var warnings. */
       Elf_Addr  offset = rtab[j].r_offset;
       Elf_Addr  P      = targ + offset;
       Elf_Addr  A      = rtab[j].r_addend;
 #endif
-#if defined(sparc_HOST_ARCH) || defined(powerpc_HOST_ARCH) || defined(x86_64_HOST_ARCH)
+#if defined(sparc_HOST_ARCH) || defined(powerpc_HOST_ARCH) \
+    || defined(x86_64_HOST_ARCH)
       Elf_Addr  value;
 #endif
       Elf_Addr  info   = rtab[j].r_info;
@@ -1296,25 +1290,11 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
 #endif
             S = (Elf_Addr)oc->sections[secno].start
                 + stab[ELF_R_SYM(info)].st_value;
-#ifdef ELF_FUNCTION_DESC
-            /* Make a function descriptor for this function */
-            if (S && ELF_ST_TYPE(sym.st_info) == STT_FUNC) {
-               S = allocateFunctionDesc(S + A);
-               A = 0;
-            }
-#endif
          } else {
             /* No, so look up the name in our global table. */
             symbol = strtab + sym.st_name;
             S_tmp = lookupSymbol_( symbol );
             S = (Elf_Addr)S_tmp;
-
-#ifdef ELF_FUNCTION_DESC
-            /* If a function, already a function descriptor - we would
-               have to copy it to add an offset. */
-            if (S && (ELF_ST_TYPE(sym.st_info) == STT_FUNC) && (A != 0))
-               errorBelch("%s: function %s with addend %p", oc->fileName, symbol, (void *)A);
-#endif
          }
          if (!S) {
            errorBelch("%s: unknown symbol `%s'", oc->fileName, symbol);
@@ -1330,7 +1310,8 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
       checkProddableBlock(oc, (void*)P, sizeof(Elf_Word));
 #endif
 
-#if defined(sparc_HOST_ARCH) || defined(powerpc_HOST_ARCH) || defined(x86_64_HOST_ARCH)
+#if defined(sparc_HOST_ARCH) || defined(powerpc_HOST_ARCH) \
+    || defined(x86_64_HOST_ARCH)
       value = S + A;
 #endif
 
@@ -1439,12 +1420,12 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
             break;
 #        endif
 
-#if x86_64_HOST_ARCH
-      case R_X86_64_64:
+#if defined(x86_64_HOST_ARCH)
+      case COMPAT_R_X86_64_64:
           *(Elf64_Xword *)P = value;
           break;
 
-      case R_X86_64_PC32:
+      case COMPAT_R_X86_64_PC32:
       {
 #if defined(ALWAYS_PIC)
           barf("R_X86_64_PC32 relocation, but ALWAYS_PIC.");
@@ -1468,14 +1449,14 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
           break;
       }
 
-      case R_X86_64_PC64:
+      case COMPAT_R_X86_64_PC64:
       {
           StgInt64 off = value - P;
           *(Elf64_Word *)P = (Elf64_Word)off;
           break;
       }
 
-      case R_X86_64_32:
+      case COMPAT_R_X86_64_32:
 #if defined(ALWAYS_PIC)
           barf("R_X86_64_32 relocation, but ALWAYS_PIC.");
 #else
@@ -1496,7 +1477,7 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
 #endif
           break;
 
-      case R_X86_64_32S:
+      case COMPAT_R_X86_64_32S:
 #if defined(ALWAYS_PIC)
           barf("R_X86_64_32S relocation, but ALWAYS_PIC.");
 #else
@@ -1516,14 +1497,9 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
           *(Elf64_Sword *)P = (Elf64_Sword)value;
 #endif
           break;
-/* These two relocations were introduced in glibc 2.23 and binutils 2.26.
-    But in order to use them the system which compiles the bindist for GHC needs
-    to have glibc >= 2.23. So only use them if they're defined. */
-#if defined(R_X86_64_REX_GOTPCRELX) && defined(R_X86_64_GOTPCRELX)
-      case R_X86_64_REX_GOTPCRELX:
-      case R_X86_64_GOTPCRELX:
-#endif
-      case R_X86_64_GOTPCREL:
+      case COMPAT_R_X86_64_REX_GOTPCRELX:
+      case COMPAT_R_X86_64_GOTPCRELX:
+      case COMPAT_R_X86_64_GOTPCREL:
       {
           StgInt64 gotAddress = (StgInt64) &makeSymbolExtra(oc, ELF_R_SYM(info), S)->addr;
           StgInt64 off = gotAddress + A - P;
@@ -1531,7 +1507,7 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
           break;
       }
 #if defined(dragonfly_HOST_OS)
-      case R_X86_64_GOTTPOFF:
+      case COMPAT_R_X86_64_GOTTPOFF:
       {
 #if defined(ALWAYS_PIC)
           barf("R_X86_64_GOTTPOFF relocation, but ALWAYS_PIC.");
@@ -1550,9 +1526,7 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
       }
 #endif
 
-
-
-      case R_X86_64_PLT32:
+      case COMPAT_R_X86_64_PLT32:
       {
 #if defined(ALWAYS_PIC)
           barf("R_X86_64_PLT32 relocation, but ALWAYS_PIC.");
@@ -1667,7 +1641,7 @@ int ocRunInit_ELF( ObjectCode *oc )
  * PowerPC & X86_64 ELF specifics
  */
 
-#if NEED_SYMBOL_EXTRAS
+#if defined(NEED_SYMBOL_EXTRAS)
 
 int ocAllocateSymbolExtras_ELF( ObjectCode *oc )
 {

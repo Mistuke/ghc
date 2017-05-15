@@ -4,6 +4,7 @@
 -}
 
 {-# LANGUAGE CPP, DeriveDataTypeable, FlexibleContexts #-}
+{-# LANGUAGE NamedFieldPuns #-}
 
 -- | CoreSyn holds all the main data types for use by for the Glasgow Haskell Compiler midsection
 module CoreSyn (
@@ -89,7 +90,7 @@ module CoreSyn (
 
         -- ** Operations on 'CoreRule's
         ruleArity, ruleName, ruleIdName, ruleActivation,
-        setRuleIdName,
+        setRuleIdName, ruleModule,
         isBuiltinRule, isLocalRule, isAutoRule,
 
         -- * Core vectorisation declarations data type
@@ -456,7 +457,8 @@ See #case_invariants#
 
 Note [Levity polymorphism invariants]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The levity-polymorphism invariants are these:
+The levity-polymorphism invariants are these (as per "Levity Polymorphism",
+PLDI '17):
 
 * The type of a term-binder must not be levity-polymorphic,
   unless it is a let(rec)-bound join point
@@ -1246,6 +1248,10 @@ ruleArity (Rule {ru_args = args})      = length args
 ruleName :: CoreRule -> RuleName
 ruleName = ru_name
 
+ruleModule :: CoreRule -> Maybe Module
+ruleModule Rule { ru_origin } = Just ru_origin
+ruleModule BuiltinRule {} = Nothing
+
 ruleActivation :: CoreRule -> Activation
 ruleActivation (BuiltinRule { })       = AlwaysActive
 ruleActivation (Rule { ru_act = act }) = act
@@ -1677,6 +1683,8 @@ ltAlt a1 a2 = (a1 `cmpAlt` a2) == LT
 
 cmpAltCon :: AltCon -> AltCon -> Ordering
 -- ^ Compares 'AltCon's within a single list of alternatives
+-- DEFAULT comes out smallest, so that sorting by AltCon
+-- puts alternatives in the order required by #case_invariants#
 cmpAltCon DEFAULT      DEFAULT     = EQ
 cmpAltCon DEFAULT      _           = LT
 

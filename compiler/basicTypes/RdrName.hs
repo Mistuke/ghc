@@ -34,7 +34,8 @@ module RdrName (
         -- ** Destruction
         rdrNameOcc, rdrNameSpace, demoteRdrName,
         isRdrDataCon, isRdrTyVar, isRdrTc, isQual, isQual_maybe, isUnqual,
-        isOrig, isOrig_maybe, isExact, isExact_maybe, isSrcRdrName,
+        isOrig, isOrig_maybe, isExact, isExact_maybe, isSrcRdrName, isStar,
+        isUniStar,
 
         -- * Local mapping of 'RdrName' to 'Name.Name'
         LocalRdrEnv, emptyLocalRdrEnv, extendLocalRdrEnv, extendLocalRdrEnvList,
@@ -257,6 +258,10 @@ isExact _         = False
 isExact_maybe :: RdrName -> Maybe Name
 isExact_maybe (Exact n) = Just n
 isExact_maybe _         = Nothing
+
+isStar, isUniStar :: RdrName -> Bool
+isStar     = (fsLit "*" ==) . occNameFS . rdrNameOcc
+isUniStar = (fsLit "★" ==) . occNameFS . rdrNameOcc
 
 {-
 ************************************************************************
@@ -483,7 +488,7 @@ plusParent p1 p2@(FldParent _ _) = hasParent p2 p1
 plusParent _ _                   = NoParent
 
 hasParent :: Parent -> Parent -> Parent
-#ifdef DEBUG
+#if defined(DEBUG)
 hasParent p NoParent = p
 hasParent p p'
   | p /= p' = pprPanic "hasParent" (ppr p <+> ppr p')  -- Parents should agree

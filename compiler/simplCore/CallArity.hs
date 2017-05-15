@@ -16,7 +16,6 @@ import CoreSyn
 import Id
 import CoreArity ( typeArity )
 import CoreUtils ( exprIsCheap, exprIsTrivial )
---import Outputable
 import UnVarGraph
 import Demand
 
@@ -26,7 +25,7 @@ import Control.Arrow ( first, second )
 {-
 %************************************************************************
 %*                                                                      *
-              Call Arity Analyis
+              Call Arity Analysis
 %*                                                                      *
 %************************************************************************
 
@@ -76,7 +75,7 @@ correct.
 What we want to know from an expression
 ---------------------------------------
 
-In order to obtain that information for variables, we analyize expression and
+In order to obtain that information for variables, we analyze expression and
 obtain bits of information:
 
  I.  The arity analysis:
@@ -95,7 +94,7 @@ For efficiency reasons, we gather this information only for a set of
 The two analysis are not completely independent, as a higher arity can improve
 the information about what variables are being called once or multiple times.
 
-Note [Analysis I: The arity analyis]
+Note [Analysis I: The arity analysis]
 ------------------------------------
 
 The arity analysis is quite straight forward: The information about an
@@ -104,7 +103,7 @@ expression is an
 where absent variables are bound to Nothing and otherwise to a lower bound to
 their arity.
 
-When we analyize an expression, we analyize it with a given context arity.
+When we analyze an expression, we analyze it with a given context arity.
 Lambdas decrease and applications increase the incoming arity. Analysizing a
 variable will put that arity in the environment. In lets or cases all the
 results from the various subexpressions are lubed, which takes the point-wise
@@ -406,6 +405,26 @@ In practice, there are thunks that do a just little work, such as
 pattern-matching on a variable, and the benefits of eta-expansion likely
 oughtweigh the cost of doing that repeatedly. Therefore, this implementation of
 Call Arity considers everything that is not cheap (`exprIsCheap`) as a thunk.
+
+Note [Call Arity and Join Points]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The Call Arity analysis does not care about join points, and treats them just
+like normal functions. This is ok.
+
+The analysis *could* make use of the fact that join points are always evaluated
+in the same context as the join-binding they are defined in and are always
+one-shot, and handle join points separately, as suggested in
+https://ghc.haskell.org/trac/ghc/ticket/13479#comment:10.
+This *might* be more efficient (for example, join points would not have to be
+considered interesting variables), but it would also add redundant code. So for
+now we do not do that.
+
+The simplifier never eta-expands join points (it instead pushes extra arguments from
+an eta-expanded context into the join point’s RHS), so the call arity
+annotation on join points is not actually used. As it would be equally valid
+(though less efficient) to eta-expand join points, this is the simplifier's
+choice, and hence Call Arity sets the call arity for join points as well.
 -}
 
 -- Main entry point
@@ -628,7 +647,9 @@ callArityBind boring_vars ae_body int b@(Rec binds)
                           | safe_arity == 0 = ae_rhs -- If it is not a function, its body is evaluated only once
                           | otherwise       = calledMultipleTimes ae_rhs
 
-              in (True, (i `setIdCallArity` trimmed_arity, Just (called_once, new_arity, ae_rhs'), rhs'))
+                  i' = i `setIdCallArity` trimmed_arity
+
+              in (True, (i', Just (called_once, new_arity, ae_rhs'), rhs'))
           where
             -- See Note [Taking boring variables into account]
             (new_arity, called_once) | i `elemVarSet` boring_vars = (0, False)
@@ -687,7 +708,7 @@ trimArity v a = minimum [a, max_arity_by_type, max_arity_by_strsig]
 ---------------------------------------
 
 -- Result type for the two analyses.
--- See Note [Analysis I: The arity analyis]
+-- See Note [Analysis I: The arity analysis]
 -- and Note [Analysis II: The Co-Called analysis]
 type CallArityRes = (UnVarGraph, VarEnv Arity)
 

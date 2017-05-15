@@ -26,6 +26,8 @@ module SysTools (
 
         linkDynLib,
 
+        askLd,
+
         touch,                  -- String -> String -> IO ()
         copy,
         copyWithHeader,
@@ -83,7 +85,12 @@ import System.Win32.File (createFile,closeHandle, gENERIC_READ, fILE_SHARE_READ,
 import System.Win32.DLL (loadLibrary, getProcAddress)
 #endif
 
-#ifdef mingw32_HOST_OS
+import System.Process
+import Control.Concurrent
+import FastString
+import SrcLoc           ( SrcLoc, mkSrcLoc, noSrcSpan, mkSrcSpan )
+
+#if defined(mingw32_HOST_OS)
 # if defined(i386_HOST_ARCH)
 #  define WINDOWS_CCONV stdcall
 # elif defined(x86_64_HOST_ARCH)
@@ -794,6 +801,31 @@ foreign import WINDOWS_CCONV unsafe "dynamic"
   makeGetFinalPathNameByHandle :: FunPtr GetFinalPath -> GetFinalPath
 #else
 getBaseDir = return Nothing
+#endif
+
+#if defined(mingw32_HOST_OS)
+foreign import ccall unsafe "_getpid" getProcessID :: IO Int -- relies on Int == Int32 on Windows
+#else
+getProcessID :: IO Int
+getProcessID = System.Posix.Internals.c_getpid >>= return . fromIntegral
+#endif
+
+-- Divvy up text stream into lines, taking platform dependent
+-- line termination into account.
+linesPlatform :: String -> [String]
+#if !defined(mingw32_HOST_OS)
+linesPlatform ls = lines ls
+#else
+linesPlatform "" = []
+linesPlatform xs =
+  case lineBreak xs of
+    (as,xs1) -> as : linesPlatform xs1
+  where
+   lineBreak "" = ("","")
+   lineBreak ('\r':'\n':xs) = ([],xs)
+   lineBreak ('\n':xs) = ([],xs)
+   lineBreak (x:xs) = let (as,bs) = lineBreak xs in (x:as,bs)
+
 #endif
 
 {-

@@ -419,11 +419,11 @@ enclosed between ``+RTS ... -RTS`` as usual):
 .. rts-flag:: -po ⟨stem⟩
 
     The :rts-flag:`-po` option overrides the stem used to form the output file
-    paths for the cost-center profiler (see :rts-flag:`-p` and :rts-flag:`-pj`
+    paths for the cost-centre profiler (see :rts-flag:`-p` and :rts-flag:`-pj`
     flags above) and heap profiler (see :rts-flag:`-h`).
 
     For instance, running a program with ``+RTS -h -p -pohello-world`` would
-    produce a heap profile named :file:`hello-world.hp` and a cost-center
+    produce a heap profile named :file:`hello-world.hp` and a cost-centre
     profile named :file:`hello-world.prof`.
 
 .. rts-flag:: -V <secs>
@@ -490,7 +490,7 @@ tree-like object (which we'll call a "cost-centre stack" here) with the
 following properties,
 
 ``id`` (integral number)
-    The ``id`` of a cost-center listed in the ``cost_centres`` list.
+    The ``id`` of a cost-centre listed in the ``cost_centres`` list.
 ``entries`` (integral number)
     How many times was this cost-centre entered?
 ``ticks`` (integral number)
@@ -1292,7 +1292,8 @@ case :file:`Recip.tix`, which contains the coverage data for this run of the
 program. The program may be run multiple times (e.g. with different test
 data), and the coverage data from the separate runs is accumulated in
 the ``.tix`` file. To reset the coverage data and start again, just
-remove the ``.tix`` file.
+remove the ``.tix`` file.  You can control where the ``.tix`` file
+is generated using the environment variable :envvar:`HPCTIXFILE`.
 
 Having run the program, we can generate a textual summary of coverage:
 
@@ -1532,8 +1533,10 @@ Caveats and Shortcomings of Haskell Program Coverage
 
 HPC does not attempt to lock the ``.tix`` file, so multiple concurrently
 running binaries in the same directory will exhibit a race condition.
-There is no way to change the name of the ``.tix`` file generated, apart
-from renaming the binary. HPC does not work with GHCi.
+At compile time, there is no way to change the name of the ``.tix`` file generated;
+at runtime, the name of the generated ``.tix`` file can be changed
+using :envvar:`HPCTIXFILE`; the name of the ``.tix`` file
+will also change if you rename the binary.  HPC does not work with GHCi.
 
 .. _ticky-ticky:
 

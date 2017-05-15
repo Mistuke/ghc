@@ -219,6 +219,7 @@ void setWin32ProgArgv(int argc, wchar_t *argv[]);
 #endif
 
 void DLL_IMPORT_RTS stackOverflow(StgTSO* tso);
+void DLL_IMPORT_RTS reportHeapOverflow(void);
 
 void DLL_IMPORT_RTS stg_exit(int n) GNU_ATTRIBUTE(__noreturn__);
 

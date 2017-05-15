@@ -17,6 +17,7 @@ import TcFlatten
 import TcUnify( canSolveByUnification )
 import VarSet
 import Type
+import Kind( isConstraintKind )
 import InstEnv( DFunInstType, lookupInstEnv, instanceDFunId )
 import CoAxiom( sfInteractTop, sfInteractInert )
 
@@ -31,7 +32,7 @@ import PrelNames ( knownNatClassName, knownSymbolClassName,
                    hasFieldClassName,
                    heqTyConKey, ipClassKey )
 import TysWiredIn ( typeNatKind, typeSymbolKind, heqDataCon,
-                    coercibleDataCon )
+                    coercibleDataCon, constraintKindTyCon )
 import TysPrim    ( eqPrimTyCon, eqReprPrimTyCon )
 import Id( idType, isNaughtyRecordSelector )
 import CoAxiom ( TypeEqn, CoAxiom(..), CoAxBranch(..), fromBranches )
@@ -1076,7 +1077,7 @@ f2 :: (?x :: Int, ?x :: Char) => Int
 f2 = ?x
 
 Both of these are actually wrong:  when we try to use either one,
-we'll get two incompatible wnated constraints (?x :: Int, ?x :: Char),
+we'll get two incompatible wanted constraints (?x :: Int, ?x :: Char),
 which would lead to an error.
 
 I can think of two ways to fix this:
@@ -2405,6 +2406,7 @@ matchTypeable clas [k,t]  -- clas = Typeable
   -- Now cases that do work
   | k `eqType` typeNatKind                 = doTyLit knownNatClassName         t
   | k `eqType` typeSymbolKind              = doTyLit knownSymbolClassName      t
+  | isConstraintKind t                     = doTyConApp clas t constraintKindTyCon []
   | Just (arg,ret) <- splitFunTy_maybe t   = doFunTy    clas t arg ret
   | Just (tc, ks) <- splitTyConApp_maybe t -- See Note [Typeable (T a b c)]
   , onlyNamedBndrsApplied tc ks            = doTyConApp clas t tc ks

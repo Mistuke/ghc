@@ -9,13 +9,11 @@ module Cmm (
      CmmBlock,
      RawCmmDecl, RawCmmGroup,
      Section(..), SectionType(..), CmmStatics(..), CmmStatic(..),
+     isSecConstant,
 
      -- ** Blocks containing lists
      GenBasicBlock(..), blockId,
      ListGraph(..), pprBBlock,
-
-     -- * Cmm graphs
-     CmmReplGraph, GenCmmReplGraph, CmmFwdRewrite, CmmBwdRewrite,
 
      -- * Info Tables
      CmmTopInfo(..), CmmStackInfo(..), CmmInfoTable(..), topInfoTable,
@@ -33,7 +31,6 @@ import BlockId
 import CmmNode
 import SMRep
 import CmmExpr
-import UniqSupply
 import Compiler.Hoopl
 import Outputable
 
@@ -105,11 +102,6 @@ type CmmGraph = GenCmmGraph CmmNode
 data GenCmmGraph n = CmmGraph { g_entry :: BlockId, g_graph :: Graph n C C }
 type CmmBlock = Block CmmNode C C
 
-type CmmReplGraph e x = GenCmmReplGraph CmmNode e x
-type GenCmmReplGraph n e x = UniqSM (Maybe (Graph n e x))
-type CmmFwdRewrite f = FwdRewrite UniqSM CmmNode f
-type CmmBwdRewrite f = BwdRewrite UniqSM CmmNode f
-
 -----------------------------------------------------------------------------
 --     Info Tables
 -----------------------------------------------------------------------------
@@ -175,6 +167,18 @@ data SectionType
   | CString
   | OtherSection String
   deriving (Show)
+
+-- | Should a data in this section be considered constant
+isSecConstant :: Section -> Bool
+isSecConstant (Section t _) = case t of
+    Text                    -> True
+    ReadOnlyData            -> True
+    RelocatableReadOnlyData -> True
+    ReadOnlyData16          -> True
+    CString                 -> True
+    Data                    -> False
+    UninitialisedData       -> False
+    (OtherSection _)        -> False
 
 data Section = Section SectionType CLabel
 

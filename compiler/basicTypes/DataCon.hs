@@ -28,8 +28,9 @@ module DataCon (
 
         -- ** Type deconstruction
         dataConRepType, dataConSig, dataConInstSig, dataConFullSig,
-        dataConName, dataConIdentity, dataConTag, dataConTyCon,
-        dataConOrigTyCon, dataConUserType,
+        dataConName, dataConIdentity, dataConTag, dataConTagZ,
+        dataConTyCon, dataConOrigTyCon,
+        dataConUserType,
         dataConUnivTyVars, dataConUnivTyVarBinders,
         dataConExTyVars, dataConExTyVarBinders,
         dataConAllTyVars,
@@ -232,7 +233,7 @@ It's a flaw in the language.
         it separately in the type checker on occurrences of a
         constructor, either in an expression or in a pattern.
 
-        [May 2003: actually I think this decision could evasily be
+        [May 2003: actually I think this decision could easily be
         reversed now, and probably should be.  Generics could be
         disabled for types with a stupid context; record updates now
         (H98) needs the context too; etc.  It's an unforced change, so
@@ -860,6 +861,9 @@ dataConName = dcName
 -- | The tag used for ordering 'DataCon's
 dataConTag :: DataCon -> ConTag
 dataConTag  = dcTag
+
+dataConTagZ :: DataCon -> ConTagZ
+dataConTagZ con = dataConTag con - fIRST_TAG
 
 -- | The type constructor that we are building via this data constructor
 dataConTyCon :: DataCon -> TyCon

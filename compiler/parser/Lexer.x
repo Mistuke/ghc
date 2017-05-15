@@ -114,7 +114,8 @@ import DynFlags
 -- compiler/basicTypes
 import SrcLoc
 import Module
-import BasicTypes     ( InlineSpec(..), RuleMatchInfo(..), FractionalLit(..),
+import BasicTypes     ( InlineSpec(..), RuleMatchInfo(..),
+                        IntegralLit(..), FractionalLit(..),
                         SourceText(..) )
 
 -- compiler/parser
@@ -707,7 +708,7 @@ data Token
 
   | ITchar     SourceText Char       -- Note [Literal source text] in BasicTypes
   | ITstring   SourceText FastString -- Note [Literal source text] in BasicTypes
-  | ITinteger  SourceText Integer    -- Note [Literal source text] in BasicTypes
+  | ITinteger  IntegralLit           -- Note [Literal source text] in BasicTypes
   | ITrational FractionalLit
 
   | ITprimchar   SourceText Char     -- Note [Literal source text] in BasicTypes
@@ -1276,15 +1277,21 @@ tok_integral itint transint transbuf translen (radix,char_to_int) span buf len
        $! transint $ parseUnsignedInteger
        (offsetBytes transbuf buf) (subtract translen len) radix char_to_int
 
--- some conveniences for use with tok_integral
 tok_num :: (Integer -> Integer)
-        -> Int -> Int
-        -> (Integer, (Char->Int)) -> Action
-tok_num = tok_integral ITinteger
+                        -> Int -> Int
+                        -> (Integer, (Char->Int)) -> Action
+tok_num = tok_integral itint
+  where
+    itint st@(SourceText ('-':str)) val = ITinteger (((IL $! st) $! True)      $! val)
+    itint st@(SourceText      str ) val = ITinteger (((IL $! st) $! False)     $! val)
+    itint st@(NoSourceText        ) val = ITinteger (((IL $! st) $! (val < 0)) $! val)
+
 tok_primint :: (Integer -> Integer)
             -> Int -> Int
             -> (Integer, (Char->Int)) -> Action
 tok_primint = tok_integral ITprimint
+
+
 tok_primword :: Int -> Int
              -> (Integer, (Char->Int)) -> Action
 tok_primword = tok_integral ITprimword positive
@@ -1299,12 +1306,14 @@ hexadecimal = (16,hexDigit)
 
 -- readRational can understand negative rationals, exponents, everything.
 tok_float, tok_primfloat, tok_primdouble :: String -> Token
-tok_float        str = ITrational   $! readFractionalLit str
-tok_primfloat    str = ITprimfloat  $! readFractionalLit str
-tok_primdouble   str = ITprimdouble $! readFractionalLit str
+tok_float      str  = ITrational   $! readFractionalLit str
+tok_primfloat  str  = ITprimfloat  $! readFractionalLit str
+tok_primdouble str  = ITprimdouble $! readFractionalLit str
 
 readFractionalLit :: String -> FractionalLit
-readFractionalLit str = (FL $! str) $! readRational str
+readFractionalLit str = ((FL $! (SourceText str)) $! is_neg) $! readRational str
+                        where is_neg = case str of ('-':_) -> True
+                                                   _       -> False
 
 -- -----------------------------------------------------------------------------
 -- Layout processing
@@ -2405,14 +2414,18 @@ srcParseErr options buf len
               $$ ppWhen (not th_enabled && token == "$") -- #7396
                         (text "Perhaps you intended to use TemplateHaskell")
               $$ ppWhen (token == "<-")
-                        (text "Perhaps this statement should be within a 'do' block?")
+                        (if mdoInLast100
+                           then text "Perhaps you intended to use RecursiveDo"
+                           else text "Perhaps this statement should be within a 'do' block?")
               $$ ppWhen (token == "=")
                         (text "Perhaps you need a 'let' in a 'do' block?"
                          $$ text "e.g. 'let x = 5' instead of 'x = 5'")
-              $$ ppWhen (not ps_enabled && pattern == "pattern") -- #12429
+              $$ ppWhen (not ps_enabled && pattern == "pattern ") -- #12429
                         (text "Perhaps you intended to use PatternSynonyms")
   where token = lexemeToString (offsetBytes (-len) buf) len
-        pattern = lexemeToString (offsetBytes (-len - 8) buf) 7
+        pattern = decodePrevNChars 8 buf
+        last100 = decodePrevNChars 100 buf
+        mdoInLast100 = "mdo" `isInfixOf` last100
         th_enabled = extopt LangExt.TemplateHaskell options
         ps_enabled = extopt LangExt.PatternSynonyms options
 
@@ -2511,7 +2524,7 @@ alternativeLayoutRuleToken t
              (_, ALRLayout _ col : _ls, Just expectingOCurly)
               | (thisCol > col) ||
                 (thisCol == col &&
-                 isNonDecreasingIntentation expectingOCurly) ->
+                 isNonDecreasingIndentation expectingOCurly) ->
                  do setAlrExpectingOCurly Nothing
                     setALRContext (ALRLayout expectingOCurly thisCol : context)
                     setNextToken t
@@ -2655,9 +2668,9 @@ isALRclose ITccurly = True
 isALRclose ITcubxparen = True
 isALRclose _        = False
 
-isNonDecreasingIntentation :: ALRLayout -> Bool
-isNonDecreasingIntentation ALRLayoutDo = True
-isNonDecreasingIntentation _           = False
+isNonDecreasingIndentation :: ALRLayout -> Bool
+isNonDecreasingIndentation ALRLayoutDo = True
+isNonDecreasingIndentation _           = False
 
 containsCommas :: Token -> Bool
 containsCommas IToparen = True

@@ -11,8 +11,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#ifndef SM_GC_H
-#define SM_GC_H
+#pragma once
 
 #include "BeginPrivate.h"
 
@@ -36,7 +35,7 @@ extern StgPtr mark_sp;
 
 extern bool work_stealing;
 
-#ifdef DEBUG
+#if defined(DEBUG)
 extern uint32_t mutlist_MUTVARS, mutlist_MUTARRS, mutlist_MVARS, mutlist_OTHERS,
     mutlist_TVAR,
     mutlist_TVAR_WATCH_QUEUE,
@@ -62,5 +61,3 @@ void releaseGCThreads (Capability *cap, bool idle_cap[]);
 #define WORK_UNIT_WORDS 128
 
 #include "EndPrivate.h"
-
-#endif /* SM_GC_H */

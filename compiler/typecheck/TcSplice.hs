@@ -57,6 +57,8 @@ import HscTypes
 import Convert
 import RnExpr
 import RnEnv
+import RnUtils ( HsDocContext(..) )
+import RnFixity ( lookupFixityRn_help )
 import RnTypes
 import TcHsSyn
 import TcSimplify
@@ -572,8 +574,8 @@ runAnnotation target expr = do
                 -- and hence ensures the appropriate dictionary is bound by const_binds
               ; wrapper <- instCall AnnOrigin [expr_ty] [mkClassPred data_class [expr_ty]]
               ; let specialised_to_annotation_wrapper_expr
-                      = L loc (HsWrap wrapper
-                                      (HsVar (L loc to_annotation_wrapper_id)))
+                      = L loc (mkHsWrap wrapper
+                                        (HsVar (L loc to_annotation_wrapper_id)))
               ; return (L loc (HsApp specialised_to_annotation_wrapper_expr expr')) }
 
     -- Run the appropriately wrapped expression to get the value of
@@ -862,13 +864,7 @@ instance TH.Quasi TcM where
         -- For qRecover, discard error messages if
         -- the recovery action is chosen.  Otherwise
         -- we'll only fail higher up.
-  qRecover recover main = do { (msgs, mb_res) <- tryTcErrs main
-                             ; case mb_res of
-                                 Just val -> do { addMessages msgs      -- There might be warnings
-                                                ; return val }
-                                 Nothing  -> recover                    -- Discard all msgs
-                          }
-
+  qRecover recover main = tryTcDiscardingErrs recover main
   qRunIO io = liftIO io
 
   qAddDependentFile fp = do
@@ -1626,6 +1622,7 @@ reifyFamilyInstance :: [Bool] -- True <=> the corresponding tv is poly-kinded
                     -> FamInst -> TcM TH.Dec
 reifyFamilyInstance is_poly_tvs inst@(FamInst { fi_flavor = flavor
                                               , fi_fam = fam
+                                              , fi_tvs = fam_tvs
                                               , fi_tys = lhs
                                               , fi_rhs = rhs })
   = case flavor of
@@ -1640,7 +1637,7 @@ reifyFamilyInstance is_poly_tvs inst@(FamInst { fi_flavor = flavor
                                    (TH.TySynEqn annot_th_lhs th_rhs)) }
 
       DataFamilyInst rep_tc ->
-        do { let tvs = tyConTyVars rep_tc
+        do { let rep_tvs = tyConTyVars rep_tc
                  fam' = reifyName fam
 
                    -- eta-expand lhs types, because sometimes data/newtype
@@ -1648,12 +1645,14 @@ reifyFamilyInstance is_poly_tvs inst@(FamInst { fi_flavor = flavor
                    -- See Note [Eta reduction for data family axioms]
                    -- in TcInstDcls
                  (_rep_tc, rep_tc_args) = splitTyConApp rhs
-                 etad_tyvars            = dropList rep_tc_args tvs
-                 eta_expanded_lhs = lhs `chkAppend` mkTyVarTys etad_tyvars
-                 dataCons               = tyConDataCons rep_tc
+                 etad_tyvars            = dropList rep_tc_args rep_tvs
+                 etad_tys               = mkTyVarTys etad_tyvars
+                 eta_expanded_tvs = mkTyVarTys fam_tvs `chkAppend` etad_tys
+                 eta_expanded_lhs = lhs `chkAppend` etad_tys
+                 dataCons         = tyConDataCons rep_tc
                  -- see Note [Reifying GADT data constructors]
                  isGadt   = any (not . null . dataConEqSpec) dataCons
-           ; cons <- mapM (reifyDataCon isGadt (mkTyVarTys tvs)) dataCons
+           ; cons <- mapM (reifyDataCon isGadt eta_expanded_tvs) dataCons
            ; let types_only = filterOutInvisibleTypes fam_tc eta_expanded_lhs
            ; th_tys <- reifyTypes types_only
            ; annot_th_tys <- zipWith3M annotThType is_poly_tvs types_only th_tys

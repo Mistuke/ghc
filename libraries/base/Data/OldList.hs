@@ -1,5 +1,6 @@
 {-# LANGUAGE Trustworthy #-}
-{-# LANGUAGE CPP, NoImplicitPrelude, ScopedTypeVariables, MagicHash #-}
+{-# LANGUAGE CPP, NoImplicitPrelude, ScopedTypeVariables,
+             MagicHash, BangPatterns #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -275,7 +276,7 @@ findIndex p     = listToMaybe . findIndices p
 -- | The 'findIndices' function extends 'findIndex', by returning the
 -- indices of all elements satisfying the predicate, in ascending order.
 findIndices      :: (a -> Bool) -> [a] -> [Int]
-#ifdef USE_REPORT_PRELUDE
+#if defined(USE_REPORT_PRELUDE)
 findIndices p xs = [ i | (x,i) <- zip xs [0..], p x]
 #else
 -- Efficient definition, adapted from Data.Sequence
@@ -345,7 +346,7 @@ nub                     =  nubBy (==)
 -- user-supplied equality predicate instead of the overloaded '=='
 -- function.
 nubBy                   :: (a -> a -> Bool) -> [a] -> [a]
-#ifdef USE_REPORT_PRELUDE
+#if defined(USE_REPORT_PRELUDE)
 nubBy eq []             =  []
 nubBy eq (x:xs)         =  x : nubBy eq (filter (\ y -> not (eq x y)) xs)
 #else
@@ -823,7 +824,7 @@ sort :: (Ord a) => [a] -> [a]
 -- | The 'sortBy' function is the non-overloaded version of 'sort'.
 sortBy :: (a -> a -> Ordering) -> [a] -> [a]
 
-#ifdef USE_REPORT_PRELUDE
+#if defined(USE_REPORT_PRELUDE)
 sort = sortBy compare
 sortBy cmp = foldr (insertBy cmp) []
 #else
@@ -854,12 +855,14 @@ sortBy cmp = mergeAll . sequences
 
     ascending a as (b:bs)
       | a `cmp` b /= GT = ascending b (\ys -> as (a:ys)) bs
-    ascending a as bs   = as [a]: sequences bs
+    ascending a as bs   = let !x = as [a]
+                          in x : sequences bs
 
     mergeAll [x] = x
     mergeAll xs  = mergeAll (mergePairs xs)
 
-    mergePairs (a:b:xs) = merge a b: mergePairs xs
+    mergePairs (a:b:xs) = let !x = merge a b
+                          in x : mergePairs xs
     mergePairs xs       = xs
 
     merge as@(a:as') bs@(b:bs')
@@ -1080,7 +1083,7 @@ lines s                 =  cons (case break (== '\n') s of
 -- | 'unlines' is an inverse operation to 'lines'.
 -- It joins lines, after appending a terminating newline to each.
 unlines                 :: [String] -> String
-#ifdef USE_REPORT_PRELUDE
+#if defined(USE_REPORT_PRELUDE)
 unlines                 =  concatMap (++ "\n")
 #else
 -- HBC version (stolen)
@@ -1115,7 +1118,7 @@ wordsFB c n = go
 -- | 'unwords' is an inverse operation to 'words'.
 -- It joins words with separating spaces.
 unwords                 :: [String] -> String
-#ifdef USE_REPORT_PRELUDE
+#if defined(USE_REPORT_PRELUDE)
 unwords []              =  ""
 unwords ws              =  foldr1 (\w s -> w ++ ' ':s) ws
 #else

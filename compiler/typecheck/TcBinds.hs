@@ -371,7 +371,7 @@ tcLocalBinds (HsIPBinds (IPBinds ip_binds _)) thing_inside
 
     -- Coerces a `t` into a dictionry for `IP "x" t`.
     -- co : t -> IP "x" t
-    toDict ipClass x ty = HsWrap $ mkWpCastR $
+    toDict ipClass x ty = mkHsWrap $ mkWpCastR $
                           wrapIP $ mkClassPred ipClass [x,ty]
 
 {- Note [Implicit parameter untouchables]
@@ -552,8 +552,8 @@ type BKey = Int -- Just number off the bindings
 mkEdges :: TcSigFun -> LHsBinds Name -> [Node BKey (LHsBind Name)]
 -- See Note [Polymorphic recursion] in HsBinds.
 mkEdges sig_fn binds
-  = [ (bind, key, [key | n <- nonDetEltsUniqSet (bind_fvs (unLoc bind)),
-                         Just key <- [lookupNameEnv key_map n], no_sig n ])
+  = [ DigraphNode bind key [key | n <- nonDetEltsUniqSet (bind_fvs (unLoc bind)),
+                         Just key <- [lookupNameEnv key_map n], no_sig n ]
     | (bind, key) <- keyd_binds
     ]
     -- It's OK to use nonDetEltsUFM here as stronglyConnCompFromEdgedVertices
@@ -840,7 +840,7 @@ mkExport prag_fn qtvs theta
 
         ; wrap <- if sel_poly_ty `eqType` poly_ty  -- NB: eqType ignores visibility
                   then return idHsWrapper  -- Fast path; also avoids complaint when we infer
-                                           -- an ambiguouse type and have AllowAmbiguousType
+                                           -- an ambiguous type and have AllowAmbiguousType
                                            -- e..g infer  x :: forall a. F a -> Int
                   else addErrCtxtM (mk_impedance_match_msg mono_info sel_poly_ty poly_ty) $
                        tcSubType_NC sig_ctxt sel_poly_ty poly_ty
@@ -921,7 +921,8 @@ chooseInferredQuantifiers inferred_theta tau_tvs qtvs
        ; let free_tvs = closeOverKinds (tyCoVarsOfTypes annotated_theta
                                         `unionVarSet` tau_tvs)
        ; traceTc "ciq" (vcat [ ppr sig, ppr annotated_theta, ppr free_tvs])
-       ; return (mk_binders free_tvs, annotated_theta) }
+       ; psig_qtvs <- mk_psig_qtvs annotated_tvs
+       ; return (mk_final_qtvs psig_qtvs free_tvs, annotated_theta) }
 
   | Just wc_var <- wcx
   = do { annotated_theta <- zonkTcTypes annotated_theta
@@ -930,7 +931,11 @@ chooseInferredQuantifiers inferred_theta tau_tvs qtvs
                           -- Omitting this caused #12844
              seed_tvs = tyCoVarsOfTypes annotated_theta  -- These are put there
                         `unionVarSet` tau_tvs            --       by the user
-             my_theta = pickCapturedPreds free_tvs inferred_theta
+
+       ; psig_qtvs <- mk_psig_qtvs annotated_tvs
+       ; let my_qtvs  = mk_final_qtvs psig_qtvs free_tvs
+             keep_me  = psig_qtvs `unionVarSet` free_tvs
+             my_theta = pickCapturedPreds keep_me inferred_theta
 
        -- Report the inferred constraints for an extra-constraints wildcard/hole as
        -- an error message, unless the PartialTypeSignatures flag is enabled. In this
@@ -946,24 +951,29 @@ chooseInferredQuantifiers inferred_theta tau_tvs qtvs
                  , ppr annotated_theta, ppr inferred_theta
                  , ppr inferred_diff ]
 
-       ; return (mk_binders free_tvs, my_theta) }
+       ; return (my_qtvs, my_theta) }
 
   | otherwise  -- A complete type signature is dealt with in mkInferredPolyId
   = pprPanic "chooseInferredQuantifiers" (ppr sig)
 
   where
-    spec_tv_set = mkVarSet $ map snd annotated_tvs
-    mk_binders free_tvs
+    mk_final_qtvs psig_qtvs free_tvs
       = [ mkTyVarBinder vis tv
-        | tv <- qtvs
-        , tv `elemVarSet` free_tvs
-        , let vis | tv `elemVarSet` spec_tv_set = Specified
-                  | otherwise                   = Inferred ]
-                          -- Pulling from qtvs maintains original order
+        | tv <- qtvs -- Pulling from qtvs maintains original order
+        , tv `elemVarSet` keep_me
+        , let vis | tv `elemVarSet` psig_qtvs = Specified
+                  | otherwise                 = Inferred ]
+      where
+        keep_me = free_tvs `unionVarSet` psig_qtvs
 
     mk_ctuple [pred] = return pred
     mk_ctuple preds  = do { tc <- tcLookupTyCon (cTupleTyConName (length preds))
                           ; return (mkTyConApp tc preds) }
+
+    mk_psig_qtvs :: [(Name,TcTyVar)] -> TcM TcTyVarSet
+    mk_psig_qtvs annotated_tvs
+       = do { psig_qtvs <- mapM (zonkTcTyVarToTyVar . snd) annotated_tvs
+            ; return (mkVarSet psig_qtvs) }
 
 mk_impedance_match_msg :: MonoBindInfo
                        -> TcType -> TcType
@@ -1641,12 +1651,9 @@ decideGeneralisationPlan dflags lbinds closed sig_fn
     restricted (VarBind { var_id = v })                  = no_sig v
     restricted (FunBind { fun_id = v, fun_matches = m }) = restricted_match m
                                                            && no_sig (unLoc v)
-    restricted (PatSynBind {}) = panic "isRestrictedGroup/unrestricted PatSynBind"
-    restricted (AbsBinds {}) = panic "isRestrictedGroup/unrestricted AbsBinds"
-    restricted (AbsBindsSig {}) = panic "isRestrictedGroup/unrestricted AbsBindsSig"
+    restricted b = pprPanic "isRestrictedGroup/unrestricted" (ppr b)
 
-    restricted_match (MG { mg_alts = L _ (L _ (Match _ [] _ _) : _ )}) = True
-    restricted_match _                                                 = False
+    restricted_match mg = matchGroupArity mg == 0
         -- No args => like a pattern binding
         -- Some args => a function binding
 
