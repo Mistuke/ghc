@@ -358,7 +358,19 @@ Library
             GHC.IO.Encoding.CodePage.Table
             GHC.Conc.Windows
             GHC.Windows
+            GHC.Event.Windows
+            GHC.Event.Windows.Clock
+            GHC.Event.Windows.FFI
+            GHC.Event.Windows.Thread
+            GHC.IO.Windows.Handle
+            GHC.IO.Windows.Encoding
+            System.IO.IOCP
         other-modules:
+            GHC.Event.Arr
+            GHC.Event.Array
+            GHC.Event.IntTable
+            GHC.Event.PSQ
+            GHC.Event.Unique
             System.CPUTime.Windows
     else
         exposed-modules:
