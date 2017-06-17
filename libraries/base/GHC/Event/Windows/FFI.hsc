@@ -44,15 +44,7 @@ module GHC.Event.Windows.FFI (
 #include <ntstatus.h>
 #include <windows.h>
 
-##ifdef mingw32_HOST_OS
-## if defined(i386_HOST_ARCH)
-##  define WINDOWS_CCONV stdcall
-## elif defined(x86_64_HOST_ARCH)
-##  define WINDOWS_CCONV ccall
-## else
-##  error Unknown mingw32 arch
-## endif
-##endif
+##include "windows_cconv.h"
 
 import Data.Maybe
 import Foreign
@@ -62,8 +54,8 @@ import GHC.Enum (fromEnum)
 import GHC.Real (fromIntegral)
 import GHC.Show
 import GHC.Windows
-import qualified GHC.Event.Array    as A
-import qualified System.Win32.Types as Win32
+import qualified GHC.Event.Array as A
+import qualified GHC.Windows     as Win32
 
 ------------------------------------------------------------------------
 -- IOCP

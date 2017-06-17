@@ -12,8 +12,7 @@
 -}
 
 module GHC.IO.Windows.Encoding
-  ( getCurrentCodePage
-  , encodeMultiByte
+  ( encodeMultiByte
   , encodeMultiByteIO
   , encodeMultiByteRawIO
   , decodeMultiByte
@@ -23,23 +22,15 @@ module GHC.IO.Windows.Encoding
   ) where
 
 import Foreign.C.Types        (CInt(..))
-import Foreign.C.String       (peekCAStringLen, withCWStringLen)
+import Foreign.C.String       (peekCAStringLen, peekCWStringLen,
+                               withCWStringLen, withCAStringLen, )
+import Foreign.Ptr (nullPtr)
 import Foreign.Marshal.Array  (allocaArray)
 import Foreign.Marshal.Unsafe (unsafeLocalState)
-import System.Win32.Console
-import System.Win32.NLS
-import System.Win32.Types
+import GHC.Windows
+import GHC.IO.Encoding.CodePage (CodePage)
 
 #include "windows_cconv.h"
-
--- note CodePage = UInt which might not work on Win64.  But the Win32 package
--- also has this issue.
-getCurrentCodePage :: IO DWORD
-getCurrentCodePage = do
-    conCP <- getConsoleCP
-    if conCP > 0
-        then return conCP
-        else getACP
 
 -- | The "System.IO" output functions (e.g. `putStr`) don't
 -- automatically convert to multibyte string on Windows, so this
@@ -108,11 +99,42 @@ foreign import WINDOWS_CCONV "WideCharToMultiByte"
         -> LPBOOL  -- lpbFlags
         -> IO CInt
 
--- | The "System.IO" input functions (e.g. `getLine`) don't
+-- | The `System.IO` input functions (e.g. `getLine`) don't
 -- automatically convert to Unicode, so this function is provided to
 -- make the conversion from a multibyte string in the given code page
 -- to a proper Unicode string.  To get the code page for the console,
--- use `getCurrentCodePage`.
+-- use `getConsoleCP`.
+stringToUnicode :: CodePage -> String -> IO String
+stringToUnicode _cp "" = return ""
+     -- MultiByteToWideChar doesn't handle empty strings (#1929)
+stringToUnicode cp mbstr =
+  withCAStringLen mbstr $ \(cstr,len) -> do
+    wchars <- failIfZero "MultiByteToWideChar" $ multiByteToWideChar
+                cp
+                0
+                cstr
+                (fromIntegral len)
+                nullPtr 0
+    -- wchars is the length of buffer required
+    allocaArray (fromIntegral wchars) $ \cwstr -> do
+      wchars' <- failIfZero "MultiByteToWideChar" $ multiByteToWideChar
+                cp
+                0
+                cstr
+                (fromIntegral len)
+                cwstr wchars
+      peekCWStringLen (cwstr,fromIntegral wchars')  -- converts UTF-16 to [Char]
+
+foreign import WINDOWS_CCONV unsafe "MultiByteToWideChar"
+  multiByteToWideChar
+        :: CodePage
+        -> DWORD   -- dwFlags,
+        -> LPCSTR  -- lpMultiByteStr
+        -> CInt    -- cbMultiByte
+        -> LPWSTR  -- lpWideCharStr
+        -> CInt    -- cchWideChar
+        -> IO CInt
+
 decodeMultiByte :: CodePage -> String -> String
 decodeMultiByte cp = unsafeLocalState . decodeMultiByteIO cp
 

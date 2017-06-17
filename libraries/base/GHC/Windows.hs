@@ -26,11 +26,18 @@ module GHC.Windows (
         LPBOOL,
         BYTE,
         DWORD,
+        DDWORD,
         UINT,
         ErrCode,
         HANDLE,
         LPWSTR,
         LPTSTR,
+        LPCTSTR,
+        LPVOID,
+        LPDWORD,
+        LPSTR,
+        LPCSTR,
+        LPCWSTR,
 
         -- * Constants
         iNFINITE,
@@ -56,8 +63,14 @@ module GHC.Windows (
         -- $errno
         c_maperrno,
         c_maperrno_func,
+
+        -- * Misc
+        ddwordToDwords,
+        dwordsToDdword,
+        nullHANDLE,
     ) where
 
+import Data.Bits (shiftL, shiftR, (.|.), (.&.))
 import Data.Char
 import Data.OldList
 import Data.Maybe
@@ -67,19 +80,24 @@ import Foreign.C.String
 import Foreign.C.Types
 import Foreign.Ptr
 import GHC.Base
+import GHC.Enum (maxBound)
 import GHC.IO
 import GHC.Num
+import GHC.Real (fromIntegral)
 import System.IO.Error
 
 import qualified Numeric
 
-#if defined(i386_HOST_ARCH)
-# define WINDOWS_CCONV stdcall
-#elif defined(x86_64_HOST_ARCH)
-# define WINDOWS_CCONV ccall
+#if MIN_VERSION_base(4,7,0)
+import Data.Bits (finiteBitSize)
 #else
-# error Unknown mingw32 arch
+import Data.Bits (Bits, bitSize)
+
+finiteBitSize :: (Bits a) => a -> Int
+finiteBitSize = bitSize
 #endif
+
+#include "windows_cconv.h"
 
 type BOOL    = Bool
 type LPBOOL  = Ptr BOOL
@@ -89,6 +107,18 @@ type UINT    = Word32
 type ErrCode = DWORD
 type HANDLE  = Ptr ()
 type LPWSTR  = Ptr CWchar
+type LPCTSTR = LPTSTR
+type LPVOID  = Ptr ()
+type LPDWORD = Ptr DWORD
+type LPSTR   = Ptr CChar
+type LPCSTR  = LPSTR
+type LPCWSTR = LPWSTR
+
+nullHANDLE :: HANDLE
+nullHANDLE = nullPtr
+
+-- Not really a basic type, but used in many places
+type DDWORD        = Word64
 
 -- | Be careful with this.  LPTSTR can mean either WCHAR* or CHAR*, depending
 -- on whether the UNICODE macro is defined in the corresponding C code.
@@ -194,3 +224,15 @@ foreign import WINDOWS_CCONV unsafe "windows.h LocalFree"
 -- | Get the last system error produced in the current thread.
 foreign import WINDOWS_CCONV unsafe "windows.h GetLastError"
     getLastError :: IO ErrCode
+
+----------------------------------------------------------------
+-- Misc helpers
+----------------------------------------------------------------
+
+ddwordToDwords :: DDWORD -> (DWORD,DWORD)
+ddwordToDwords n =
+        (fromIntegral (n `shiftR` finiteBitSize (undefined :: DWORD))
+        ,fromIntegral (n .&. fromIntegral (maxBound :: DWORD)))
+
+dwordsToDdword:: (DWORD,DWORD) -> DDWORD
+dwordsToDdword (hi,low) = (fromIntegral low) .|. (fromIntegral hi `shiftL` finiteBitSize hi)

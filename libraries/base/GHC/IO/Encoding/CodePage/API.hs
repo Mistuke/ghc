@@ -24,7 +24,7 @@ import GHC.IO.Encoding.UTF16
 import GHC.Num
 import GHC.Show
 import GHC.Real
-import GHC.Windows
+import GHC.Windows hiding (LPCSTR)
 import GHC.ForeignPtr (castForeignPtr)
 
 import System.Posix.Internals
@@ -38,15 +38,7 @@ debugIO s
  | c_DEBUG_DUMP = puts s
  | otherwise    = return ()
 
-
-#if defined(i386_HOST_ARCH)
-# define WINDOWS_CCONV stdcall
-#elif defined(x86_64_HOST_ARCH)
-# define WINDOWS_CCONV ccall
-#else
-# error Unknown mingw32 arch
-#endif
-
+#include "windows_cconv.h"
 
 type LPCSTR = Ptr Word8
 
