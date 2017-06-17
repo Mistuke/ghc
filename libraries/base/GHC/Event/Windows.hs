@@ -59,7 +59,7 @@ import GHC.Real
 import GHC.Windows
 import System.IO.Unsafe     (unsafePerformIO)
 
-import qualified System.Win32.Types as Win32
+import qualified GHC.Windows as Win32
 
 ------------------------------------------------------------------------
 -- Manager
@@ -126,6 +126,16 @@ hashOverlapped lpol = (lpoverlappedToInt lpol) .&. (callbackArraySize - 1)
 callbackTableVar :: Manager -> LPOVERLAPPED -> MVar (IT.IntTable CompletionData)
 callbackTableVar mgr lpol = mgrCallbacks mgr ! hashOverlapped lpol
 {-# INLINE callbackTableVar #-}
+
+
+-----------------------------------------------------------------------
+-- Time utilities
+
+secondsToNanoSeconds :: Seconds -> Q.Prio
+secondsToNanoSeconds s = ceiling $ s * 1000000000
+
+nanoSecondsToSeconds :: Q.Prio -> Seconds
+nanoSecondsToSeconds n = fromIntegral n / 1000000000.0
 
 ------------------------------------------------------------------------
 -- Overlapped I/O
@@ -306,7 +316,7 @@ registerTimeout mgr@Manager{..} relTime cb = do
     if relTime <= 0 then cb
     else do
       now <- getTime mgrClock
-      let !expTime = now + relTime
+      let !expTime = secondsToNanoSeconds $ now + relTime
       editTimeouts mgr (Q.insert key expTime cb)
       -- TODO: wakeManager mgr
     return $ TK key
@@ -317,7 +327,7 @@ registerTimeout mgr@Manager{..} relTime cb = do
 updateTimeout :: Manager -> TimeoutKey -> Seconds -> IO ()
 updateTimeout mgr (TK key) relTime = do
     now <- getTime (mgrClock mgr)
-    let !expTime = now + relTime
+    let !expTime = secondsToNanoSeconds $ now + relTime
     editTimeouts mgr (Q.adjust (const expTime) key)
     -- TODO: wakeManager mgr
 
@@ -350,6 +360,11 @@ runExpiredTimeouts Manager{..} = do
         mkTimeout :: Seconds -> TimeoutQueue ->
                      (TimeoutQueue, ([Q.Elem TimeoutCallback], Maybe Seconds))
         mkTimeout now tq =
+            let (tq', (expired, sec)) = mkTimeout' (secondsToNanoSeconds now) tq
+            in (tq', (expired, fmap nanoSecondsToSeconds sec))
+        mkTimeout' :: Q.Prio -> TimeoutQueue ->
+                     (TimeoutQueue, ([Q.Elem TimeoutCallback], Maybe Q.Prio))
+        mkTimeout' now tq =
            -- Remove timeouts with expiration <= now.
            let (expired, tq') = Q.atMost now tq in
            -- See how soon the next timeout expires.

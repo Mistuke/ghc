@@ -373,7 +373,6 @@ Library
             GHC.Event.Windows.Thread
             GHC.IO.Windows.Handle
             GHC.IO.Windows.Encoding
-            System.IO.IOCP
         other-modules:
             GHC.Event.Arr
             GHC.Event.Array

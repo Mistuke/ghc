@@ -23,10 +23,6 @@ module GHC.IO.Windows.Handle
  ( -- * Basic Types
    Handle(),
    ConsoleHandle(),
-   test,
-   test2,
-   test3,
-   testOutput,
    -- * Standard Handles
    stdin,
    stdout,
@@ -55,10 +51,10 @@ import Foreign.Marshal.Array (allocaArray, withArray)
 import Foreign.Storable (peek)
 import qualified GHC.Event.Windows as Mgr
 
-import System.Win32.Types (LPCTSTR, LPVOID, LPDWORD, DWORD, HANDLE, BOOL,
+import GHC.Windows (LPCTSTR, LPVOID, LPDWORD, DWORD, HANDLE, BOOL,
                            nullHANDLE, failIf, iNVALID_HANDLE_VALUE,
                            failIfFalse_, failIf_)
-import qualified System.Win32.Types as Win32
+import qualified GHC.Windows as Win32
 
 -- -----------------------------------------------------------------------------
 -- The Windows IO device handles
@@ -379,71 +375,6 @@ consoleRead hwnd ptr bytes
 
 consoleReadNonBlocking :: ConsoleHandle -> Ptr Word8 -> Int -> IO (Maybe Int)
 consoleReadNonBlocking hwnd ptr bytes = Just <$> consoleRead hwnd ptr bytes
-
--- -----------------------------------------------------------------------------
--- opening files
-
-test :: IO Int
-test = do hwnd <- openFile "r:\\hello.txt"
-          bytes <- allocaArray 50 $ \ptr -> hwndRead hwnd ptr 50
-          closeFile hwnd
-          return bytes
-
-test2 :: IO (Maybe Int)
-test2 = do hwnd <- openFile "r:\\hello.txt"
-           bytes <- allocaArray 50 $ \ptr -> hwndReadNonBlocking hwnd ptr 50
-           closeFile hwnd
-           return bytes
-
-test3 :: IO Int
-test3 = do hwnd <- openFile2 "r:\\hello2.txt"
-           let vals = fmap fromIntegral ([1..30000] :: [Int])
-           let num = Prelude.length vals
-           _ <- withArray vals $ \ptr -> hwndWrite hwnd ptr num
-           closeFile hwnd
-           return num
-
-openFile :: FilePath -> IO Handle
-openFile fp = do h <- createFile
-                 associateHandle' h
-                 return $ fromHANDLE h
-    where
-      createFile =
-          Win32.withTString fp $ \fp' ->
-              failIf (== iNVALID_HANDLE_VALUE) "CreateFile failed" $
-                     c_CreateFile fp' #{const GENERIC_READ}
-                                      #{const FILE_SHARE_READ}
-                                      nullPtr
-                                      #{const OPEN_EXISTING}
-                                      (#{const FILE_FLAG_OVERLAPPED} .|. #{const FILE_FLAG_SEQUENTIAL_SCAN })
-                                      nullHANDLE
-
-openFile2 :: FilePath -> IO Handle
-openFile2 fp = do h <- createFile
-                  associateHandle' h
-                  return $ fromHANDLE h
-    where
-      createFile =
-          Win32.withTString fp $ \fp' ->
-              failIf (== iNVALID_HANDLE_VALUE) "CreateFile failed" $
-                     c_CreateFile fp' #{const GENERIC_WRITE}
-                                      (#{const FILE_SHARE_WRITE} .|. #{const FILE_SHARE_READ})
-                                      nullPtr
-                                      #{const CREATE_ALWAYS}
-                                      #{const FILE_FLAG_OVERLAPPED}
-                                      nullHANDLE
-
-testOutput :: String -> IO ()
-testOutput str = withCWString str $ \str' -> do
-                    h <- stdout
-                    handle_is_console h >>= print
-                    handle_is_seekable h >>= print
-                    pos <- handle_console_tell h
-                    print pos
-                    handle_get_console_size h >>= print
-                    consoleWrite h (castPtr str') (fromIntegral $ length str)
-                    handle_console_seek h RelativeSeek (-1)
-                    consoleWrite h (castPtr str') (fromIntegral $ length str)
 
 -- -----------------------------------------------------------------------------
 -- Operations on file handles
