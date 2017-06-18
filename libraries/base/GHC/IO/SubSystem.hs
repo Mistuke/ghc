@@ -44,3 +44,7 @@ setIoSubSystem = putMVar ioSubSystem
 
 getIoSubSystem :: IO IoSubSystem
 getIoSubSystem = maybe defaultSubSystem (\x->x) `fmap` tryReadMVar ioSubSystem
+
+withIoSubSystem :: (IoSubSystem -> IO a) -> IO a
+withIoSubSystem f = do sub <- getIoSubSystem
+                       f sub
