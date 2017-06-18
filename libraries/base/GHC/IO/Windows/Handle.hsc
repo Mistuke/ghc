@@ -1,8 +1,10 @@
-{-# LANGUAGE Trustworthy       #-}
-{-# LANGUAGE CPP               #-}
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE BangPatterns      #-}
-{-# LANGUAGE ScopedTypeVariables      #-}
+{-# LANGUAGE Trustworthy          #-}
+{-# LANGUAGE CPP                  #-}
+{-# LANGUAGE NoImplicitPrelude    #-}
+{-# LANGUAGE BangPatterns         #-}
+{-# LANGUAGE GADTs                #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleInstances    #-}
 -- Whether there are identities depends on the platform
 {-# OPTIONS_HADDOCK hide #-}
 
@@ -24,6 +26,7 @@ module GHC.IO.Windows.Handle
  ( -- * Basic Types
    NativeHandle(),
    ConsoleHandle(),
+   IoHandle(),
    HANDLE,
 
    -- * Standard Handles
@@ -65,31 +68,37 @@ import Text.Show
 -- -----------------------------------------------------------------------------
 -- The Windows IO device handles
 
-newtype NativeHandle = NativeHandle { getHandle :: HANDLE }
-newtype ConsoleHandle = ConsoleHandle { getConsoleHandle :: HANDLE }
+data NativeHandle
+data ConsoleHandle
+
+data IoHandle a where
+  NativeHandle  :: { getNativeHandle  :: HANDLE } -> IoHandle NativeHandle
+  ConsoleHandle :: { getConsoleHandle :: HANDLE } -> IoHandle ConsoleHandle
+
+type Io a = IoHandle a
 
 -- | Convert a ConsoleHandle into a general FileHandle
 --   This will change which DeviceIO is used.
-convertHandle :: ConsoleHandle -> NativeHandle
+convertHandle :: Io ConsoleHandle -> Io NativeHandle
 convertHandle = fromHANDLE . toHANDLE
 
 -- | @since 4.11.0.0
-instance Show NativeHandle where
-  show = show . getHandle
+instance Show (Io NativeHandle) where
+  show = show . getNativeHandle
 
 -- | @since 4.11.0.0
-instance Show ConsoleHandle where
+instance Show (Io ConsoleHandle) where
   show = show . getConsoleHandle
 
 -- | @since 4.11.0.0
-instance GHC.IO.Device.RawIO NativeHandle where
+instance GHC.IO.Device.RawIO (Io NativeHandle) where
   read             = hwndRead
   readNonBlocking  = hwndReadNonBlocking
   write            = hwndWrite
   writeNonBlocking = hwndWriteNonBlocking
 
 -- | @since 4.11.0.0
-instance GHC.IO.Device.RawIO ConsoleHandle where
+instance GHC.IO.Device.RawIO (Io ConsoleHandle) where
   read             = consoleRead
   readNonBlocking  = consoleReadNonBlocking
   write            = consoleWrite
@@ -100,11 +109,11 @@ class (IODevice a, BufferedIO a, Typeable a) => RawHandle a where
   toHANDLE   :: a -> HANDLE
   fromHANDLE :: HANDLE -> a
 
-instance RawHandle NativeHandle where
-  toHANDLE   = getHandle
+instance RawHandle (Io NativeHandle) where
+  toHANDLE   = getNativeHandle
   fromHANDLE = NativeHandle
 
-instance RawHandle ConsoleHandle where
+instance RawHandle (Io ConsoleHandle) where
   toHANDLE   = getConsoleHandle
   fromHANDLE = ConsoleHandle
 
@@ -112,7 +121,7 @@ instance RawHandle ConsoleHandle where
 -- The Windows IO device implementation
 
 -- | @since 4.11.0.0
-instance GHC.IO.Device.IODevice NativeHandle where
+instance GHC.IO.Device.IODevice (Io NativeHandle) where
   ready      = handle_ready
   close      = handle_close
   isTerminal = handle_is_console
@@ -128,7 +137,7 @@ instance GHC.IO.Device.IODevice NativeHandle where
   dup        = handle_duplicate
 
 -- | @since 4.11.0.0
-instance GHC.IO.Device.IODevice ConsoleHandle where
+instance GHC.IO.Device.IODevice (Io ConsoleHandle) where
   ready      = handle_ready
   close      = handle_close . convertHandle
   isTerminal = handle_is_console
@@ -151,7 +160,7 @@ dEFAULT_BUFFER_SIZE = 8192
 
 -- | @since 4.11.0.0
 -- See libraries/base/GHC/IO/BufferedIO.hs
-instance BufferedIO NativeHandle where
+instance BufferedIO (Io NativeHandle) where
   newBuffer _dev state = newByteBuffer dEFAULT_BUFFER_SIZE state
   fillReadBuffer       = readBuf
   fillReadBuffer0      = readBufNonBlocking
@@ -160,7 +169,7 @@ instance BufferedIO NativeHandle where
 
 -- | @since 4.11.0.0
 -- See libraries/base/GHC/IO/BufferedIO.hs
-instance BufferedIO ConsoleHandle where
+instance BufferedIO (Io ConsoleHandle) where
   newBuffer _dev state = newByteBuffer dEFAULT_BUFFER_SIZE state
   fillReadBuffer       = readBuf
   fillReadBuffer0      = readBufNonBlocking
@@ -187,7 +196,7 @@ stdin  = mkStd $ ConsoleHandle <$> getStdHandle sTD_INPUT_HANDLE
 stdout = mkStd $ ConsoleHandle <$> getStdHandle sTD_OUTPUT_HANDLE
 stderr = mkStd $ ConsoleHandle <$> getStdHandle sTD_ERROR_HANDLE
 
-mkStd :: RawHandle dev => IO ConsoleHandle -> dev
+mkStd :: RawHandle dev => IO (Io ConsoleHandle) -> dev
 mkStd ioDev = unsafePerformIO $
   do io <- ioDev
      validateDev io
@@ -282,14 +291,15 @@ foreign import WINDOWS_CCONV unsafe "windows.h WriteConsoleW"
 
 -- For this to actually block, the file handle must have
 -- been created with FILE_FLAG_OVERLAPPED not set.
-hwndRead :: NativeHandle -> Ptr Word8 -> Int -> IO Int
+hwndRead :: Io NativeHandle -> Ptr Word8 -> Int -> IO Int
 hwndRead hwnd ptr bytes
   = do fmap fromIntegral $ Mgr.withException "hwndRead" $
-          withOverlapped "hwndRead" (getHandle hwnd) 0 (startCB ptr) completionCB
+          withOverlapped "hwndRead" (getNativeHandle hwnd) 0 (startCB ptr)
+                         completionCB
   where
     startCB outBuf lpOverlapped = do
-      ret <- c_ReadFile (getHandle hwnd) (castPtr outBuf) (fromIntegral bytes)
-                        nullPtr lpOverlapped
+      ret <- c_ReadFile (getNativeHandle hwnd) (castPtr outBuf)
+                        (fromIntegral bytes) nullPtr lpOverlapped
       when (not ret) $
             failIf_ (/= #{const ERROR_IO_PENDING}) "ReadFile failed" $
                     Win32.getLastError
@@ -302,15 +312,15 @@ hwndRead hwnd ptr bytes
 -- There's no non-blocking file I/O on Windows I think..
 -- But sockets etc should be possible.
 -- Revisit this when implementing sockets and pipes.
-hwndReadNonBlocking :: NativeHandle -> Ptr Word8 -> Int -> IO (Maybe Int)
+hwndReadNonBlocking :: Io NativeHandle -> Ptr Word8 -> Int -> IO (Maybe Int)
 hwndReadNonBlocking hwnd ptr bytes
-  = do val <- withOverlapped "hwndReadNonBlocking" (getHandle hwnd) 0
+  = do val <- withOverlapped "hwndReadNonBlocking" (getNativeHandle hwnd) 0
                               (startCB ptr) completionCB
        return $ Just $ fromIntegral $ ioValue val
   where
     startCB inputBuf lpOverlapped = do
-      ret <- c_ReadFile (getHandle hwnd) (castPtr inputBuf) (fromIntegral bytes)
-                        nullPtr lpOverlapped
+      ret <- c_ReadFile (getNativeHandle hwnd) (castPtr inputBuf)
+                        (fromIntegral bytes) nullPtr lpOverlapped
       err <- fmap fromIntegral Win32.getLastError
       if not ret
         && (err == #{const ERROR_IO_PENDING}
@@ -322,15 +332,16 @@ hwndReadNonBlocking hwnd ptr bytes
         | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
         | otherwise = Mgr.ioFailed err
 
-hwndWrite :: NativeHandle -> Ptr Word8 -> Int -> IO ()
+hwndWrite :: Io NativeHandle -> Ptr Word8 -> Int -> IO ()
 hwndWrite hwnd ptr bytes
   = do _ <- Mgr.withException "hwndWrite" $
-          withOverlapped "hwndWrite" (getHandle hwnd) 0 (startCB ptr) completionCB
+          withOverlapped "hwndWrite" (getNativeHandle hwnd) 0 (startCB ptr)
+                         completionCB
        return ()
   where
     startCB outBuf lpOverlapped = do
-      ret <- c_WriteFile (getHandle hwnd) (castPtr outBuf) (fromIntegral bytes)
-                         nullPtr lpOverlapped
+      ret <- c_WriteFile (getNativeHandle hwnd) (castPtr outBuf)
+                         (fromIntegral bytes) nullPtr lpOverlapped
       when (not ret) $
             failIf_ (/= #{const ERROR_IO_PENDING}) "WriteFile failed" $
                     Win32.getLastError
@@ -340,15 +351,15 @@ hwndWrite hwnd ptr bytes
         | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
         | otherwise = Mgr.ioFailed err
 
-hwndWriteNonBlocking :: NativeHandle -> Ptr Word8 -> Int -> IO Int
+hwndWriteNonBlocking :: Io NativeHandle -> Ptr Word8 -> Int -> IO Int
 hwndWriteNonBlocking hwnd ptr bytes
-  = do val <- withOverlapped "hwndReadNonBlocking" (getHandle hwnd) 0
+  = do val <- withOverlapped "hwndReadNonBlocking" (getNativeHandle hwnd) 0
                              (startCB ptr) completionCB
        return $ fromIntegral $ ioValue val
   where
     startCB outBuf lpOverlapped = do
-      ret <- c_WriteFile (getHandle hwnd) (castPtr outBuf) (fromIntegral bytes)
-                         nullPtr lpOverlapped
+      ret <- c_WriteFile (getNativeHandle hwnd) (castPtr outBuf)
+                         (fromIntegral bytes) nullPtr lpOverlapped
       err <- fmap fromIntegral Win32.getLastError
 
       if not ret
@@ -361,7 +372,7 @@ hwndWriteNonBlocking hwnd ptr bytes
         | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
         | otherwise = Mgr.ioFailed err
 
-consoleWrite :: ConsoleHandle -> Ptr Word8 -> Int -> IO ()
+consoleWrite :: Io ConsoleHandle -> Ptr Word8 -> Int -> IO ()
 consoleWrite hwnd ptr bytes
   = alloca $ \res ->
       do throwErrnoIf_ not "GHC.IO.Handle.consoleWrite" $ do
@@ -372,7 +383,7 @@ consoleWrite hwnd ptr bytes
                else do val <- fromIntegral <$> peek res
                        return $ val==bytes
 
-consoleWriteNonBlocking :: ConsoleHandle -> Ptr Word8 -> Int -> IO Int
+consoleWriteNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Int -> IO Int
 consoleWriteNonBlocking hwnd ptr bytes
   = alloca $ \res ->
       do throwErrnoIf_ not "GHC.IO.Handle.consoleWriteNonBlocking" $
@@ -381,7 +392,7 @@ consoleWriteNonBlocking hwnd ptr bytes
          val <- fromIntegral <$> peek res
          return val
 
-consoleRead :: ConsoleHandle -> Ptr Word8 -> Int -> IO Int
+consoleRead :: Io ConsoleHandle -> Ptr Word8 -> Int -> IO Int
 consoleRead hwnd ptr bytes
   = alloca $ \res ->
       do throwErrnoIf_ not "GHC.IO.Handle.consoleRead" $
@@ -389,7 +400,7 @@ consoleRead hwnd ptr bytes
                            res nullPtr
          fromIntegral <$> peek res
 
-consoleReadNonBlocking :: ConsoleHandle -> Ptr Word8 -> Int -> IO (Maybe Int)
+consoleReadNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Int -> IO (Maybe Int)
 consoleReadNonBlocking hwnd ptr bytes = Just <$> consoleRead hwnd ptr bytes
 
 -- -----------------------------------------------------------------------------
