@@ -288,7 +288,7 @@ __hscore_ftruncate( int fd, off_t where )
   return _chsize(fd,where);
 #else
 // ToDo: we should use _chsize_s() on Windows which allows a 64-bit
-// offset, but it doesn't seem to be available from mingw at this time 
+// offset, but it doesn't seem to be available from mingw at this time
 // --SDM (01/2008)
 #error at least ftruncate or _chsize functions are required to build
 #endif

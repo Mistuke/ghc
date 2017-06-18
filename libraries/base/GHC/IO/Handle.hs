@@ -58,7 +58,7 @@ import GHC.IO.BufferedIO ( BufferedIO )
 import GHC.IO.Device as IODevice
 import qualified GHC.IO.Handle.FD as FD
 #if defined(mingw32_HOST_OS)
-import qualified GHC.IO.Windows.Handle as Win
+import qualified GHC.IO.Handle.Windows as Win
 #endif
 import GHC.IO.SubSystem
 import GHC.IO.Handle.Lock
@@ -176,7 +176,14 @@ hIsEOF handle = wantReadableHandle_ "hIsEOF" handle $ \Handle__{..} -> do
 -- except that it works only on 'stdin'.
 
 isEOF :: IO Bool
-isEOF = hIsEOF stdin
+isEOF = withIoSubSystem $
+  \s -> case s of
+         IoPOSIX -> hIsEOF FD.stdin
+#if defined(mingw32_HOST_OS)
+         IoNative -> hIsEOF Win.stdin
+#else
+         IoNative -> hIsEOF FD.stdin
+#endif
 
 -- ---------------------------------------------------------------------------
 -- Looking ahead

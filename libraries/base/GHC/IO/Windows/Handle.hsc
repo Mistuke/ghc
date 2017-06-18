@@ -2,6 +2,7 @@
 {-# LANGUAGE CPP               #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE BangPatterns      #-}
+{-# LANGUAGE ScopedTypeVariables      #-}
 -- Whether there are identities depends on the platform
 {-# OPTIONS_HADDOCK hide #-}
 
@@ -21,8 +22,10 @@
 
 module GHC.IO.Windows.Handle
  ( -- * Basic Types
-   Handle(),
+   NativeHandle(),
    ConsoleHandle(),
+   HANDLE,
+
    -- * Standard Handles
    stdin,
    stdout,
@@ -34,6 +37,7 @@ module GHC.IO.Windows.Handle
 
 import Data.Word (Word8)
 import Data.Functor ((<$>))
+import Data.Typeable
 
 import GHC.Base
 import GHC.Enum
@@ -43,7 +47,9 @@ import GHC.Real
 import GHC.IO.Buffer
 import GHC.IO.BufferedIO
 import qualified GHC.IO.Device
-import GHC.IO.Device (SeekMode(..), IODeviceType(..))
+import GHC.IO.Device (SeekMode(..), IODeviceType(..), IODevice())
+import GHC.IO.Handle.Types
+import GHC.IO.Unsafe
 import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
 import Foreign.Ptr
 import Foreign.C
@@ -59,16 +65,16 @@ import Text.Show
 -- -----------------------------------------------------------------------------
 -- The Windows IO device handles
 
-newtype Handle = Handle { getHandle :: HANDLE }
+newtype NativeHandle = NativeHandle { getHandle :: HANDLE }
 newtype ConsoleHandle = ConsoleHandle { getConsoleHandle :: HANDLE }
 
 -- | Convert a ConsoleHandle into a general FileHandle
 --   This will change which DeviceIO is used.
-convertHandle :: ConsoleHandle -> Handle
+convertHandle :: ConsoleHandle -> NativeHandle
 convertHandle = fromHANDLE . toHANDLE
 
 -- | @since 4.11.0.0
-instance Show Handle where
+instance Show NativeHandle where
   show = show . getHandle
 
 -- | @since 4.11.0.0
@@ -76,7 +82,7 @@ instance Show ConsoleHandle where
   show = show . getConsoleHandle
 
 -- | @since 4.11.0.0
-instance GHC.IO.Device.RawIO Handle where
+instance GHC.IO.Device.RawIO NativeHandle where
   read             = hwndRead
   readNonBlocking  = hwndReadNonBlocking
   write            = hwndWrite
@@ -90,13 +96,13 @@ instance GHC.IO.Device.RawIO ConsoleHandle where
   writeNonBlocking = consoleWriteNonBlocking
 
 -- | Generalize a way to get and create handles.
-class RawHandle a where
+class (IODevice a, BufferedIO a, Typeable a) => RawHandle a where
   toHANDLE   :: a -> HANDLE
   fromHANDLE :: HANDLE -> a
 
-instance RawHandle Handle where
+instance RawHandle NativeHandle where
   toHANDLE   = getHandle
-  fromHANDLE = Handle
+  fromHANDLE = NativeHandle
 
 instance RawHandle ConsoleHandle where
   toHANDLE   = getConsoleHandle
@@ -106,7 +112,7 @@ instance RawHandle ConsoleHandle where
 -- The Windows IO device implementation
 
 -- | @since 4.11.0.0
-instance GHC.IO.Device.IODevice Handle where
+instance GHC.IO.Device.IODevice NativeHandle where
   ready      = handle_ready
   close      = handle_close
   isTerminal = handle_is_console
@@ -145,7 +151,7 @@ dEFAULT_BUFFER_SIZE = 8192
 
 -- | @since 4.11.0.0
 -- See libraries/base/GHC/IO/BufferedIO.hs
-instance BufferedIO Handle where
+instance BufferedIO NativeHandle where
   newBuffer _dev state = newByteBuffer dEFAULT_BUFFER_SIZE state
   fillReadBuffer       = readBuf
   fillReadBuffer0      = readBufNonBlocking
@@ -164,7 +170,7 @@ instance BufferedIO ConsoleHandle where
 -- -----------------------------------------------------------------------------
 -- Standard I/O handles
 
-type StdHandleId   = DWORD
+type StdHandleId  = DWORD
 
 #{enum StdHandleId,
  , sTD_INPUT_HANDLE  = STD_INPUT_HANDLE
@@ -176,10 +182,29 @@ getStdHandle :: StdHandleId -> IO HANDLE
 getStdHandle hid =
   failIf (== iNVALID_HANDLE_VALUE) "GetStdHandle" $ c_GetStdHandle hid
 
-stdin, stdout, stderr :: IO ConsoleHandle
-stdin  = fromHANDLE <$> getStdHandle sTD_INPUT_HANDLE
-stdout = fromHANDLE <$> getStdHandle sTD_OUTPUT_HANDLE
-stderr = fromHANDLE <$> getStdHandle sTD_ERROR_HANDLE
+stdin, stdout, stderr :: RawHandle dev => dev
+stdin  = mkStd $ ConsoleHandle <$> getStdHandle sTD_INPUT_HANDLE
+stdout = mkStd $ ConsoleHandle <$> getStdHandle sTD_OUTPUT_HANDLE
+stderr = mkStd $ ConsoleHandle <$> getStdHandle sTD_ERROR_HANDLE
+
+mkStd :: RawHandle dev => IO ConsoleHandle -> dev
+mkStd ioDev = unsafePerformIO $
+  do io <- ioDev
+     validateDev io
+
+-- | When a handle has been redirected to a file, the console APIs can no longer
+--   be used. So detect this and cast the handle.
+validateDev :: (RawHandle dev1, RawHandle dev2) => dev1 -> IO dev2
+validateDev dev = do isTerm <- GHC.IO.Device.isTerminal dev
+                     let value = if not isTerm
+                                    then dev' `asTypeOf` (undefined :: dev2)
+                                    else dev  `asTypeOf` (undefined :: dev2)
+                     return value
+  where asTypeOf :: a -> a -> a
+        asTypeOf = const
+
+        dev' :: NativeHandle
+        dev' = fromHANDLE (toHANDLE dev)
 
 -- -----------------------------------------------------------------------------
 -- Foreign imports
@@ -247,6 +272,7 @@ foreign import WINDOWS_CCONV unsafe "windows.h ReadConsoleW"
   c_read_console :: HANDLE -> Ptr Word8 -> DWORD -> Ptr DWORD -> Ptr ()
                  -> IO BOOL
 
+-- TODO : This won't work with redirected stdio, so call getMode and alternate
 foreign import WINDOWS_CCONV unsafe "windows.h WriteConsoleW"
   c_write_console :: HANDLE -> Ptr Word8 -> DWORD -> Ptr DWORD -> Ptr ()
                   -> IO BOOL
@@ -256,7 +282,7 @@ foreign import WINDOWS_CCONV unsafe "windows.h WriteConsoleW"
 
 -- For this to actually block, the file handle must have
 -- been created with FILE_FLAG_OVERLAPPED not set.
-hwndRead :: Handle -> Ptr Word8 -> Int -> IO Int
+hwndRead :: NativeHandle -> Ptr Word8 -> Int -> IO Int
 hwndRead hwnd ptr bytes
   = do fmap fromIntegral $ Mgr.withException "hwndRead" $
           withOverlapped "hwndRead" (getHandle hwnd) 0 (startCB ptr) completionCB
@@ -276,7 +302,7 @@ hwndRead hwnd ptr bytes
 -- There's no non-blocking file I/O on Windows I think..
 -- But sockets etc should be possible.
 -- Revisit this when implementing sockets and pipes.
-hwndReadNonBlocking :: Handle -> Ptr Word8 -> Int -> IO (Maybe Int)
+hwndReadNonBlocking :: NativeHandle -> Ptr Word8 -> Int -> IO (Maybe Int)
 hwndReadNonBlocking hwnd ptr bytes
   = do val <- withOverlapped "hwndReadNonBlocking" (getHandle hwnd) 0
                               (startCB ptr) completionCB
@@ -296,7 +322,7 @@ hwndReadNonBlocking hwnd ptr bytes
         | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
         | otherwise = Mgr.ioFailed err
 
-hwndWrite :: Handle -> Ptr Word8 -> Int -> IO ()
+hwndWrite :: NativeHandle -> Ptr Word8 -> Int -> IO ()
 hwndWrite hwnd ptr bytes
   = do _ <- Mgr.withException "hwndWrite" $
           withOverlapped "hwndWrite" (getHandle hwnd) 0 (startCB ptr) completionCB
@@ -314,7 +340,7 @@ hwndWrite hwnd ptr bytes
         | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
         | otherwise = Mgr.ioFailed err
 
-hwndWriteNonBlocking :: Handle -> Ptr Word8 -> Int -> IO Int
+hwndWriteNonBlocking :: NativeHandle -> Ptr Word8 -> Int -> IO Int
 hwndWriteNonBlocking hwnd ptr bytes
   = do val <- withOverlapped "hwndReadNonBlocking" (getHandle hwnd) 0
                              (startCB ptr) completionCB

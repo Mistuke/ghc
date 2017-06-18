@@ -243,6 +243,7 @@ Library
         GHC.IO.FD
         GHC.IO.Handle
         GHC.IO.Handle.FD
+        GHC.IO.Handle.Windows
         GHC.IO.Handle.Internals
         GHC.IO.Handle.Lock
         GHC.IO.Handle.Text
