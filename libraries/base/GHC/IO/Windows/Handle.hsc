@@ -5,6 +5,7 @@
 {-# LANGUAGE GADTs                #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances    #-}
+{-# LANGUAGE FlexibleContexts     #-}
 -- Whether there are identities depends on the platform
 {-# OPTIONS_HADDOCK hide #-}
 
@@ -29,6 +30,9 @@ module GHC.IO.Windows.Handle
    IoHandle(),
    HANDLE,
 
+   -- * Utility functions
+   convertHandle,
+
    -- * Standard Handles
    stdin,
    stdout,
@@ -51,7 +55,6 @@ import GHC.IO.Buffer
 import GHC.IO.BufferedIO
 import qualified GHC.IO.Device
 import GHC.IO.Device (SeekMode(..), IODeviceType(..), IODevice())
-import GHC.IO.Handle.Types
 import GHC.IO.Unsafe
 import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
 import Foreign.Ptr
@@ -191,29 +194,10 @@ getStdHandle :: StdHandleId -> IO HANDLE
 getStdHandle hid =
   failIf (== iNVALID_HANDLE_VALUE) "GetStdHandle" $ c_GetStdHandle hid
 
-stdin, stdout, stderr :: RawHandle dev => dev
-stdin  = mkStd $ ConsoleHandle <$> getStdHandle sTD_INPUT_HANDLE
-stdout = mkStd $ ConsoleHandle <$> getStdHandle sTD_OUTPUT_HANDLE
-stderr = mkStd $ ConsoleHandle <$> getStdHandle sTD_ERROR_HANDLE
-
-mkStd :: RawHandle dev => IO (Io ConsoleHandle) -> dev
-mkStd ioDev = unsafePerformIO $
-  do io <- ioDev
-     validateDev io
-
--- | When a handle has been redirected to a file, the console APIs can no longer
---   be used. So detect this and cast the handle.
-validateDev :: (RawHandle dev1, RawHandle dev2) => dev1 -> IO dev2
-validateDev dev = do isTerm <- GHC.IO.Device.isTerminal dev
-                     let value = if not isTerm
-                                    then dev' `asTypeOf` (undefined :: dev2)
-                                    else dev  `asTypeOf` (undefined :: dev2)
-                     return value
-  where asTypeOf :: a -> a -> a
-        asTypeOf = const
-
-        dev' :: NativeHandle
-        dev' = fromHANDLE (toHANDLE dev)
+stdin, stdout, stderr :: Io ConsoleHandle
+stdin  = unsafePerformIO $ ConsoleHandle <$> getStdHandle sTD_INPUT_HANDLE
+stdout = unsafePerformIO $ ConsoleHandle <$> getStdHandle sTD_OUTPUT_HANDLE
+stderr = unsafePerformIO $ ConsoleHandle <$> getStdHandle sTD_ERROR_HANDLE
 
 -- -----------------------------------------------------------------------------
 -- Foreign imports
@@ -281,7 +265,6 @@ foreign import WINDOWS_CCONV unsafe "windows.h ReadConsoleW"
   c_read_console :: HANDLE -> Ptr Word8 -> DWORD -> Ptr DWORD -> Ptr ()
                  -> IO BOOL
 
--- TODO : This won't work with redirected stdio, so call getMode and alternate
 foreign import WINDOWS_CCONV unsafe "windows.h WriteConsoleW"
   c_write_console :: HANDLE -> Ptr Word8 -> DWORD -> Ptr DWORD -> Ptr ()
                   -> IO BOOL
