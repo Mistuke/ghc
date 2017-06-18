@@ -782,6 +782,9 @@ data DynFlags = DynFlags {
   outputHi              :: Maybe String,
   dynLibLoader          :: DynLibLoader,
 
+  -- | I/O Manager settings
+  ioSubSystem           :: IoSubSystem,
+
   -- | This is set by 'DriverPipeline.runPipeline' based on where
   --    its output is going.
   dumpPrefix            :: Maybe FilePath,
@@ -1006,6 +1009,12 @@ data ProfAuto
   | ProfAutoExports    -- ^ exported functions annotated only
   | ProfAutoCalls      -- ^ annotate call-sites
   deriving (Eq,Enum)
+
+data IoSubSystem
+  = IoPOSIX   -- ^ Use a POSIX I/O Sub-System
+  | IoNative  -- ^ Use platform native Sub-System. For unix OSes this is the
+              --   same as IoPOSIX, but on Windows this means use the Windows
+              --   native APIs for I/O, including IOCP and RIO.
 
 data Settings = Settings {
   sTargetPlatform        :: Platform,    -- Filled in by SysTools
@@ -1619,6 +1628,7 @@ defaultDynFlags mySettings =
         dynOutputFile           = Nothing,
         outputHi                = Nothing,
         dynLibLoader            = SystemDependent,
+        ioSubSystem             = IoPOSIX,
         dumpPrefix              = Nothing,
         dumpPrefixForce         = Nothing,
         ldInputs                = [],
@@ -2845,6 +2855,11 @@ dynamic_flags_deps = [
         (NoArg (setRtsOptsEnabled RtsOptsNone))
   , make_ord_flag defGhcFlag "no-rtsopts-suggestions"
       (noArg (\d -> d {rtsOptsSuggestions = False}))
+
+  , make_ord_flag defGhcFlag "fio-subsystem=posix"
+        (NoArg (setIoSubSystem IoPOSIX))
+  , make_ord_flag defGhcFlag "fio-subsystem=native"
+        (NoArg (setIoSubSystem IoNative))
 
   , make_ord_flag defGhcFlag "main-is"              (SepArg setMainIs)
   , make_ord_flag defGhcFlag "haddock"              (NoArg (setGeneralFlag Opt_Haddock))
@@ -4981,6 +4996,13 @@ setRtsOpts arg  = upd $ \ d -> d {rtsOpts = Just arg}
 
 setRtsOptsEnabled :: RtsOptsEnabled -> DynP ()
 setRtsOptsEnabled arg  = upd $ \ d -> d {rtsOptsEnabled = arg}
+
+
+-----------------------------------------------------------------------------
+-- IO SubSystem opts
+
+setIoSubSystem :: IoSubSystem -> DynP ()
+setIoSubSystem arg  = upd $ \ d -> d {ioSubSystem = arg}
 
 -----------------------------------------------------------------------------
 -- Hpc stuff

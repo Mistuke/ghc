@@ -249,6 +249,7 @@ Library
         GHC.IO.Handle.Types
         GHC.IO.IOMode
         GHC.IO.Unsafe
+        GHC.IO.SubSystem
         GHC.IOArray
         GHC.IORef
         GHC.Int

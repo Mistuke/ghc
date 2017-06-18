@@ -41,8 +41,9 @@ import qualified GHC.Event.Windows.FFI    as FFI
 import qualified GHC.Event.PSQ            as Q
 import qualified GHC.Event.IntTable       as IT
 
+import {-# SOURCE #-} Control.Concurrent
+import Control.Concurrent.MVar
 import Control.Exception as E
-import Control.Concurrent
 import Data.IORef
 import Data.Foldable (mapM_)
 import Data.Maybe

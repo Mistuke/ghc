@@ -56,7 +56,11 @@ import GHC.IO.Encoding
 import GHC.IO.Buffer
 import GHC.IO.BufferedIO ( BufferedIO )
 import GHC.IO.Device as IODevice
-import GHC.IO.Handle.FD
+import qualified GHC.IO.Handle.FD as FD
+#if defined(mingw32_HOST_OS)
+import qualified GHC.IO.Windows.Handle as Win
+#endif
+import GHC.IO.SubSystem
 import GHC.IO.Handle.Lock
 import GHC.IO.Handle.Types
 import GHC.IO.Handle.Internals

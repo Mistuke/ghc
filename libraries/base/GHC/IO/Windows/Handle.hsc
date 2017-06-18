@@ -32,29 +32,29 @@ module GHC.IO.Windows.Handle
 #include <windows.h>
 ##include "windows_cconv.h"
 
-import Prelude hiding (readFile)
-import Data.Bits ((.|.))
 import Data.Word (Word8)
+import Data.Functor ((<$>))
 
 import GHC.Base
+import GHC.Enum
+import GHC.Num
+import GHC.Real
 
 import GHC.IO.Buffer
 import GHC.IO.BufferedIO
 import qualified GHC.IO.Device
 import GHC.IO.Device (SeekMode(..), IODeviceType(..))
-import GHC.Event.Windows (LPOVERLAPPED, associateHandle', withOverlapped,
-                          IOResult(..))
+import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
 import Foreign.Ptr
 import Foreign.C
 import Foreign.Marshal.Alloc (alloca)
-import Foreign.Marshal.Array (allocaArray, withArray)
 import Foreign.Storable (peek)
 import qualified GHC.Event.Windows as Mgr
 
-import GHC.Windows (LPCTSTR, LPVOID, LPDWORD, DWORD, HANDLE, BOOL,
-                           nullHANDLE, failIf, iNVALID_HANDLE_VALUE,
-                           failIfFalse_, failIf_)
+import GHC.Windows (LPVOID, LPDWORD, DWORD, HANDLE, BOOL,
+                    failIf, iNVALID_HANDLE_VALUE, failIf_)
 import qualified GHC.Windows as Win32
+import Text.Show
 
 -- -----------------------------------------------------------------------------
 -- The Windows IO device handles
@@ -184,14 +184,6 @@ stderr = fromHANDLE <$> getStdHandle sTD_ERROR_HANDLE
 -- -----------------------------------------------------------------------------
 -- Foreign imports
 
-foreign import WINDOWS_CCONV unsafe "windows.h CreateFileW"
-    c_CreateFile :: LPCTSTR -> DWORD -> DWORD -> LPSECURITY_ATTRIBUTES
-                 -> DWORD -> DWORD -> HANDLE
-                 -> IO HANDLE
-
-foreign import WINDOWS_CCONV unsafe "windows.h CloseHandle"
-    c_CloseHandle :: HANDLE -> IO BOOL
-
 foreign import WINDOWS_CCONV unsafe "windows.h ReadFile"
     c_ReadFile :: HANDLE -> LPVOID -> DWORD -> LPDWORD -> LPOVERLAPPED
                -> IO BOOL
@@ -258,8 +250,6 @@ foreign import WINDOWS_CCONV unsafe "windows.h ReadConsoleW"
 foreign import WINDOWS_CCONV unsafe "windows.h WriteConsoleW"
   c_write_console :: HANDLE -> Ptr Word8 -> DWORD -> Ptr DWORD -> Ptr ()
                   -> IO BOOL
-
-type LPSECURITY_ATTRIBUTES = LPVOID
 
 -- -----------------------------------------------------------------------------
 -- Reading and Writing
@@ -378,9 +368,6 @@ consoleReadNonBlocking hwnd ptr bytes = Just <$> consoleRead hwnd ptr bytes
 
 -- -----------------------------------------------------------------------------
 -- Operations on file handles
-
-closeFile :: RawHandle a => a -> IO ()
-closeFile = failIfFalse_ "CloseHandle failed!" . c_CloseHandle . toHANDLE
 
 handle_ready :: RawHandle a => a -> Bool -> Int -> IO Bool
 handle_ready hwnd write msecs = do
