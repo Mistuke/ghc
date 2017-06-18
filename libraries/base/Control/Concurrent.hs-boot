@@ -16,18 +16,10 @@
 --
 -----------------------------------------------------------------------------
 module Control.Concurrent (
-        -- * Basic concurrency operations
-        ThreadId,
-        forkIO,
-
         -- * Bound Threads
         rtsSupportsBoundThreads,
     ) where
 
-import GHC.IO
 import Data.Bool
 
 rtsSupportsBoundThreads :: Bool
-forkIO :: IO () -> IO ThreadId
-
-data ThreadId

@@ -19,11 +19,12 @@ module GHC.IO.Handle.Windows (
   stdin, stdout, stderr
  ) where
 
-import GHC.Base
-import GHC.Show
 import Data.Maybe
 import Data.Typeable
 import Foreign.C.Types
+
+import GHC.Base
+import GHC.Show
 import GHC.MVar
 import GHC.IO
 import GHC.IO.BufferedIO hiding (flushWriteBuffer)
@@ -59,10 +60,10 @@ mkConsoleHandle :: Win.IoHandle Win.ConsoleHandle
 mkConsoleHandle dev filepath ha_type buffered mb_codec nl finalizer other_side
  = do isTerm <- IODevice.isTerminal dev
       case isTerm of
-        True -> mkHandle dev filepath ha_type buffered mb_codec nl finalizer
-                         other_side
-        True -> mkHandle (Win.convertHandle dev) filepath ha_type buffered
-                         mb_codec nl finalizer other_side
+        True  -> mkHandle dev filepath ha_type buffered mb_codec nl finalizer
+                          other_side
+        False -> mkHandle (Win.convertHandle dev) filepath ha_type buffered
+                          mb_codec nl finalizer other_side
 
 -- | A handle managing input from the Haskell program's standard input channel.
 stdin :: Handle
