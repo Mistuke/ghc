@@ -26,6 +26,7 @@ import Data.Typeable
 import Foreign.C.Types
 import GHC.MVar
 import GHC.IO
+import GHC.IO.BufferedIO hiding (flushWriteBuffer)
 import GHC.IO.Encoding
 import GHC.IO.Device as IODevice
 import GHC.IO.Exception
@@ -42,15 +43,36 @@ import qualified GHC.IO.Windows.Handle as Win
 -- or output channel respectively.  The third manages output to the
 -- standard error channel. These handles are initially open.
 
+-- | If the std handles are redirected to file handles then WriteConsole etc
+--   won't work anymore. When the handle is created test it and if it's a file
+--   handle then just convert it to the proper IODevice so WriteFile is used
+--   instead. This is done here so it's buffered and only happens once.
+mkConsoleHandle :: Win.IoHandle Win.ConsoleHandle
+                -> FilePath
+                -> HandleType
+                -> Bool                     -- buffered?
+                -> Maybe TextEncoding
+                -> NewlineMode
+                -> Maybe HandleFinalizer
+                -> Maybe (MVar Handle__)
+                -> IO Handle
+mkConsoleHandle dev filepath ha_type buffered mb_codec nl finalizer other_side
+ = do isTerm <- IODevice.isTerminal dev
+      case isTerm of
+        True -> mkHandle dev filepath ha_type buffered mb_codec nl finalizer
+                         other_side
+        True -> mkHandle (Win.convertHandle dev) filepath ha_type buffered
+                         mb_codec nl finalizer other_side
+
 -- | A handle managing input from the Haskell program's standard input channel.
 stdin :: Handle
 {-# NOINLINE stdin #-}
 stdin = unsafePerformIO $ do
    -- ToDo: acquire lock
    enc <- getLocaleEncoding
-   mkHandle Win.stdin "<stdin>" ReadHandle True (Just enc)
-                nativeNewlineMode{-translate newlines-}
-                (Just stdHandleFinalizer) Nothing
+   mkConsoleHandle Win.stdin "<stdin>" ReadHandle True (Just enc)
+                   nativeNewlineMode{-translate newlines-}
+                   (Just stdHandleFinalizer) Nothing
 
 -- | A handle managing output to the Haskell program's standard output channel.
 stdout :: Handle
@@ -58,9 +80,9 @@ stdout :: Handle
 stdout = unsafePerformIO $ do
    -- ToDo: acquire lock
    enc <- getLocaleEncoding
-   mkHandle Win.stdout "<stdout>" WriteHandle True (Just enc)
-                nativeNewlineMode{-translate newlines-}
-                (Just stdHandleFinalizer) Nothing
+   mkConsoleHandle Win.stdout "<stdout>" WriteHandle True (Just enc)
+                   nativeNewlineMode{-translate newlines-}
+                   (Just stdHandleFinalizer) Nothing
 
 -- | A handle managing output to the Haskell program's standard error channel.
 stderr :: Handle
@@ -68,10 +90,10 @@ stderr :: Handle
 stderr = unsafePerformIO $ do
     -- ToDo: acquire lock
    enc <- getLocaleEncoding
-   mkHandle Win.stderr "<stderr>" WriteHandle False{-stderr is unbuffered-}
-                (Just enc)
-                nativeNewlineMode{-translate newlines-}
-                (Just stdHandleFinalizer) Nothing
+   mkConsoleHandle Win.stderr "<stderr>" WriteHandle
+                   False{-stderr is unbuffered-} (Just enc)
+                   nativeNewlineMode{-translate newlines-}
+                  (Just stdHandleFinalizer) Nothing
 
 stdHandleFinalizer :: FilePath -> MVar Handle__ -> IO ()
 stdHandleFinalizer fp m = do

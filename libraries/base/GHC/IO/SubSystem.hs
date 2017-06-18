@@ -17,7 +17,9 @@
 
 module GHC.IO.SubSystem (
   setIoSubSystem,
-  getIoSubSystem
+  getIoSubSystem,
+  withIoSubSystem,
+  IoSubSystem(..)
  ) where
 
 import GHC.MVar
