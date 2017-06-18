@@ -84,7 +84,7 @@ convertHandle = fromHANDLE . toHANDLE
 
 -- | @since 4.11.0.0
 instance Show (Io NativeHandle) where
-  show = show . getNativeHandle
+  show = show . toHANDLE
 
 -- | @since 4.11.0.0
 instance Show (Io ConsoleHandle) where
@@ -294,11 +294,11 @@ foreign import WINDOWS_CCONV unsafe "windows.h WriteConsoleW"
 hwndRead :: Io NativeHandle -> Ptr Word8 -> Int -> IO Int
 hwndRead hwnd ptr bytes
   = do fmap fromIntegral $ Mgr.withException "hwndRead" $
-          withOverlapped "hwndRead" (getNativeHandle hwnd) 0 (startCB ptr)
+          withOverlapped "hwndRead" (toHANDLE hwnd) 0 (startCB ptr)
                          completionCB
   where
     startCB outBuf lpOverlapped = do
-      ret <- c_ReadFile (getNativeHandle hwnd) (castPtr outBuf)
+      ret <- c_ReadFile (toHANDLE hwnd) (castPtr outBuf)
                         (fromIntegral bytes) nullPtr lpOverlapped
       when (not ret) $
             failIf_ (/= #{const ERROR_IO_PENDING}) "ReadFile failed" $
@@ -314,12 +314,12 @@ hwndRead hwnd ptr bytes
 -- Revisit this when implementing sockets and pipes.
 hwndReadNonBlocking :: Io NativeHandle -> Ptr Word8 -> Int -> IO (Maybe Int)
 hwndReadNonBlocking hwnd ptr bytes
-  = do val <- withOverlapped "hwndReadNonBlocking" (getNativeHandle hwnd) 0
+  = do val <- withOverlapped "hwndReadNonBlocking" (toHANDLE hwnd) 0
                               (startCB ptr) completionCB
        return $ Just $ fromIntegral $ ioValue val
   where
     startCB inputBuf lpOverlapped = do
-      ret <- c_ReadFile (getNativeHandle hwnd) (castPtr inputBuf)
+      ret <- c_ReadFile (toHANDLE hwnd) (castPtr inputBuf)
                         (fromIntegral bytes) nullPtr lpOverlapped
       err <- fmap fromIntegral Win32.getLastError
       if not ret
@@ -335,12 +335,12 @@ hwndReadNonBlocking hwnd ptr bytes
 hwndWrite :: Io NativeHandle -> Ptr Word8 -> Int -> IO ()
 hwndWrite hwnd ptr bytes
   = do _ <- Mgr.withException "hwndWrite" $
-          withOverlapped "hwndWrite" (getNativeHandle hwnd) 0 (startCB ptr)
+          withOverlapped "hwndWrite" (toHANDLE hwnd) 0 (startCB ptr)
                          completionCB
        return ()
   where
     startCB outBuf lpOverlapped = do
-      ret <- c_WriteFile (getNativeHandle hwnd) (castPtr outBuf)
+      ret <- c_WriteFile (toHANDLE hwnd) (castPtr outBuf)
                          (fromIntegral bytes) nullPtr lpOverlapped
       when (not ret) $
             failIf_ (/= #{const ERROR_IO_PENDING}) "WriteFile failed" $
@@ -353,12 +353,12 @@ hwndWrite hwnd ptr bytes
 
 hwndWriteNonBlocking :: Io NativeHandle -> Ptr Word8 -> Int -> IO Int
 hwndWriteNonBlocking hwnd ptr bytes
-  = do val <- withOverlapped "hwndReadNonBlocking" (getNativeHandle hwnd) 0
+  = do val <- withOverlapped "hwndReadNonBlocking" (toHANDLE hwnd) 0
                              (startCB ptr) completionCB
        return $ fromIntegral $ ioValue val
   where
     startCB outBuf lpOverlapped = do
-      ret <- c_WriteFile (getNativeHandle hwnd) (castPtr outBuf)
+      ret <- c_WriteFile (toHANDLE hwnd) (castPtr outBuf)
                          (fromIntegral bytes) nullPtr lpOverlapped
       err <- fmap fromIntegral Win32.getLastError
 
