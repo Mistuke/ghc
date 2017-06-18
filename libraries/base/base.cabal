@@ -341,6 +341,7 @@ Library
         cbits/md5.c
         cbits/primFloat.c
         cbits/sysconf.c
+        cbits/IOutils.c
 
     cmm-sources:
         cbits/CastFloatWord.cmm
@@ -363,7 +364,8 @@ Library
         -- mingw32: Unfortunately required because of a resource leak between
         --          mingwex and mingw32. the __math_err symbol is defined in
         --          mingw32 which is required by mingwex.
-        extra-libraries: wsock32, user32, shell32, msvcrt, mingw32, mingwex
+        extra-libraries: wsock32, user32, shell32, msvcrt, mingw32,
+                         mingwex, Ws2_32
         exposed-modules:
             GHC.IO.Encoding.CodePage.API
             GHC.IO.Encoding.CodePage.Table

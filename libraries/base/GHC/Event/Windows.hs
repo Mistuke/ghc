@@ -53,6 +53,7 @@ import Foreign.ForeignPtr.Unsafe
 import qualified GHC.Event.Array    as A
 import GHC.Arr (Array, (!), listArray)
 import GHC.Base
+import GHC.Conc (forkIO)
 import GHC.List (replicate)
 import GHC.Event.Unique
 import GHC.Num
