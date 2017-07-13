@@ -176,6 +176,16 @@ runClang dflags args = do
         throwIO err
     )
 
+-- | Run the linker with some arguments and return the output
+askLd :: DynFlags -> [Option] -> IO String
+askLd dflags args = do
+  let (p,args0) = pgm_l dflags
+      args1     = map Option (getOpts dflags opt_l)
+      args2     = args0 ++ args1 ++ args
+  mb_env <- getGccEnv args2
+  runSomethingWith dflags "gcc" p args2 $ \real_args ->
+    readCreateProcessWithExitCode' (proc p real_args){ env = mb_env }
+
 -- | Figure out which version of LLVM we are running this session
 figureLlvmVersion :: DynFlags -> IO (Maybe (Int, Int))
 figureLlvmVersion dflags = do
