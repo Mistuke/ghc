@@ -233,8 +233,9 @@ __set_console_buffering(HANDLE hFile, bool cooked)
        so we have to turn both off here. */
     DWORD flgs = ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
 
-    if ( hFile == INVALID_HANDLE_VALUE )
+    if (hFile == INVALID_HANDLE_VALUE) {
         return false;
+    }
 
 	return GetConsoleMode(hFile, &st) &&
 	       SetConsoleMode(hFile, cooked ? (st | ENABLE_LINE_INPUT) : st & ~flgs);
@@ -246,8 +247,9 @@ __set_console_echo(HANDLE hFile, bool on)
     DWORD  st;
     DWORD flgs = ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
 
-    if ( hFile == INVALID_HANDLE_VALUE )
+    if (hFile == INVALID_HANDLE_VALUE) {
         return false;
+    }
 
 	return GetConsoleMode(hFile, &st) &&
 	       SetConsoleMode(hFile, ( on ? (st | flgs) : (st & ~ENABLE_ECHO_INPUT)));
@@ -258,8 +260,9 @@ __get_console_echo(HANDLE hFile)
 {
     DWORD  st;
 
-    if ( hFile == INVALID_HANDLE_VALUE )
+    if (hFile == INVALID_HANDLE_VALUE) {
         return false;
+    }
 
 	return GetConsoleMode(hFile, &st) &&
 	       (st & ENABLE_ECHO_INPUT) == ENABLE_ECHO_INPUT;

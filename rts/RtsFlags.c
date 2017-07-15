@@ -223,7 +223,8 @@ void initRtsFlagsDefaults(void)
 
     RtsFlags.MiscFlags.install_signal_handlers = true;
     RtsFlags.MiscFlags.machineReadable = false;
-    RtsFlags.MiscFlags.linkerMemBase    = 0;
+    RtsFlags.MiscFlags.linkerMemBase   = 0;
+    RtsFlags.MiscFlags.ioManager       = IO_MNGR_POSIX;
 
 #if defined(THREADED_RTS)
     RtsFlags.ParFlags.nCapabilities     = 1;
@@ -423,6 +424,8 @@ usage_text[] = {
 #endif
 "  --install-signal-handlers=<yes|no>",
 "            Install signal handlers (default: yes)",
+"  --io-manager=<native|posix>",
+"            The I/O manager subsystem to use. (default: posix)",
 #if defined(THREADED_RTS)
 "  -e<n>     Maximum number of outstanding local sparks (default: 4096)",
 #endif
@@ -772,6 +775,16 @@ error = true;
                                &rts_argv[arg][2])) {
                       OPTION_UNSAFE;
                       RtsFlags.MiscFlags.machineReadable = true;
+                  }
+                  else if (strequal("io-manager=native",
+                               &rts_argv[arg][2])) {
+                      OPTION_UNSAFE;
+                      RtsFlags.MiscFlags.ioManager = IO_MNGR_NATIVE;
+                  }
+                  else if (strequal("io-manager=posix",
+                               &rts_argv[arg][2])) {
+                      OPTION_UNSAFE;
+                      RtsFlags.MiscFlags.ioManager = IO_MNGR_POSIX;
                   }
                   else if (strequal("info",
                                &rts_argv[arg][2])) {

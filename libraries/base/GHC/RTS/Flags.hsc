@@ -24,6 +24,7 @@ module GHC.RTS.Flags
   , TraceFlags (..)
   , TickyFlags (..)
   , ParFlags (..)
+  , IoSubSystem (..)
   , getRTSFlags
   , getGCFlags
   , getConcFlags
@@ -83,6 +84,32 @@ instance Enum GiveGCStats where
     toEnum #{const VERBOSE_GC_STATS} = VerboseGCStats
     toEnum e = errorWithoutStackTrace ("invalid enum for GiveGCStats: " ++ show e)
 
+-- | The I/O SubSystem to use in the program.
+--
+-- @since 4.9.0.0
+data IoSubSystem
+  = IoPOSIX   -- ^ Use a POSIX I/O Sub-System
+  | IoNative  -- ^ Use platform native Sub-System. For unix OSes this is the
+              --   same as IoPOSIX, but on Windows this means use the Windows
+              --   native APIs for I/O, including IOCP and RIO.
+  deriving (Show)
+
+-- | @since 4.9.0.0
+instance Enum IoSubSystem where
+    fromEnum IoPOSIX  = #{const IO_MNGR_POSIX}
+    fromEnum IoNative = #{const IO_MNGR_NATIVE}
+
+    toEnum #{const IO_MNGR_POSIX}  = IoPOSIX
+    toEnum #{const IO_MNGR_NATIVE} = IoNative
+    toEnum e = errorWithoutStackTrace ("invalid enum for IoSubSystem: " ++ show e)
+
+-- | @since 4.9.0.0
+instance Storable IoSubSystem where
+    sizeOf = sizeOf . fromEnum
+    alignment = sizeOf . fromEnum
+    peek ptr = fmap toEnum $ peek (castPtr ptr)
+    poke ptr v = poke (castPtr ptr) (fromEnum v)
+
 -- | Parameters of the garbage collector.
 --
 -- @since 4.8.0.0
@@ -134,6 +161,7 @@ data MiscFlags = MiscFlags
     , machineReadable       :: Bool
     , linkerMemBase         :: Word
       -- ^ address to ask the OS for memory for the linker, 0 ==> off
+    , ioManager             :: IoSubSystem
     } deriving (Show)
 
 -- | Flags to control debugging output & extra checking in various
@@ -406,6 +434,7 @@ getMiscFlags = do
             <*> #{peek MISC_FLAGS, install_signal_handlers} ptr
             <*> #{peek MISC_FLAGS, machineReadable} ptr
             <*> #{peek MISC_FLAGS, linkerMemBase} ptr
+            <*> #{peek MISC_FLAGS, ioManager} ptr
 
 getDebugFlags :: IO DebugFlags
 getDebugFlags = do
