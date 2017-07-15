@@ -242,13 +242,14 @@ import GHC.IORef
 import GHC.Num
 import GHC.IO hiding ( bracket, onException )
 import GHC.IO.IOMode
-import GHC.IO.Handle.FD
 import qualified GHC.IO.FD as FD
 import GHC.IO.Handle
+import qualified GHC.IO.Handle.FD as POSIX
 import GHC.IO.Handle.Text ( hGetBufSome, hPutStrLn )
 import GHC.IO.Exception ( userError )
 import GHC.IO.Encoding
 import Text.Read
+import GHC.IO.SmartHandles
 import GHC.Show
 import GHC.MVar
 
@@ -563,7 +564,7 @@ output_flags = std_flags
                                True{-is_nonblock-}
 
           enc <- getLocaleEncoding
-          h <- mkHandleFromFD fD fd_type filepath ReadWriteMode False{-set non-block-} (Just enc)
+          h <- POSIX.mkHandleFromFD fD fd_type filepath ReadWriteMode False{-set non-block-} (Just enc)
 
           return (filepath, h)
 

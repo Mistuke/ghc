@@ -19,6 +19,7 @@ module GHC.IO.SubSystem (
   setIoSubSystem,
   getIoSubSystem,
   withIoSubSystem,
+  withIoSubSystem',
   IoSubSystem(..)
  ) where
 
@@ -27,6 +28,7 @@ import GHC.IO
 import GHC.IORef
 import GHC.RTS.Flags
 
+import Control.Monad
 import Data.Functor
 import Data.Maybe
 
@@ -45,3 +47,8 @@ getIoSubSystem = readIORef ioSubSystem
 withIoSubSystem :: (IoSubSystem -> IO a) -> IO a
 withIoSubSystem f = do sub <- getIoSubSystem
                        f sub
+
+withIoSubSystem' :: (IoSubSystem -> a) -> a
+withIoSubSystem' f = unsafePerformIO inner
+  where inner = do sub <- getIoSubSystem
+                   return (f sub)
