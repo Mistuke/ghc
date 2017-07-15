@@ -187,6 +187,9 @@ typedef struct _CONCURRENT_FLAGS {
  */
 #define DEFAULT_TICK_INTERVAL USToTime(10000)
 
+/* Which I/O Manager to use in the target program.  */
+typedef enum _IO_MANAGER { IO_MNGR_NATIVE, IO_MNGR_POSIX } IO_MANAGER;
+
 /* See Note [Synchronization of flags and base APIs] */
 typedef struct _MISC_FLAGS {
     Time    tickInterval;        /* units: TIME_RESOLUTION */
@@ -198,6 +201,7 @@ typedef struct _MISC_FLAGS {
     bool internalCounters;       /* See Note [Internal Counter Stats] */
     StgWord linkerMemBase;       /* address to ask the OS for memory
                                   * for the linker, NULL ==> off */
+    IO_MANAGER ioManager;   /* The I/O manager to use.  */
 } MISC_FLAGS;
 
 /* See Note [Synchronization of flags and base APIs] */

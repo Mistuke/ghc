@@ -22,30 +22,25 @@ module GHC.IO.SubSystem (
   IoSubSystem(..)
  ) where
 
-import GHC.MVar
 import GHC.IO.Unsafe
 import GHC.IO
+import GHC.IORef
+import GHC.RTS.Flags
 
 import Data.Functor
 import Data.Maybe
 
-data IoSubSystem
-  = IoPOSIX   -- ^ Use a POSIX I/O Sub-System
-  | IoNative  -- ^ Use platform native Sub-System. For unix OSes this is the
-              --   same as IoPOSIX, but on Windows this means use the Windows
-              --   native APIs for I/O, including IOCP and RIO.
-
-defaultSubSystem :: IoSubSystem
-defaultSubSystem = IoPOSIX
-
-ioSubSystem :: MVar IoSubSystem
-ioSubSystem = unsafePerformIO (newMVar IoPOSIX)
+ioSubSystem :: IORef IoSubSystem
+ioSubSystem = unsafePerformIO sub
+  where
+    sub = do misc <- getMiscFlags
+             newIORef (ioManager misc)
 
 setIoSubSystem :: IoSubSystem -> IO ()
-setIoSubSystem = putMVar ioSubSystem
+setIoSubSystem = writeIORef ioSubSystem
 
 getIoSubSystem :: IO IoSubSystem
-getIoSubSystem = maybe defaultSubSystem (\x->x) `fmap` tryReadMVar ioSubSystem
+getIoSubSystem = readIORef ioSubSystem
 
 withIoSubSystem :: (IoSubSystem -> IO a) -> IO a
 withIoSubSystem f = do sub <- getIoSubSystem
