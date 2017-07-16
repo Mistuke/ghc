@@ -21,6 +21,7 @@ module GHC.IO.Windows.Encoding
   , multiByteToWideChar
   ) where
 
+import Data.Word (Word8)
 import Foreign.C.Types        (CInt(..))
 import Foreign.C.String       (peekCAStringLen, peekCWStringLen,
                                withCWStringLen, withCAStringLen, )
