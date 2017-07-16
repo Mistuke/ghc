@@ -37,6 +37,7 @@ import GHC.IO.Buffer
 import qualified GHC.IO.BufferedIO as Buffered
 import GHC.IO.Exception
 import GHC.Exception
+import GHC.IO.SubSystem
 import GHC.IO.Handle.Types
 import GHC.IO.Handle.Internals
 import qualified GHC.IO.Device as IODevice
@@ -254,10 +255,6 @@ maybeFillReadBuffer handle_ buf
                   then return Nothing
                   else ioError e)
 
--- See GHC.IO.Buffer
-#define CHARBUF_UTF32
--- #define CHARBUF_UTF16
-
 -- NB. performance-critical code: eyeball the Core.
 unpack :: RawCharBuffer -> Int -> Int -> [Char] -> IO [Char]
 unpack !buf !r !w acc0
@@ -271,20 +268,20 @@ unpack !buf !r !w acc0
               -- Here, we are rather careful to only put an *evaluated* character
               -- in the output string. Due to pointer tagging, this allows the consumer
               -- to avoid ping-ponging between the actual consumer code and the thunk code
-#if defined(CHARBUF_UTF16)
-              -- reverse-order decoding of UTF-16
-              c2 <- peekElemOff pbuf i
-              if (c2 < 0xdc00 || c2 > 0xdffff)
-                 then unpackRB (unsafeChr (fromIntegral c2) : acc) (i-1)
-                 else do c1 <- peekElemOff pbuf (i-1)
-                         let c = (fromIntegral c1 - 0xd800) * 0x400 +
-                                 (fromIntegral c2 - 0xdc00) + 0x10000
-                         case desurrogatifyRoundtripCharacter (unsafeChr c) of
-                           { C# c# -> unpackRB (C# c# : acc) (i-2) }
-#else
-              c <- peekElemOff pbuf i
-              unpackRB (c : acc) (i-1)
-#endif
+            case getCharBufEncoding of
+              CharBuff_UTF16 -> do
+                -- reverse-order decoding of UTF-16
+                c2 <- peekElemOff pbuf i
+                if (c2 < 0xdc00 || c2 > 0xdffff)
+                  then unpackRB (unsafeChr (fromIntegral c2) : acc) (i-1)
+                  else do c1 <- peekElemOff pbuf (i-1)
+                          let c = (fromIntegral c1 - 0xd800) * 0x400 +
+                                  (fromIntegral c2 - 0xdc00) + 0x10000
+                          case desurrogatifyRoundtripCharacter (unsafeChr c) of
+                            { C# c# -> unpackRB (C# c# : acc) (i-2) }
+              CharBuff_UTF32 -> do
+                c <- peekElemOff pbuf i
+                unpackRB (c : acc) (i-1)
      in
      unpackRB acc0 (w-1)
 

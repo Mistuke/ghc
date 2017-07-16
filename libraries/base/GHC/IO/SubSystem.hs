@@ -1,5 +1,6 @@
-{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE Trustworthy       #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE CPP               #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -20,7 +21,9 @@ module GHC.IO.SubSystem (
   getIoSubSystem,
   withIoSubSystem,
   withIoSubSystem',
-  IoSubSystem(..)
+  getCharBufEncoding,
+  IoSubSystem(..),
+  CharBufEncoding(..)
  ) where
 
 import GHC.IO.Unsafe
@@ -52,3 +55,14 @@ withIoSubSystem' :: (IoSubSystem -> a) -> a
 withIoSubSystem' f = unsafePerformIO inner
   where inner = do sub <- getIoSubSystem
                    return (f sub)
+
+data CharBufEncoding = CharBuff_UTF16 | CharBuff_UTF32
+
+getCharBufEncoding :: CharBufEncoding
+getCharBufEncoding = withIoSubSystem' inner
+  where inner IoPOSIX = CharBuff_UTF32
+#if defined(mingw32_HOST_OS)
+        inner IoNative = CharBuff_UTF16
+#else
+        inner IoNative = CharBuff_UTF32
+#endif

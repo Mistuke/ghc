@@ -21,6 +21,7 @@ import GHC.IO.Buffer
 import GHC.IO.Encoding.Failure
 import GHC.IO.Encoding.Types
 import GHC.IO.Encoding.UTF16
+import GHC.IO.SubSystem
 import GHC.Num
 import GHC.Show
 import GHC.Real
@@ -196,46 +197,71 @@ utf16_native_decode ibuf obuf = do
 
 cpDecode :: Word32 -> Int -> DecodeBuffer
 cpDecode cp max_char_size = \ibuf obuf -> do
-#if defined(CHARBUF_UTF16)
-    let mbuf = obuf
-#else
-    -- FIXME: share the buffer between runs, even if the buffer is not the perfect size
-    let sz =       (bufferElems ibuf * 2)     -- I guess in the worst case the input CP text consists of 1-byte sequences that map entirely to things outside the BMP and so require 2 UTF-16 chars
-             `min` (bufferAvailable obuf * 2) -- In the best case, each pair of UTF-16 points becomes a single UTF-32 point
-    mbuf <- newBuffer (2 * sz) sz WriteBuffer :: IO (Buffer CWchar)
-#endif
+    mbuf <- case getCharBufEncoding of
+              CharBuff_UTF16 -> return obuf
+              CharBuff_UTF32 -> do
+                  -- FIXME: share the buffer between runs, even if the buffer
+                  -- is not the perfect size.
+                  -- I guess in the worst case the input CP text consists of
+                  -- 1-byte sequences that map entirely to things outside the
+                  -- BMP and so require 2 UTF-16 chars
+                  let sz =       (bufferElems ibuf * 2)
+                   -- In the best case, each pair of UTF-16 points becomes a
+                   -- single UTF-32 point
+                          `min` (bufferAvailable obuf * 2)
+                  newBuffer (2 * sz) sz WriteBuffer :: IO (Buffer CWchar)
     debugIO $ "cpDecode " ++ summaryBuffer ibuf ++ " " ++ summaryBuffer mbuf
-    (why1, ibuf', mbuf') <- cpRecode try' is_valid_prefix max_char_size 1 0 1 ibuf mbuf
-    debugIO $ "cpRecode (cpDecode) = " ++ show why1 ++ " " ++ summaryBuffer ibuf' ++ " " ++ summaryBuffer mbuf'
-#if defined(CHARBUF_UTF16)
-    return (why1, ibuf', mbuf')
-#else
-    -- Convert as much UTF-16 as possible to UTF-32. Note that it's impossible for this to fail
-    -- due to illegal characters since the output from Window's encoding function should be correct UTF-16.
-    -- However, it's perfectly possible to run out of either output or input buffer.
-    debugIO $ "utf16_native_decode " ++ summaryBuffer mbuf' ++ " " ++ summaryBuffer obuf
-    (why2, target_utf16_count, mbuf', obuf) <- saner utf16_native_decode (mbuf' { bufState = ReadBuffer }) obuf
-    debugIO $ "utf16_native_decode = " ++ show why2 ++ " " ++ summaryBuffer mbuf' ++ " " ++ summaryBuffer obuf
-    case why2 of
-      -- If we successfully translate all of the UTF-16 buffer, we need to know why we couldn't get any more
-      -- UTF-16 out of the Windows API
-      InputUnderflow | isEmptyBuffer mbuf' -> return (why1, ibuf', obuf)
-                     | otherwise           -> errorWithoutStackTrace "cpDecode: impossible underflown UTF-16 buffer"
-      -- InvalidSequence should be impossible since mbuf' is output from Windows.
-      InvalidSequence -> errorWithoutStackTrace "InvalidSequence on output of Windows API"
-      -- If we run out of space in obuf, we need to ask for more output buffer space, while also returning
-      -- the characters we have managed to consume so far.
-      OutputUnderflow -> do
-        -- We have an interesting problem here similar to the cpEncode case where we have to figure out how much
-        -- of the byte buffer was consumed to reach as far as the last UTF-16 character we actually decoded to UTF-32 OK.
-        --
-        -- The minimum number of bytes it could take is half the number of UTF-16 chars we got on the output, since
-        -- one byte could theoretically generate two UTF-16 characters.
-        -- The common case (ASCII text) is that every byte in the input maps to a single UTF-16 character.
-        -- In the worst case max_char_size bytes map to each UTF-16 character.
-        byte_count <- bSearch "cpDecode" (cpRecode try' is_valid_prefix max_char_size 1 0 1) ibuf mbuf target_utf16_count (target_utf16_count `div` 2) target_utf16_count (target_utf16_count * max_char_size)
-        return (OutputUnderflow, bufferRemove byte_count ibuf, obuf)
-#endif
+    (why1, ibuf', mbuf') <-
+        cpRecode try' is_valid_prefix max_char_size 1 0 1 ibuf mbuf
+    debugIO $ "cpRecode (cpDecode) = " ++ show why1 ++ " "
+              ++ summaryBuffer ibuf' ++ " " ++ summaryBuffer mbuf'
+    case getCharBufEncoding of
+      CharBuff_UTF16 -> return (why1, ibuf', mbuf')
+      CharBuff_UTF32 -> do
+        -- Convert as much UTF-16 as possible to UTF-32. Note that it's
+        -- impossible for this to fail due to illegal characters since the
+        -- output from Window's encoding function should be correct UTF-16.
+        -- However, it's perfectly possible to run out of either output or
+        -- input buffer.
+        debugIO $ "utf16_native_decode " ++ summaryBuffer mbuf' ++ " "
+                  ++ summaryBuffer obuf
+        (why2, target_utf16_count, mbuf', obuf)
+           <- saner utf16_native_decode (mbuf' { bufState = ReadBuffer }) obuf
+        debugIO $ "utf16_native_decode = " ++ show why2 ++ " "
+                  ++ summaryBuffer mbuf' ++ " " ++ summaryBuffer obuf
+        case why2 of
+          -- If we successfully translate all of the UTF-16 buffer, we need to
+          -- know why we couldn't get any more UTF-16 out of the Windows API
+          InputUnderflow | isEmptyBuffer mbuf' -> return (why1, ibuf', obuf)
+                         | otherwise           -> errorWithoutStackTrace
+                               "cpDecode: impossible underflown UTF-16 buffer"
+          -- InvalidSequence should be impossible since mbuf' is output from
+          -- Windows.
+          InvalidSequence -> errorWithoutStackTrace
+                               "InvalidSequence on output of Windows API"
+          -- If we run out of space in obuf, we need to ask for more output
+          -- buffer space, while also returning the characters we have managed
+          -- to consume so far.
+          OutputUnderflow -> do
+            -- We have an interesting problem here similar to the cpEncode case
+            -- where we have to figure out how much of the byte buffer was
+            -- consumed to reach as far as the last UTF-16 character we actually
+            -- decoded to UTF-32 OK.
+            --
+            -- The minimum number of bytes it could take is half the number of
+            -- UTF-16 chars we got on the output, since one byte could
+            -- theoretically generate two UTF-16 characters.
+            -- The common case (ASCII text) is that every byte in the input
+            -- maps to a single UTF-16 character.
+            -- In the worst case max_char_size bytes map to each UTF-16
+            -- character.
+            byte_count <- bSearch "cpDecode" (cpRecode try' is_valid_prefix
+                                                       max_char_size 1 0 1)
+                                  ibuf mbuf target_utf16_count
+                                  (target_utf16_count `div` 2)
+                                  target_utf16_count
+                                  (target_utf16_count * max_char_size)
+            return (OutputUnderflow, bufferRemove byte_count ibuf, obuf)
   where
     is_valid_prefix = c_IsDBCSLeadByteEx cp
     try' iptr icnt optr ocnt
@@ -257,46 +283,65 @@ cpDecode cp max_char_size = \ibuf obuf -> do
 
 cpEncode :: Word32 -> Int -> EncodeBuffer
 cpEncode cp _max_char_size = \ibuf obuf -> do
-#if defined(CHARBUF_UTF16)
-    let mbuf' = ibuf
-#else
-    -- FIXME: share the buffer between runs, even though that means we can't size the buffer as we want.
-    let sz =       (bufferElems ibuf * 2)     -- UTF-32 always uses 4 bytes. UTF-16 uses at most 4 bytes.
-             `min` (bufferAvailable obuf * 2) -- In the best case, each pair of UTF-16 points fits into only 1 byte
-    mbuf <- newBuffer (2 * sz) sz WriteBuffer
+    mbuf' <- case getCharBufEncoding of
+      CharBuff_UTF16 -> return ibuf
+      CharBuff_UTF32 -> do
+        -- FIXME: share the buffer between runs, even though that means we can't
+        -- size the buffer as we want.
+        -- UTF-32 always uses 4 bytes. UTF-16 uses at most 4 bytes.
+        let sz =       (bufferElems ibuf * 2)
+        -- In the best case, each pair of UTF-16 points fits into only 1 byte
+                `min` (bufferAvailable obuf * 2)
+        mbuf <- newBuffer (2 * sz) sz WriteBuffer
 
-    -- Convert as much UTF-32 as possible to UTF-16. NB: this can't fail due to output underflow
-    -- since we sized the output buffer correctly. However, it could fail due to an illegal character
-    -- in the input if it encounters a lone surrogate. In this case, our recovery will be applied as normal.
-    (why1, ibuf', mbuf') <- utf16_native_encode ibuf mbuf
-#endif
+        -- Convert as much UTF-32 as possible to UTF-16. NB: this can't fail
+        -- due to output underflow since we sized the output buffer correctly.
+        -- However, it could fail due to an illegal character in the input if
+        -- it encounters a lone surrogate. In this case, our recovery will be
+        -- applied as normal.
+        (why1, ibuf', mbuf') <- utf16_native_encode ibuf mbuf
     debugIO $ "\ncpEncode " ++ summaryBuffer mbuf' ++ " " ++ summaryBuffer obuf
-    (why2, target_utf16_count, mbuf', obuf) <- saner (cpRecode try' is_valid_prefix 2 1 1 0) (mbuf' { bufState = ReadBuffer }) obuf
-    debugIO $ "cpRecode (cpEncode) = " ++ show why2 ++ " " ++ summaryBuffer mbuf' ++ " " ++ summaryBuffer obuf
-#if defined(CHARBUF_UTF16)
-    return (why2, mbuf', obuf)
-#else
-    case why2 of
-      -- If we succesfully translate all of the UTF-16 buffer, we need to know why
-      -- we weren't able to get any more UTF-16 out of the UTF-32 buffer
-      InputUnderflow | isEmptyBuffer mbuf' -> return (why1, ibuf', obuf)
-                     | otherwise           -> errorWithoutStackTrace "cpEncode: impossible underflown UTF-16 buffer"
-      -- With OutputUnderflow/InvalidSequence we only care about the failings of the UTF-16->CP translation.
-      -- Yes, InvalidSequence is possible even though mbuf' is guaranteed to be valid UTF-16, because
-      -- the code page may not be able to represent the encoded Unicode codepoint.
-      _ -> do
-        -- Here is an interesting problem. If we have only managed to translate part of the mbuf'
-        -- then we need to return an ibuf which has consumed exactly those bytes required to obtain
-        -- that part of the mbuf'. To reconstruct this information, we binary search for the number of
-        -- UTF-32 characters required to get the consumed count of UTF-16 characters:
-        --
-        -- When dealing with data from the BMP (the common case), consuming N UTF-16 characters will be the same as consuming N
-        -- UTF-32 characters. We start our search there so that most binary searches will terminate in a single iteration.
-        -- Furthermore, the absolute minimum number of UTF-32 characters this can correspond to is 1/2 the UTF-16 byte count
-        -- (this will be realised when the input data is entirely not in the BMP).
-        utf32_count <- bSearch "cpEncode" utf16_native_encode ibuf mbuf target_utf16_count (target_utf16_count `div` 2) target_utf16_count target_utf16_count
-        return (why2, bufferRemove utf32_count ibuf, obuf)
-#endif
+    (why2, target_utf16_count, mbuf', obuf)
+      <- saner (cpRecode try' is_valid_prefix 2 1 1 0)
+               (mbuf' { bufState = ReadBuffer }) obuf
+    debugIO $ "cpRecode (cpEncode) = " ++ show why2 ++ " "
+              ++ summaryBuffer mbuf' ++ " " ++ summaryBuffer obuf
+    case getCharBufEncoding of
+      CharBuff_UTF16 -> return (why2, mbuf', obuf)
+      CharBuff_UTF32 -> do
+        case why2 of
+          -- If we succesfully translate all of the UTF-16 buffer, we need to
+          -- know why we weren't able to get any more UTF-16 out of the UTF-32
+          -- buffer
+          InputUnderflow | isEmptyBuffer mbuf' -> return (why1, ibuf', obuf)
+                         | otherwise            -> errorWithoutStackTrace
+                                "cpEncode: impossible underflown UTF-16 buffer"
+          -- With OutputUnderflow/InvalidSequence we only care about the
+          -- failings of the UTF-16->CP translation.
+          -- Yes, InvalidSequence is possible even though mbuf' is guaranteed to
+          -- be valid UTF-16, because the code page may not be able to represent
+          -- the encoded Unicode codepoint.
+          _ -> do
+            -- Here is an interesting problem. If we have only managed to
+            -- translate part of the mbuf' then we need to return an ibuf which
+            -- has consumed exactly those bytes required to obtain that part of
+            -- the mbuf'. To reconstruct this information, we binary search for
+            -- the number of UTF-32 characters required to get the consumed
+            -- count of UTF-16 characters:
+            --
+            -- When dealing with data from the BMP (the common case), consuming
+            -- N UTF-16 characters will be the same as consuming N UTF-32
+            -- characters. We start our search there so that most binary
+            -- searches will terminate in a single iteration. Furthermore, the
+            -- absolute minimum number of UTF-32 characters this can correspond
+            -- to is 1/2 the UTF-16 byte count
+            -- (this will be realised when the input data is entirely not in
+            -- the BMP).
+            utf32_count <- bSearch "cpEncode" utf16_native_encode ibuf mbuf
+                                   target_utf16_count
+                                   (target_utf16_count `div` 2)
+                                   target_utf16_count target_utf16_count
+            return (why2, bufferRemove utf32_count ibuf, obuf)
   where
     -- Single characters should be mappable to bytes. If they aren't supported by the CP then we have an invalid input sequence.
     is_valid_prefix _ = return False
