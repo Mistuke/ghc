@@ -126,8 +126,8 @@ data Handle__
       haByteBuffer  :: !(IORef (Buffer Word8)), -- See [note Buffering Implementation]
       haBufferMode  :: BufferMode,
       haLastDecode  :: !(IORef (dec_state, Buffer Word8)),
-      haCharBuffer  :: !(IORef (Buffer CharBufElem)), -- See [note Buffering Implementation]
-      haBuffers     :: !(IORef (BufferList CharBufElem)),  -- spare buffers
+      haCharBuffer  :: !(IORef (Buffer TextEncodable)), -- See [note Buffering Implementation]
+      haBuffers     :: !(IORef (BufferList TextEncodable)),  -- spare buffers
       haEncoder     :: Maybe (TextEncoder enc_state),
       haDecoder     :: Maybe (TextDecoder dec_state),
       haCodec       :: Maybe TextEncoding,

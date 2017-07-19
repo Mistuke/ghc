@@ -142,8 +142,8 @@ unescapeRoundtripCharacterSurrogate c
     | otherwise                 = Nothing
   where x = ord c
 
-recoverDecode :: CodingFailureMode -> Buffer Word8 -> Buffer Char
-              -> IO (Buffer Word8, Buffer Char)
+recoverDecode :: Encodable e => CodingFailureMode -> Buffer Word8 -> Buffer e
+              -> IO (Buffer Word8, Buffer e)
 recoverDecode cfm input@Buffer{  bufRaw=iraw, bufL=ir, bufR=_  }
                   output@Buffer{ bufRaw=oraw, bufL=_,  bufR=ow } = do
  --puts $ "recoverDecode " ++ show ir
@@ -158,8 +158,8 @@ recoverDecode cfm input@Buffer{  bufRaw=iraw, bufL=ir, bufR=_  }
       ow' <- writeCharBuf oraw ow (escapeToRoundtripCharacterSurrogate b)
       return (input { bufL=ir+1 }, output { bufR=ow' })
 
-recoverEncode :: CodingFailureMode -> Buffer Char -> Buffer Word8
-              -> IO (Buffer Char, Buffer Word8)
+recoverEncode :: Encodable e => CodingFailureMode -> Buffer e -> Buffer Word8
+              -> IO (Buffer e, Buffer Word8)
 recoverEncode cfm input@Buffer{  bufRaw=iraw, bufL=ir, bufR=_  }
                   output@Buffer{ bufRaw=oraw, bufL=_,  bufR=ow } = do
   (c,ir') <- readCharBuf iraw ir

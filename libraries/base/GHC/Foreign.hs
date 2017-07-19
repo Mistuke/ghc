@@ -197,7 +197,7 @@ peekEncodedCString :: TextEncoding -- ^ Encoding of CString
 peekEncodedCString (TextEncoding { mkTextDecoder = mk_decoder }) (p, sz_bytes)
   = bracket mk_decoder close $ \decoder -> do
       let chunk_size = sz_bytes `max` 1 -- Decode buffer chunk size in characters: one iteration only for ASCII
-      from0 <- fmap (\fp -> bufferAdd sz_bytes (emptyBuffer fp sz_bytes ReadBuffer)) $ newForeignPtr_ (castPtr p)
+      from0 <- fmap (\fp -> sz_bytes (emptyBuffer fp sz_bytes ReadBuffer)) $ newForeignPtr_ (castPtr p)
       to <- newCharBuffer chunk_size WriteBuffer
 
       let go iteration from = do
@@ -265,7 +265,7 @@ newEncodedCString (TextEncoding { mkTextEncoder = mk_encoder }) null_terminate s
       go (0 :: Int) to_p to_sz_bytes
 
 
-tryFillBufferAndCall :: TextEncoder dstate -> Bool -> Buffer Char -> Ptr Word8 -> Int
+tryFillBufferAndCall :: Encodable e => TextEncoder dstate -> Bool -> Buffer e -> Ptr Word8 -> Int
                      -> (CStringLen -> IO a) -> IO (Maybe a)
 tryFillBufferAndCall encoder null_terminate from0 to_p to_sz_bytes act = do
     to_fp <- newForeignPtr_ to_p

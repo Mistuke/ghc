@@ -1,5 +1,6 @@
 {-# LANGUAGE Trustworthy #-}
-{-# LANGUAGE CPP, NoImplicitPrelude #-}
+{-# LANGUAGE CPP, NoImplicitPrelude, GADTs #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 
 -----------------------------------------------------------------------------
@@ -18,7 +19,7 @@
 
 module GHC.IO.Buffer (
     -- * Buffers of any element
-    Buffer(..), BufferState(..), CharBuffer, CharBufElem,
+    Buffer(..), BufferState(..),
 
     -- ** Creation
     newByteBuffer,
@@ -52,15 +53,16 @@ module GHC.IO.Buffer (
     RawBuffer,
     readWord8Buf,
     writeWord8Buf,
-    RawCharBuffer,
     peekCharBuf,
     readCharBuf,
     writeCharBuf,
     readCharBufPtr,
     writeCharBufPtr,
     charSize,
+    Encodable(),
  ) where
 
+import Data.Char
 import GHC.Base
 -- import GHC.IO
 import GHC.Num
@@ -79,10 +81,31 @@ import Foreign.Storable
 --   * a Char buffer consists of *valid* UTF-16 or UTF-32
 --   * only whole characters: no partial surrogate pairs
 
-#define CHARBUF_UTF32
+-- | Since we want to be able to switch between UTF-16 and UTF-32 at runtime
+--   we represent the class of encodable char type as an Encodable to be able
+--   to typecheck. Eventually it'll all be turned into an array of Word8.
+class Encodable a where
+  peekCharBuf      :: RawBuffer a -> Int -> IO Char
+  peekCharBuf arr ix = withForeignPtr arr $ \p -> do
+                        (c,_) <- readCharBufPtr p ix
+                        return c
 
--- #define CHARBUF_UTF16
---
+  readCharBuf      :: RawBuffer a -> Int -> IO (Char, Int)
+  readCharBuf arr ix = withForeignPtr arr $ \p -> readCharBufPtr p ix
+
+  writeCharBuf     :: RawBuffer a -> Int -> Char -> IO Int
+  writeCharBuf arr ix c = withForeignPtr arr $ \p -> writeCharBufPtr p ix c
+
+  readCharBufPtr   :: Ptr a -> Int -> IO (Char, Int)
+  writeCharBufPtr  :: Ptr a -> Int -> Char -> IO Int
+  newCharBuffer    :: Int -> BufferState -> IO (Buffer a)
+  newCharBuffer c st = newBuffer (c * (charSize (undefined :: a))) c st
+  -- if a Char buffer does not have room for a surrogate pair, it is "full"
+  isFullCharBuffer :: Buffer a -> Bool
+  charSize         :: a -> Int
+
+-- TODO (Tamar): fix this after I get it to typecheck. Also add INLINE and
+-- SPECIALIZE pragmas back in for performance.
 -- NB. it won't work to just change this to CHARBUF_UTF16.  Some of
 -- the code to make this work is there, and it has been tested with
 -- the Iconv codec, but there are some pieces that are known to be
@@ -101,64 +124,33 @@ readWord8Buf arr ix = withForeignPtr arr $ \p -> peekByteOff p ix
 writeWord8Buf :: RawBuffer Word8 -> Int -> Word8 -> IO ()
 writeWord8Buf arr ix w = withForeignPtr arr $ \p -> pokeByteOff p ix w
 
-#if defined(CHARBUF_UTF16)
-type CharBufElem = Word16
-#else
-type CharBufElem = Char
-#endif
+instance Encodable Char where
+  charSize _ = 4
+  readCharBufPtr p ix = do c <- peekElemOff (castPtr p) ix
+                           return (c, ix+1)
+  writeCharBufPtr p ix ch = do pokeElemOff (castPtr p) ix ch
+                               return (ix+1)
+  isFullCharBuffer = isFullBuffer
 
-type RawCharBuffer = RawBuffer CharBufElem
-
-peekCharBuf :: RawCharBuffer -> Int -> IO Char
-peekCharBuf arr ix = withForeignPtr arr $ \p -> do
-                        (c,_) <- readCharBufPtr p ix
-                        return c
-
-{-# INLINE readCharBuf #-}
-readCharBuf :: RawCharBuffer -> Int -> IO (Char, Int)
-readCharBuf arr ix = withForeignPtr arr $ \p -> readCharBufPtr p ix
-
-{-# INLINE writeCharBuf #-}
-writeCharBuf :: RawCharBuffer -> Int -> Char -> IO Int
-writeCharBuf arr ix c = withForeignPtr arr $ \p -> writeCharBufPtr p ix c
-
-{-# INLINE readCharBufPtr #-}
-readCharBufPtr :: Ptr CharBufElem -> Int -> IO (Char, Int)
-#if defined(CHARBUF_UTF16)
-readCharBufPtr p ix = do
-  c1 <- peekElemOff p ix
-  if (c1 < 0xd800 || c1 > 0xdbff)
-     then return (chr (fromIntegral c1), ix+1)
-     else do c2 <- peekElemOff p (ix+1)
-             return (unsafeChr ((fromIntegral c1 - 0xd800)*0x400 +
-                                (fromIntegral c2 - 0xdc00) + 0x10000), ix+2)
-#else
-readCharBufPtr p ix = do c <- peekElemOff (castPtr p) ix; return (c, ix+1)
-#endif
-
-{-# INLINE writeCharBufPtr #-}
-writeCharBufPtr :: Ptr CharBufElem -> Int -> Char -> IO Int
-#if defined(CHARBUF_UTF16)
-writeCharBufPtr p ix ch
-  | c < 0x10000 = do pokeElemOff p ix (fromIntegral c)
-                     return (ix+1)
-  | otherwise   = do let c' = c - 0x10000
-                     pokeElemOff p ix (fromIntegral (c' `div` 0x400 + 0xd800))
-                     pokeElemOff p (ix+1) (fromIntegral (c' `mod` 0x400 + 0xdc00))
-                     return (ix+2)
-  where
-    c = ord ch
-#else
-writeCharBufPtr p ix ch = do pokeElemOff (castPtr p) ix ch; return (ix+1)
-#endif
-
-charSize :: Int
-#if defined(CHARBUF_UTF16)
-charSize = 2
-#else
-charSize = 4
-#endif
-
+instance Encodable Word16 where
+  charSize _ = 2
+  readCharBufPtr p ix = do
+    c1 <- peekElemOff p ix
+    if (c1 < 0xd800 || c1 > 0xdbff)
+      then return (chr (fromIntegral c1), ix+1)
+      else do c2 <- peekElemOff p (ix+1)
+              return (unsafeChr ((fromIntegral c1 - 0xd800)*0x400 +
+                                  (fromIntegral c2 - 0xdc00) + 0x10000), ix+2)
+  writeCharBufPtr p ix ch
+    | c < 0x10000 = do pokeElemOff p ix (fromIntegral c)
+                       return (ix+1)
+    | otherwise   = do let c' = c - 0x10000
+                       pokeElemOff p ix (fromIntegral (c' `div` 0x400 + 0xd800))
+                       pokeElemOff p (ix+1) (fromIntegral (c' `mod` 0x400 + 0xdc00))
+                       return (ix+2)
+    where
+      c = ord ch
+  isFullCharBuffer buf = bufferAvailable buf < 2
 -- ---------------------------------------------------------------------------
 -- Buffers
 
@@ -186,12 +178,6 @@ data Buffer e
         bufR     :: !Int           -- offset of last item + 1
   }
 
-#if defined(CHARBUF_UTF16)
-type CharBuffer = Buffer Word16
-#else
-type CharBuffer = Buffer Char
-#endif
-
 data BufferState = ReadBuffer | WriteBuffer deriving (Eq)
 
 withBuffer :: Buffer e -> (Ptr e -> IO a) -> IO a
@@ -205,14 +191,6 @@ isEmptyBuffer Buffer{ bufL=l, bufR=r } = l == r
 
 isFullBuffer :: Buffer e -> Bool
 isFullBuffer Buffer{ bufR=w, bufSize=s } = s == w
-
--- if a Char buffer does not have room for a surrogate pair, it is "full"
-isFullCharBuffer :: Buffer e -> Bool
-#if defined(CHARBUF_UTF16)
-isFullCharBuffer buf = bufferAvailable buf < 2
-#else
-isFullCharBuffer = isFullBuffer
-#endif
 
 isWriteBuffer :: Buffer e -> Bool
 isWriteBuffer buf = case bufState buf of
@@ -242,9 +220,6 @@ emptyBuffer raw sz state =
 
 newByteBuffer :: Int -> BufferState -> IO (Buffer Word8)
 newByteBuffer c st = newBuffer c c st
-
-newCharBuffer :: Int -> BufferState -> IO CharBuffer
-newCharBuffer c st = newBuffer (c * charSize) c st
 
 newBuffer :: Int -> Int -> BufferState -> IO (Buffer e)
 newBuffer bytes sz state = do

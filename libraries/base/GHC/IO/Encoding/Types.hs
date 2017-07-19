@@ -1,5 +1,6 @@
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE NoImplicitPrelude, ExistentialQuantification #-}
+{-# LANGUAGE Rank2Types #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 
 -----------------------------------------------------------------------------
@@ -7,7 +8,7 @@
 -- Module      :  GHC.IO.Encoding.Types
 -- Copyright   :  (c) The University of Glasgow, 2008-2009
 -- License     :  see libraries/base/LICENSE
--- 
+--
 -- Maintainer  :  libraries@haskell.org
 -- Stability   :  internal
 -- Portability :  non-portable
@@ -21,7 +22,9 @@ module GHC.IO.Encoding.Types (
     TextEncoding(..),
     TextEncoder, TextDecoder,
     CodeBuffer, EncodeBuffer, DecodeBuffer,
-    CodingProgress(..)
+    CodingProgress(..),
+    TextEncodable(..),
+    mkCharElem
   ) where
 
 import GHC.Base
@@ -49,7 +52,7 @@ data BufferCodec from to state = BufferCodec {
    -- The fact that as many elements as possible are translated is used by the IO
    -- library in order to report translation errors at the point they
    -- actually occur, rather than when the buffer is translated.
-  
+
   recover :: Buffer from -> Buffer to -> IO (Buffer from, Buffer to),
    -- ^ The @recover@ function is used to continue decoding
    -- in the presence of invalid or unrepresentable sequences. This includes
@@ -68,7 +71,7 @@ data BufferCodec from to state = BufferCodec {
    -- In particular, this feature is used to implement transliteration.
    --
    -- @since 4.4.0.0
-  
+
   close  :: IO (),
    -- ^ Resources associated with the encoding may now be released.
    -- The @encode@ function may not be called again after calling
@@ -93,11 +96,15 @@ data BufferCodec from to state = BufferCodec {
  }
 
 type CodeBuffer from to = Buffer from -> Buffer to -> IO (CodingProgress, Buffer from, Buffer to)
-type DecodeBuffer = CodeBuffer Word8 Char
-type EncodeBuffer = CodeBuffer Char Word8
+type DecodeBuffer = CodeBuffer Word8 TextEncodable
+type EncodeBuffer = CodeBuffer TextEncodable Word8
 
-type TextDecoder state = BufferCodec Word8 CharBufElem state
-type TextEncoder state = BufferCodec CharBufElem Word8 state
+newtype TextEncodable = TextEncodable { mkEncodable :: forall elem. Encodable elem => elem }
+type TextDecoder state = BufferCodec Word8 TextEncodable state
+type TextEncoder state = BufferCodec TextEncodable Word8 state
+
+mkCharElem :: (forall elem. Encodable elem => elem) -> TextEncodable
+mkCharElem el = TextEncodable el
 
 -- | A 'TextEncoding' is a specification of a conversion scheme
 -- between sequences of bytes and sequences of Unicode characters.
