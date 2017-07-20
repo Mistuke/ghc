@@ -52,16 +52,16 @@ import GHC.IORef
 -- -----------------------------------------------------------------------------
 -- The UTF-16 codec: either UTF16BE or UTF16LE with a BOM
 
-utf16  :: TextEncoding
+utf16  :: Encodable e => TextEncoding e
 utf16 = mkUTF16 ErrorOnCodingFailure
 
 -- | @since 4.4.0.0
-mkUTF16 :: CodingFailureMode -> TextEncoding
+mkUTF16 :: Encodable e => CodingFailureMode -> TextEncoding e
 mkUTF16 cfm =  TextEncoding { textEncodingName = "UTF-16",
                               mkTextDecoder = utf16_DF cfm,
                               mkTextEncoder = utf16_EF cfm }
 
-utf16_DF :: CodingFailureMode -> IO (TextDecoder (Maybe DecodeBuffer))
+utf16_DF :: Encodable e => CodingFailureMode -> IO (TextDecoder e (Maybe (DecodeBuffer e)))
 utf16_DF cfm = do
   seen_bom <- newIORef Nothing
   return (BufferCodec {
@@ -72,7 +72,7 @@ utf16_DF cfm = do
              setState = writeIORef seen_bom
           })
 
-utf16_EF :: CodingFailureMode -> IO (TextEncoder Bool)
+utf16_EF :: Encodable e => CodingFailureMode -> IO (TextEncoder e Bool)
 utf16_EF cfm = do
   done_bom <- newIORef False
   return (BufferCodec {
@@ -83,7 +83,7 @@ utf16_EF cfm = do
              setState = writeIORef done_bom
           })
 
-utf16_encode :: IORef Bool -> EncodeBuffer
+utf16_encode :: Encodable e => IORef Bool -> EncodeBuffer e
 utf16_encode done_bom input
   output@Buffer{ bufRaw=oraw, bufL=_, bufR=ow, bufSize=os }
  = do
@@ -97,7 +97,7 @@ utf16_encode done_bom input
                     writeWord8Buf oraw (ow+1) bom2
                     utf16_native_encode input output{ bufR = ow+2 }
 
-utf16_decode :: IORef (Maybe DecodeBuffer) -> DecodeBuffer
+utf16_decode :: Encodable e => IORef (Maybe (DecodeBuffer e)) -> DecodeBuffer e
 utf16_decode seen_bom
   input@Buffer{  bufRaw=iraw, bufL=ir, bufR=iw,  bufSize=_  }
   output
@@ -126,10 +126,10 @@ bomB = 0xfe
 bomL = 0xff
 
 -- choose UTF-16BE by default for UTF-16 output
-utf16_native_decode :: DecodeBuffer
+utf16_native_decode :: Encodable e => DecodeBuffer e
 utf16_native_decode = utf16be_decode
 
-utf16_native_encode :: EncodeBuffer
+utf16_native_encode :: Encodable e => EncodeBuffer e
 utf16_native_encode = utf16be_encode
 
 bom1 = bomB
@@ -138,16 +138,16 @@ bom2 = bomL
 -- -----------------------------------------------------------------------------
 -- UTF16LE and UTF16BE
 
-utf16be :: TextEncoding
+utf16be :: Encodable e => TextEncoding e
 utf16be = mkUTF16be ErrorOnCodingFailure
 
 -- | @since 4.4.0.0
-mkUTF16be :: CodingFailureMode -> TextEncoding
+mkUTF16be :: Encodable e => CodingFailureMode -> TextEncoding e
 mkUTF16be cfm = TextEncoding { textEncodingName = "UTF-16BE",
                                mkTextDecoder = utf16be_DF cfm,
                                mkTextEncoder = utf16be_EF cfm }
 
-utf16be_DF :: CodingFailureMode -> IO (TextDecoder ())
+utf16be_DF :: Encodable e => CodingFailureMode -> IO (TextDecoder e ())
 utf16be_DF cfm =
   return (BufferCodec {
              encode   = utf16be_decode,
@@ -157,7 +157,7 @@ utf16be_DF cfm =
              setState = const $ return ()
           })
 
-utf16be_EF :: CodingFailureMode -> IO (TextEncoder ())
+utf16be_EF :: Encodable e => CodingFailureMode -> IO (TextEncoder e ())
 utf16be_EF cfm =
   return (BufferCodec {
              encode   = utf16be_encode,
@@ -167,16 +167,16 @@ utf16be_EF cfm =
              setState = const $ return ()
           })
 
-utf16le :: TextEncoding
+utf16le :: Encodable e => TextEncoding e
 utf16le = mkUTF16le ErrorOnCodingFailure
 
 -- | @since 4.4.0.0
-mkUTF16le :: CodingFailureMode -> TextEncoding
+mkUTF16le :: Encodable e => CodingFailureMode -> TextEncoding e
 mkUTF16le cfm = TextEncoding { textEncodingName = "UTF16-LE",
                                mkTextDecoder = utf16le_DF cfm,
                                mkTextEncoder = utf16le_EF cfm }
 
-utf16le_DF :: CodingFailureMode -> IO (TextDecoder ())
+utf16le_DF :: Encodable e => CodingFailureMode -> IO (TextDecoder e ())
 utf16le_DF cfm =
   return (BufferCodec {
              encode   = utf16le_decode,
@@ -186,7 +186,7 @@ utf16le_DF cfm =
              setState = const $ return ()
           })
 
-utf16le_EF :: CodingFailureMode -> IO (TextEncoder ())
+utf16le_EF :: Encodable e => CodingFailureMode -> IO (TextEncoder e ())
 utf16le_EF cfm =
   return (BufferCodec {
              encode   = utf16le_encode,
@@ -197,7 +197,7 @@ utf16le_EF cfm =
           })
 
 
-utf16be_decode :: DecodeBuffer
+utf16be_decode :: Encodable e => DecodeBuffer e
 utf16be_decode
   input@Buffer{  bufRaw=iraw, bufL=ir0, bufR=iw,  bufSize=_  }
   output@Buffer{ bufRaw=oraw, bufL=_,   bufR=ow0, bufSize=os }
@@ -231,7 +231,7 @@ utf16be_decode
     in
     loop ir0 ow0
 
-utf16le_decode :: DecodeBuffer
+utf16le_decode :: Encodable e => DecodeBuffer e
 utf16le_decode
   input@Buffer{  bufRaw=iraw, bufL=ir0, bufR=iw,  bufSize=_  }
   output@Buffer{ bufRaw=oraw, bufL=_,   bufR=ow0, bufSize=os }
@@ -265,7 +265,7 @@ utf16le_decode
     in
     loop ir0 ow0
 
-utf16be_encode :: EncodeBuffer
+utf16be_encode :: Encodable e => EncodeBuffer e
 utf16be_encode
   input@Buffer{  bufRaw=iraw, bufL=ir0, bufR=iw,  bufSize=_  }
   output@Buffer{ bufRaw=oraw, bufL=_,   bufR=ow0, bufSize=os }
@@ -302,7 +302,7 @@ utf16be_encode
     in
     loop ir0 ow0
 
-utf16le_encode :: EncodeBuffer
+utf16le_encode :: Encodable e => EncodeBuffer e
 utf16le_encode
   input@Buffer{  bufRaw=iraw, bufL=ir0, bufR=iw,  bufSize=_  }
   output@Buffer{ bufRaw=oraw, bufL=_,   bufR=ow0, bufSize=os }

@@ -83,14 +83,14 @@ type CStringLen = (Ptr CChar, Int)
 
 -- | Marshal a NUL terminated C string into a Haskell string.
 --
-peekCString    :: TextEncoding -> CString -> IO String
+peekCString :: TextEncoding Char -> CString -> IO String
 peekCString enc cp = do
     sz <- lengthArray0 nUL cp
     peekEncodedCString enc (cp, sz * cCharSize)
 
 -- | Marshal a C string with explicit length into a Haskell string.
 --
-peekCStringLen           :: TextEncoding -> CStringLen -> IO String
+peekCStringLen :: TextEncoding Char -> CStringLen -> IO String
 peekCStringLen = peekEncodedCString
 
 -- | Marshal a Haskell string into a NUL terminated C string.
@@ -101,7 +101,7 @@ peekCStringLen = peekEncodedCString
 --   explicitly freed using 'Foreign.Marshal.Alloc.free' or
 --   'Foreign.Marshal.Alloc.finalizerFree'.
 --
-newCString :: TextEncoding -> String -> IO CString
+newCString :: TextEncoding Char -> String -> IO CString
 newCString enc = liftM fst . newEncodedCString enc True
 
 -- | Marshal a Haskell string into a C string (ie, character array) with
@@ -111,7 +111,7 @@ newCString enc = liftM fst . newEncodedCString enc True
 --   explicitly freed using 'Foreign.Marshal.Alloc.free' or
 --   'Foreign.Marshal.Alloc.finalizerFree'.
 --
-newCStringLen     :: TextEncoding -> String -> IO CStringLen
+newCStringLen :: TextEncoding Char -> String -> IO CStringLen
 newCStringLen enc = newEncodedCString enc False
 
 -- | Marshal a Haskell string into a NUL terminated C string using temporary
@@ -123,7 +123,7 @@ newCStringLen enc = newEncodedCString enc False
 --   normally or via an exception), so the pointer to the temporary
 --   storage must /not/ be used after this.
 --
-withCString :: TextEncoding -> String -> (CString -> IO a) -> IO a
+withCString :: TextEncoding Char -> String -> (CString -> IO a) -> IO a
 withCString enc s act = withEncodedCString enc True s $ \(cp, _sz) -> act cp
 
 -- | Marshal a Haskell string into a C string (ie, character array)
@@ -133,7 +133,7 @@ withCString enc s act = withEncodedCString enc True s $ \(cp, _sz) -> act cp
 --   normally or via an exception), so the pointer to the temporary
 --   storage must /not/ be used after this.
 --
-withCStringLen         :: TextEncoding -> String -> (CStringLen -> IO a) -> IO a
+withCStringLen :: TextEncoding Char -> String -> (CStringLen -> IO a) -> IO a
 withCStringLen enc = withEncodedCString enc False
 
 -- | Marshal a list of Haskell strings into an array of NUL terminated C strings
@@ -145,7 +145,7 @@ withCStringLen enc = withEncodedCString enc False
 --   normally or via an exception), so the pointer to the temporary
 --   storage must /not/ be used after this.
 --
-withCStringsLen :: TextEncoding
+withCStringsLen :: TextEncoding Char
                 -> [String]
                 -> (Int -> Ptr CString -> IO a)
                 -> IO a
@@ -159,7 +159,7 @@ withCStringsLen enc strs f = go [] strs
 -- Pretty much anyone who uses this function is in a state of sin because
 -- whether or not a character is encodable will, in general, depend on the
 -- context in which it occurs.
-charIsRepresentable :: TextEncoding -> Char -> IO Bool
+charIsRepresentable :: TextEncoding Char -> Char -> IO Bool
 -- We force enc explicitly because `catch` is lazy in its
 -- first argument. We would probably like to force c as well,
 -- but unfortunately worker/wrapper produces very bad code for
@@ -191,13 +191,13 @@ cCharSize = sizeOf (undefined :: CChar)
 
 
 {-# INLINE peekEncodedCString #-}
-peekEncodedCString :: TextEncoding -- ^ Encoding of CString
+peekEncodedCString :: TextEncoding Char -- ^ Encoding of CString
                    -> CStringLen
                    -> IO String    -- ^ String in Haskell terms
 peekEncodedCString (TextEncoding { mkTextDecoder = mk_decoder }) (p, sz_bytes)
   = bracket mk_decoder close $ \decoder -> do
       let chunk_size = sz_bytes `max` 1 -- Decode buffer chunk size in characters: one iteration only for ASCII
-      from0 <- fmap (\fp -> sz_bytes (emptyBuffer fp sz_bytes ReadBuffer)) $ newForeignPtr_ (castPtr p)
+      from0 <- fmap (\fp -> bufferAdd sz_bytes (emptyBuffer fp sz_bytes ReadBuffer)) $ newForeignPtr_ (castPtr p)
       to <- newCharBuffer chunk_size WriteBuffer
 
       let go iteration from = do
@@ -220,7 +220,7 @@ peekEncodedCString (TextEncoding { mkTextDecoder = mk_decoder }) (p, sz_bytes)
       go (0 :: Int) from0
 
 {-# INLINE withEncodedCString #-}
-withEncodedCString :: TextEncoding         -- ^ Encoding of CString to create
+withEncodedCString :: TextEncoding Char    -- ^ Encoding of CString to create
                    -> Bool                 -- ^ Null-terminate?
                    -> String               -- ^ String to encode
                    -> (CStringLen -> IO a) -- ^ Worker that can safely use the allocated memory
@@ -241,9 +241,9 @@ withEncodedCString (TextEncoding { mkTextEncoder = mk_encoder }) null_terminate 
       go (0 :: Int) (cCharSize * (sz + 1))
 
 {-# INLINE newEncodedCString #-}
-newEncodedCString :: TextEncoding  -- ^ Encoding of CString to create
-                  -> Bool          -- ^ Null-terminate?
-                  -> String        -- ^ String to encode
+newEncodedCString :: TextEncoding Char -- ^ Encoding of CString to create
+                  -> Bool              -- ^ Null-terminate?
+                  -> String            -- ^ String to encode
                   -> IO CStringLen
 newEncodedCString (TextEncoding { mkTextEncoder = mk_encoder }) null_terminate s
   = bracket mk_encoder close $ \encoder -> withArrayLen s $ \sz p -> do
@@ -264,8 +264,7 @@ newEncodedCString (TextEncoding { mkTextEncoder = mk_encoder }) null_terminate s
       to_p <- mallocBytes to_sz_bytes
       go (0 :: Int) to_p to_sz_bytes
 
-
-tryFillBufferAndCall :: Encodable e => TextEncoder dstate -> Bool -> Buffer e -> Ptr Word8 -> Int
+tryFillBufferAndCall :: Encodable e => TextEncoder e dstate -> Bool -> Buffer e -> Ptr Word8 -> Int
                      -> (CStringLen -> IO a) -> IO (Maybe a)
 tryFillBufferAndCall encoder null_terminate from0 to_p to_sz_bytes act = do
     to_fp <- newForeignPtr_ to_p

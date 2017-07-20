@@ -11,7 +11,7 @@
 -- Module      :  GHC.IO.Encoding.UTF8
 -- Copyright   :  (c) The University of Glasgow, 2009
 -- License     :  see libraries/base/LICENSE
--- 
+--
 -- Maintainer  :  libraries@haskell.org
 -- Stability   :  internal
 -- Portability :  non-portable
@@ -40,17 +40,17 @@ import GHC.IO.Encoding.Types
 import GHC.Word
 import Data.Bits
 
-utf8 :: TextEncoding
+utf8 :: Encodable e => TextEncoding e
 utf8 = mkUTF8 ErrorOnCodingFailure
 
 -- | @since 4.4.0.0
-mkUTF8 :: CodingFailureMode -> TextEncoding
+mkUTF8 :: Encodable e => CodingFailureMode -> TextEncoding e
 mkUTF8 cfm = TextEncoding { textEncodingName = "UTF-8",
                             mkTextDecoder = utf8_DF cfm,
                             mkTextEncoder = utf8_EF cfm }
 
 
-utf8_DF :: CodingFailureMode -> IO (TextDecoder ())
+utf8_DF :: Encodable e => CodingFailureMode -> IO (TextDecoder e ())
 utf8_DF cfm =
   return (BufferCodec {
              encode   = utf8_decode,
@@ -60,7 +60,7 @@ utf8_DF cfm =
              setState = const $ return ()
           })
 
-utf8_EF :: CodingFailureMode -> IO (TextEncoder ())
+utf8_EF :: Encodable e => CodingFailureMode -> IO (TextEncoder e ())
 utf8_EF cfm =
   return (BufferCodec {
              encode   = utf8_encode,
@@ -70,15 +70,15 @@ utf8_EF cfm =
              setState = const $ return ()
           })
 
-utf8_bom :: TextEncoding
+utf8_bom :: Encodable e => TextEncoding e
 utf8_bom = mkUTF8_bom ErrorOnCodingFailure
 
-mkUTF8_bom :: CodingFailureMode -> TextEncoding
+mkUTF8_bom :: Encodable e => CodingFailureMode -> TextEncoding e
 mkUTF8_bom cfm = TextEncoding { textEncodingName = "UTF-8BOM",
                                 mkTextDecoder = utf8_bom_DF cfm,
                                 mkTextEncoder = utf8_bom_EF cfm }
 
-utf8_bom_DF :: CodingFailureMode -> IO (TextDecoder Bool)
+utf8_bom_DF :: Encodable e => CodingFailureMode -> IO (TextDecoder e Bool)
 utf8_bom_DF cfm = do
    ref <- newIORef True
    return (BufferCodec {
@@ -89,7 +89,7 @@ utf8_bom_DF cfm = do
              setState = writeIORef ref
           })
 
-utf8_bom_EF :: CodingFailureMode -> IO (TextEncoder Bool)
+utf8_bom_EF :: Encodable e => CodingFailureMode -> IO (TextEncoder e Bool)
 utf8_bom_EF cfm = do
    ref <- newIORef True
    return (BufferCodec {
@@ -100,7 +100,7 @@ utf8_bom_EF cfm = do
              setState = writeIORef ref
           })
 
-utf8_bom_decode :: IORef Bool -> DecodeBuffer
+utf8_bom_decode :: Encodable e => IORef Bool -> DecodeBuffer e
 utf8_bom_decode ref
   input@Buffer{  bufRaw=iraw, bufL=ir, bufR=iw,  bufSize=_  }
   output
@@ -123,7 +123,7 @@ utf8_bom_decode ref
        writeIORef ref False
        utf8_decode input{ bufL = ir + 3 } output
 
-utf8_bom_encode :: IORef Bool -> EncodeBuffer
+utf8_bom_encode :: Encodable e => IORef Bool -> EncodeBuffer e
 utf8_bom_encode ref input
   output@Buffer{ bufRaw=oraw, bufL=_, bufR=ow, bufSize=os }
  = do
@@ -143,18 +143,18 @@ bom0 = 0xef
 bom1 = 0xbb
 bom2 = 0xbf
 
-utf8_decode :: DecodeBuffer
-utf8_decode 
+utf8_decode :: Encodable e => DecodeBuffer e
+utf8_decode
   input@Buffer{  bufRaw=iraw, bufL=ir0, bufR=iw,  bufSize=_  }
   output@Buffer{ bufRaw=oraw, bufL=_,   bufR=ow0, bufSize=os }
- = let 
+ = let
        loop !ir !ow
          | ow >= os = done OutputUnderflow ir ow
          | ir >= iw = done InputUnderflow ir ow
          | otherwise = do
               c0 <- readWord8Buf iraw ir
               case c0 of
-                _ | c0 <= 0x7f -> do 
+                _ | c0 <= 0x7f -> do
                            ow' <- writeCharBuf oraw ow (unsafeChr (fromIntegral c0))
                            loop (ir+1) ow'
                   | c0 >= 0xc0 && c0 <= 0xc1 -> invalid -- Overlong forms
@@ -170,7 +170,7 @@ utf8_decode
                         2 -> do -- check for an error even when we don't have
                                 -- the full sequence yet (#3341)
                            c1 <- readWord8Buf iraw (ir+1)
-                           if not (validate3 c0 c1 0x80) 
+                           if not (validate3 c0 c1 0x80)
                               then invalid else done InputUnderflow ir ow
                         _ -> do
                            c1 <- readWord8Buf iraw (ir+1)
@@ -211,11 +211,11 @@ utf8_decode
    in
    loop ir0 ow0
 
-utf8_encode :: EncodeBuffer
+utf8_encode :: Encodable e => EncodeBuffer e
 utf8_encode
   input@Buffer{  bufRaw=iraw, bufL=ir0, bufR=iw,  bufSize=_  }
   output@Buffer{ bufRaw=oraw, bufL=_,   bufR=ow0, bufSize=os }
- = let 
+ = let
       done why !ir !ow = return (why,
                                  if ir == iw then input{ bufL=0, bufR=0 }
                                              else input{ bufL=ir },
@@ -255,7 +255,7 @@ utf8_encode
 
 -- -----------------------------------------------------------------------------
 -- UTF-8 primitives, lifted from Data.Text.Fusion.Utf8
-  
+
 ord2   :: Char -> (Word8,Word8)
 ord2 c = assert (n >= 0x80 && n <= 0x07ff) (x1,x2)
     where
@@ -346,7 +346,7 @@ validate4             :: Word8 -> Word8 -> Word8 -> Word8 -> Bool
 validate4 x1 x2 x3 x4 = validate4_1 ||
                         validate4_2 ||
                         validate4_3
-  where 
+  where
     validate4_1 = x1 == 0xF0 &&
                   between x2 0x90 0xBF &&
                   between x3 0x80 0xBF &&

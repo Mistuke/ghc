@@ -57,11 +57,11 @@ import System.IO.Unsafe (unsafePerformIO)
 -- directly to the first 256 Unicode code points, and is thus not a
 -- complete Unicode encoding.  An attempt to write a character greater than
 -- '\255' to a 'Handle' using the 'latin1' encoding will result in an error.
-latin1  :: TextEncoding
+latin1  :: Encodable e => TextEncoding e
 latin1 = Latin1.latin1_checked
 
 -- | The UTF-8 Unicode encoding
-utf8  :: TextEncoding
+utf8  :: Encodable e => TextEncoding e
 utf8 = UTF8.utf8
 
 -- | The UTF-8 Unicode encoding, with a byte-order-mark (BOM; the byte
@@ -72,39 +72,39 @@ utf8 = UTF8.utf8
 -- The byte-order-mark is strictly unnecessary in UTF-8, but is
 -- sometimes used to identify the encoding of a file.
 --
-utf8_bom  :: TextEncoding
+utf8_bom  :: Encodable e => TextEncoding e
 utf8_bom = UTF8.utf8_bom
 
 -- | The UTF-16 Unicode encoding (a byte-order-mark should be used to
 -- indicate endianness).
-utf16  :: TextEncoding
+utf16  :: Encodable e => TextEncoding e
 utf16 = UTF16.utf16
 
 -- | The UTF-16 Unicode encoding (litte-endian)
-utf16le  :: TextEncoding
+utf16le  :: Encodable e => TextEncoding e
 utf16le = UTF16.utf16le
 
 -- | The UTF-16 Unicode encoding (big-endian)
-utf16be  :: TextEncoding
+utf16be  :: Encodable e => TextEncoding e
 utf16be = UTF16.utf16be
 
 -- | The UTF-32 Unicode encoding (a byte-order-mark should be used to
 -- indicate endianness).
-utf32  :: TextEncoding
+utf32  :: Encodable e => TextEncoding e
 utf32 = UTF32.utf32
 
 -- | The UTF-32 Unicode encoding (litte-endian)
-utf32le  :: TextEncoding
+utf32le  :: Encodable e => TextEncoding e
 utf32le = UTF32.utf32le
 
 -- | The UTF-32 Unicode encoding (big-endian)
-utf32be  :: TextEncoding
+utf32be  :: Encodable e => TextEncoding e
 utf32be = UTF32.utf32be
 
 -- | The Unicode encoding of the current locale
 --
 -- @since 4.5.0.0
-getLocaleEncoding :: IO TextEncoding
+getLocaleEncoding :: Encodable e => IO (TextEncoding e)
 
 -- | The Unicode encoding of the current locale, but allowing arbitrary
 -- undecodable bytes to be round-tripped through it.
@@ -117,17 +117,17 @@ getLocaleEncoding :: IO TextEncoding
 -- via the "wide" W-family of UTF-16 APIs instead
 --
 -- @since 4.5.0.0
-getFileSystemEncoding :: IO TextEncoding
+getFileSystemEncoding :: Encodable e => IO (TextEncoding e)
 
 -- | The Unicode encoding of the current locale, but where undecodable
 -- bytes are replaced with their closest visual match. Used for
 -- the 'CString' marshalling functions in "Foreign.C.String"
 --
 -- @since 4.5.0.0
-getForeignEncoding :: IO TextEncoding
+getForeignEncoding :: Encodable e => IO (TextEncoding e)
 
 -- | @since 4.5.0.0
-setLocaleEncoding, setFileSystemEncoding, setForeignEncoding :: TextEncoding -> IO ()
+setLocaleEncoding, setFileSystemEncoding, setForeignEncoding :: Encodable e => TextEncoding e -> IO ()
 
 (getLocaleEncoding, setLocaleEncoding)         = mkGlobal initLocaleEncoding
 (getFileSystemEncoding, setFileSystemEncoding) = mkGlobal initFileSystemEncoding
@@ -139,7 +139,7 @@ mkGlobal x = unsafePerformIO $ do
     return (readIORef x_ref, writeIORef x_ref)
 
 -- | @since 4.5.0.0
-initLocaleEncoding, initFileSystemEncoding, initForeignEncoding :: TextEncoding
+initLocaleEncoding, initFileSystemEncoding, initForeignEncoding :: Encodable e => TextEncoding e
 
 #if !defined(mingw32_HOST_OS)
 -- It is rather important that we don't just call Iconv.mkIconvEncoding here
@@ -170,7 +170,7 @@ initForeignEncoding    = CodePage.mkLocaleEncoding IgnoreCodingFailure
 -- identity.
 --
 -- @since 4.4.0.0
-char8 :: TextEncoding
+char8 :: Encodable e => TextEncoding e
 char8 = Latin1.latin1
 
 -- | Look up the named Unicode encoding.  May fail with
@@ -221,7 +221,7 @@ char8 = Latin1.latin1
 -- On Windows, you can access supported code pages with the prefix
 -- @CP@; for example, @\"CP1250\"@.
 --
-mkTextEncoding :: String -> IO TextEncoding
+mkTextEncoding :: Encodable e => String -> IO (TextEncoding e)
 mkTextEncoding e = case mb_coding_failure_mode of
     Nothing -> unknownEncodingErr e
     Just cfm -> mkTextEncoding' cfm enc
@@ -234,7 +234,7 @@ mkTextEncoding e = case mb_coding_failure_mode of
         "//ROUNDTRIP" -> Just RoundtripFailure
         _             -> Nothing
 
-mkTextEncoding' :: CodingFailureMode -> String -> IO TextEncoding
+mkTextEncoding' :: Encodable e => CodingFailureMode -> String -> IO (TextEncoding e)
 mkTextEncoding' cfm enc =
   case [toUpper c | c <- enc, c /= '-'] of
   -- UTF-8 and friends we can handle ourselves

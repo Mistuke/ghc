@@ -116,7 +116,7 @@ foreign import WINDOWS_CCONV unsafe "windows.h IsDBCSLeadByteEx"
 -- This is useful for supporting DBCS text encoding on the console without having to statically link
 -- in huge code tables into all of our executables, or just as a fallback mechanism if a new code page
 -- is introduced that we don't know how to deal with ourselves yet.
-mkCodePageEncoding :: CodingFailureMode -> Word32 -> TextEncoding
+mkCodePageEncoding :: Encodable e => CodingFailureMode -> Word32 -> TextEncoding e
 mkCodePageEncoding cfm cp
   = TextEncoding {
         textEncodingName = "CP" ++ show cp,
@@ -148,8 +148,8 @@ newCP rec fn cp = do
   }
 
 
-utf16_native_encode' :: EncodeBuffer
-utf16_native_decode' :: DecodeBuffer
+utf16_native_encode' :: Encodable e => EncodeBuffer e
+utf16_native_decode' :: Encodable e => DecodeBuffer e
 #if defined(WORDS_BIGENDIAN)
 utf16_native_encode' = utf16be_encode
 utf16_native_decode' = utf16be_decode
@@ -158,7 +158,7 @@ utf16_native_encode' = utf16le_encode
 utf16_native_decode' = utf16le_decode
 #endif
 
-saner :: CodeBuffer from to
+saner :: (Encodable from, Encodable to) => CodeBuffer from to
       -> Buffer from -> Buffer to
       -> IO (CodingProgress, Int, Buffer from, Buffer to)
 saner code ibuf obuf = do
@@ -195,7 +195,23 @@ utf16_native_decode ibuf obuf = do
   (why, ibuf, obuf) <- utf16_native_decode' (byteView ibuf) obuf
   return (why, cwcharView ibuf, obuf)
 
-cpDecode :: Word32 -> Int -> DecodeBuffer
+class Encodable e => CpEncoding e where
+  cpDecode :: Encodable e => Word32 -> Int -> DecodeBuffer e
+  cpEncode :: Encodable e => Word32 -> Int -> EncodeBuffer e
+
+instance CpEncoding Char where
+
+instance CpEncoding Word16 where
+  cpDecode cp max_char_size = \ibuf obuf -> do
+        let mbuf = obuf
+        debugIO $ "cpDecode " ++ summaryBuffer ibuf ++ " " ++ summaryBuffer mbuf
+        (why1, ibuf', mbuf') <-
+            cpRecode try' is_valid_prefix max_char_size 1 0 1 ibuf mbuf
+        debugIO $ "cpRecode (cpDecode) = " ++ show why1 ++ " "
+            ++ summaryBuffer ibuf' ++ " " ++ summaryBuffer mbuf'
+        return (why1, ibuf', mbuf')
+
+cpDecode :: Encodable e => Word32 -> Int -> DecodeBuffer e
 cpDecode cp max_char_size = \ibuf obuf -> do
     mbuf <- case getCharBufEncoding of
               CharBuff_UTF16 -> return obuf
@@ -209,7 +225,7 @@ cpDecode cp max_char_size = \ibuf obuf -> do
                    -- In the best case, each pair of UTF-16 points becomes a
                    -- single UTF-32 point
                           `min` (bufferAvailable obuf * 2)
-                  newBuffer (2 * sz) sz WriteBuffer :: IO (Buffer CWchar)
+                  newBuffer (2 * sz) sz WriteBuffer
     debugIO $ "cpDecode " ++ summaryBuffer ibuf ++ " " ++ summaryBuffer mbuf
     (why1, ibuf', mbuf') <-
         cpRecode try' is_valid_prefix max_char_size 1 0 1 ibuf mbuf
@@ -281,10 +297,10 @@ cpDecode cp max_char_size = \ibuf obuf -> do
                 _    -> failWith "MultiByteToWideChar" err
           wrote_chars -> return (Right (fromIntegral wrote_chars))
 
-cpEncode :: Word32 -> Int -> EncodeBuffer
+cpEncode :: Encodable e => Word32 -> Int -> EncodeBuffer e
 cpEncode cp _max_char_size = \ibuf obuf -> do
-    mbuf' <- case getCharBufEncoding of
-      CharBuff_UTF16 -> return ibuf
+    tmp <- case getCharBufEncoding of
+      CharBuff_UTF16 -> return (undefined, undefined, ibuf)
       CharBuff_UTF32 -> do
         -- FIXME: share the buffer between runs, even though that means we can't
         -- size the buffer as we want.
@@ -299,7 +315,8 @@ cpEncode cp _max_char_size = \ibuf obuf -> do
         -- However, it could fail due to an illegal character in the input if
         -- it encounters a lone surrogate. In this case, our recovery will be
         -- applied as normal.
-        (why1, ibuf', mbuf') <- utf16_native_encode ibuf mbuf
+        utf16_native_encode ibuf mbuf
+    let (why1, ibuf', mbuf') = tmp
     debugIO $ "\ncpEncode " ++ summaryBuffer mbuf' ++ " " ++ summaryBuffer obuf
     (why2, target_utf16_count, mbuf', obuf)
       <- saner (cpRecode try' is_valid_prefix 2 1 1 0)
@@ -367,7 +384,7 @@ cpEncode cp _max_char_size = \ibuf obuf -> do
           wrote_bytes | defaulted -> return (Left False)
                       | otherwise -> return (Right (fromIntegral wrote_bytes))
 
-bSearch :: String
+bSearch :: (Encodable from, Encodable to) => String
         -> CodeBuffer from to
         -> Buffer from -> Buffer to -- From buffer (crucial data source) and to buffer (temporary storage only). To buffer must be empty (L=R).
         -> Int               -- Target size of to buffer
@@ -411,7 +428,7 @@ bSearch msg code ibuf mbuf target_to_elems = go
     go' mn mx | mn <= mx  = go mn (mn + ((mx - mn) `div` 2)) mx
               | otherwise = errorWithoutStackTrace $ "bSearch(" ++ msg ++ "): search crossed! " ++ show (summaryBuffer ibuf, summaryBuffer mbuf, target_to_elems, mn, mx)
 
-cpRecode :: forall from to. Storable from
+cpRecode :: forall from to. (Encodable from, Encodable to, Storable from)
          => (Ptr from -> Int -> Ptr to -> Int -> IO (Either Bool Int))
          -> (from -> IO Bool)
          -> Int -- ^ Maximum length of a complete translatable sequence in the input (e.g. 2 if the input is UTF-16, 1 if the input is a SBCS, 2 is the input is a DBCS). Must be at least 1.

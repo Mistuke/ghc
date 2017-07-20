@@ -10,7 +10,7 @@
 -- Module      :  GHC.IO.Encoding.Latin1
 -- Copyright   :  (c) The University of Glasgow, 2009
 -- License     :  see libraries/base/LICENSE
--- 
+--
 -- Maintainer  :  libraries@haskell.org
 -- Stability   :  internal
 -- Portability :  non-portable
@@ -45,16 +45,16 @@ import GHC.IO.Encoding.Types
 -- -----------------------------------------------------------------------------
 -- Latin1
 
-latin1 :: TextEncoding
+latin1 :: Encodable e => TextEncoding e
 latin1 = mkLatin1 ErrorOnCodingFailure
 
 -- | @since 4.4.0.0
-mkLatin1 :: CodingFailureMode -> TextEncoding
+mkLatin1 :: Encodable e => CodingFailureMode -> TextEncoding e
 mkLatin1 cfm = TextEncoding { textEncodingName = "ISO-8859-1",
                               mkTextDecoder = latin1_DF cfm,
                               mkTextEncoder = latin1_EF cfm }
 
-latin1_DF :: CodingFailureMode -> IO (TextDecoder ())
+latin1_DF :: Encodable e => CodingFailureMode -> IO (TextDecoder e ())
 latin1_DF cfm =
   return (BufferCodec {
              encode   = latin1_decode,
@@ -64,7 +64,7 @@ latin1_DF cfm =
              setState = const $ return ()
           })
 
-latin1_EF :: CodingFailureMode -> IO (TextEncoder ())
+latin1_EF :: Encodable e => CodingFailureMode -> IO (TextEncoder e ())
 latin1_EF cfm =
   return (BufferCodec {
              encode   = latin1_encode,
@@ -74,16 +74,16 @@ latin1_EF cfm =
              setState = const $ return ()
           })
 
-latin1_checked :: TextEncoding
+latin1_checked :: Encodable e => TextEncoding e
 latin1_checked = mkLatin1_checked ErrorOnCodingFailure
 
 -- | @since 4.4.0.0
-mkLatin1_checked :: CodingFailureMode -> TextEncoding
+mkLatin1_checked :: Encodable e => CodingFailureMode -> TextEncoding e
 mkLatin1_checked cfm = TextEncoding { textEncodingName = "ISO-8859-1",
                                       mkTextDecoder = latin1_DF cfm,
                                       mkTextEncoder = latin1_checked_EF cfm }
 
-latin1_checked_EF :: CodingFailureMode -> IO (TextEncoder ())
+latin1_checked_EF :: Encodable e => CodingFailureMode -> IO (TextEncoder e ())
 latin1_checked_EF cfm =
   return (BufferCodec {
              encode   = latin1_checked_encode,
@@ -97,16 +97,16 @@ latin1_checked_EF cfm =
 -- ASCII
 
 -- | @since 4.9.0.0
-ascii :: TextEncoding
+ascii :: Encodable e => TextEncoding e
 ascii = mkAscii ErrorOnCodingFailure
 
 -- | @since 4.9.0.0
-mkAscii :: CodingFailureMode -> TextEncoding
+mkAscii :: Encodable e => CodingFailureMode -> TextEncoding e
 mkAscii cfm = TextEncoding { textEncodingName = "ASCII",
                              mkTextDecoder = ascii_DF cfm,
                              mkTextEncoder = ascii_EF cfm }
 
-ascii_DF :: CodingFailureMode -> IO (TextDecoder ())
+ascii_DF :: Encodable e => CodingFailureMode -> IO (TextDecoder e ())
 ascii_DF cfm =
   return (BufferCodec {
              encode   = ascii_decode,
@@ -116,7 +116,7 @@ ascii_DF cfm =
              setState = const $ return ()
           })
 
-ascii_EF :: CodingFailureMode -> IO (TextEncoder ())
+ascii_EF :: Encodable e => CodingFailureMode -> IO (TextEncoder e ())
 ascii_EF cfm =
   return (BufferCodec {
              encode   = ascii_encode,
@@ -134,11 +134,11 @@ ascii_EF cfm =
 -- TODO: Eliminate code duplication between the checked and unchecked
 -- versions of the decoder or encoder (but don't change the Core!)
 
-latin1_decode :: DecodeBuffer
-latin1_decode 
+latin1_decode :: Encodable e => DecodeBuffer e
+latin1_decode
   input@Buffer{  bufRaw=iraw, bufL=ir0, bufR=iw,  bufSize=_  }
   output@Buffer{ bufRaw=oraw, bufL=_,   bufR=ow0, bufSize=os }
- = let 
+ = let
        loop !ir !ow
          | ow >= os = done OutputUnderflow ir ow
          | ir >= iw = done InputUnderflow ir ow
@@ -155,7 +155,7 @@ latin1_decode
     in
     loop ir0 ow0
 
-ascii_decode :: DecodeBuffer
+ascii_decode :: Encodable e => DecodeBuffer e
 ascii_decode
   input@Buffer{  bufRaw=iraw, bufL=ir0, bufR=iw,  bufSize=_  }
   output@Buffer{ bufRaw=oraw, bufL=_,   bufR=ow0, bufSize=os }
@@ -179,7 +179,7 @@ ascii_decode
     in
     loop ir0 ow0
 
-latin1_encode :: EncodeBuffer
+latin1_encode :: Encodable e => EncodeBuffer e
 latin1_encode
   input@Buffer{  bufRaw=iraw, bufL=ir0, bufR=iw,  bufSize=_  }
   output@Buffer{ bufRaw=oraw, bufL=_,   bufR=ow0, bufSize=os }
@@ -198,15 +198,15 @@ latin1_encode
     in
     loop ir0 ow0
 
-latin1_checked_encode :: EncodeBuffer
+latin1_checked_encode :: Encodable e => EncodeBuffer e
 latin1_checked_encode input output
  = single_byte_checked_encode 0xff input output
 
-ascii_encode :: EncodeBuffer
+ascii_encode :: Encodable e => EncodeBuffer e
 ascii_encode input output
  = single_byte_checked_encode 0x7f input output
 
-single_byte_checked_encode :: Int -> EncodeBuffer
+single_byte_checked_encode :: Encodable e => Int -> EncodeBuffer e
 single_byte_checked_encode max_legal_char
   input@Buffer{  bufRaw=iraw, bufL=ir0, bufR=iw,  bufSize=_  }
   output@Buffer{ bufRaw=oraw, bufL=_,   bufR=ow0, bufSize=os }

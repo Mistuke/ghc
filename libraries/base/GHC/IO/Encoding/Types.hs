@@ -22,9 +22,7 @@ module GHC.IO.Encoding.Types (
     TextEncoding(..),
     TextEncoder, TextDecoder,
     CodeBuffer, EncodeBuffer, DecodeBuffer,
-    CodingProgress(..),
-    TextEncodable(..),
-    mkCharElem
+    CodingProgress(..)
   ) where
 
 import GHC.Base
@@ -96,36 +94,32 @@ data BufferCodec from to state = BufferCodec {
  }
 
 type CodeBuffer from to = Buffer from -> Buffer to -> IO (CodingProgress, Buffer from, Buffer to)
-type DecodeBuffer = CodeBuffer Word8 TextEncodable
-type EncodeBuffer = CodeBuffer TextEncodable Word8
+type DecodeBuffer e = CodeBuffer Word8 e
+type EncodeBuffer e = CodeBuffer e Word8
 
-newtype TextEncodable = TextEncodable { mkEncodable :: forall elem. Encodable elem => elem }
-type TextDecoder state = BufferCodec Word8 TextEncodable state
-type TextEncoder state = BufferCodec TextEncodable Word8 state
-
-mkCharElem :: (forall elem. Encodable elem => elem) -> TextEncodable
-mkCharElem el = TextEncodable el
+type TextDecoder elem state = BufferCodec Word8 elem state
+type TextEncoder elem state = BufferCodec elem Word8 state
 
 -- | A 'TextEncoding' is a specification of a conversion scheme
 -- between sequences of bytes and sequences of Unicode characters.
 --
 -- For example, UTF-8 is an encoding of Unicode characters into a sequence
 -- of bytes.  The 'TextEncoding' for UTF-8 is 'utf8'.
-data TextEncoding
+data TextEncoding elem
   = forall dstate estate . TextEncoding  {
         textEncodingName :: String,
                    -- ^ a string that can be passed to 'mkTextEncoding' to
                    -- create an equivalent 'TextEncoding'.
-        mkTextDecoder :: IO (TextDecoder dstate),
+        mkTextDecoder :: IO (TextDecoder elem dstate),
                    -- ^ Creates a means of decoding bytes into characters: the result must not
                    -- be shared between several byte sequences or simultaneously across threads
-        mkTextEncoder :: IO (TextEncoder estate)
+        mkTextEncoder :: IO (TextEncoder elem estate)
                    -- ^ Creates a means of encode characters into bytes: the result must not
                    -- be shared between several character sequences or simultaneously across threads
   }
 
 -- | @since 4.3.0.0
-instance Show TextEncoding where
+instance Show (TextEncoding a) where
   -- | Returns the value of 'textEncodingName'
   show te = textEncodingName te
 
