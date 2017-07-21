@@ -107,7 +107,7 @@ foreign import WINDOWS_CCONV unsafe "windows.h WideCharToMultiByte"
 
 foreign import WINDOWS_CCONV unsafe "windows.h IsDBCSLeadByteEx"
     c_IsDBCSLeadByteEx :: UINT    -- ^ CodePage
-                       -> BYTE    -- ^ TestChar
+                       -> Word8    -- ^ TestChar
                        -> IO BOOL
 
 
@@ -116,7 +116,7 @@ foreign import WINDOWS_CCONV unsafe "windows.h IsDBCSLeadByteEx"
 -- This is useful for supporting DBCS text encoding on the console without having to statically link
 -- in huge code tables into all of our executables, or just as a fallback mechanism if a new code page
 -- is introduced that we don't know how to deal with ourselves yet.
-mkCodePageEncoding :: Encodable e => CodingFailureMode -> Word32 -> TextEncoding e
+mkCodePageEncoding :: CpEncoding e => CodingFailureMode -> Word32 -> TextEncoding e
 mkCodePageEncoding cfm cp
   = TextEncoding {
         textEncodingName = "CP" ++ show cp,
@@ -158,7 +158,7 @@ utf16_native_encode' = utf16le_encode
 utf16_native_decode' = utf16le_decode
 #endif
 
-saner :: (Encodable from, Encodable to) => CodeBuffer from to
+saner :: CodeBuffer from to
       -> Buffer from -> Buffer to
       -> IO (CodingProgress, Int, Buffer from, Buffer to)
 saner code ibuf obuf = do
@@ -196,44 +196,26 @@ utf16_native_decode ibuf obuf = do
   return (why, cwcharView ibuf, obuf)
 
 class Encodable e => CpEncoding e where
-  cpDecode :: Encodable e => Word32 -> Int -> DecodeBuffer e
-  cpEncode :: Encodable e => Word32 -> Int -> EncodeBuffer e
+  cpDecode :: Word32 -> Int -> DecodeBuffer e
+--  cpEncode :: Word32 -> Int -> EncodeBuffer e
 
 instance CpEncoding Char where
-
-instance CpEncoding Word16 where
   cpDecode cp max_char_size = \ibuf obuf -> do
-        let mbuf = obuf
+        -- FIXME: share the buffer between runs, even if the buffer
+        -- is not the perfect size.
+        -- I guess in the worst case the input CP text consists of
+        -- 1-byte sequences that map entirely to things outside the
+        -- BMP and so require 2 UTF-16 chars
+        let sz =       (bufferElems ibuf * 2)
+          -- In the best case, each pair of UTF-16 points becomes a
+          -- single UTF-32 point
+                `min` (bufferAvailable obuf * 2)
+        mbuf <- newBuffer (2 * sz) sz WriteBuffer
         debugIO $ "cpDecode " ++ summaryBuffer ibuf ++ " " ++ summaryBuffer mbuf
         (why1, ibuf', mbuf') <-
             cpRecode try' is_valid_prefix max_char_size 1 0 1 ibuf mbuf
         debugIO $ "cpRecode (cpDecode) = " ++ show why1 ++ " "
-            ++ summaryBuffer ibuf' ++ " " ++ summaryBuffer mbuf'
-        return (why1, ibuf', mbuf')
-
-cpDecode :: Encodable e => Word32 -> Int -> DecodeBuffer e
-cpDecode cp max_char_size = \ibuf obuf -> do
-    mbuf <- case getCharBufEncoding of
-              CharBuff_UTF16 -> return obuf
-              CharBuff_UTF32 -> do
-                  -- FIXME: share the buffer between runs, even if the buffer
-                  -- is not the perfect size.
-                  -- I guess in the worst case the input CP text consists of
-                  -- 1-byte sequences that map entirely to things outside the
-                  -- BMP and so require 2 UTF-16 chars
-                  let sz =       (bufferElems ibuf * 2)
-                   -- In the best case, each pair of UTF-16 points becomes a
-                   -- single UTF-32 point
-                          `min` (bufferAvailable obuf * 2)
-                  newBuffer (2 * sz) sz WriteBuffer
-    debugIO $ "cpDecode " ++ summaryBuffer ibuf ++ " " ++ summaryBuffer mbuf
-    (why1, ibuf', mbuf') <-
-        cpRecode try' is_valid_prefix max_char_size 1 0 1 ibuf mbuf
-    debugIO $ "cpRecode (cpDecode) = " ++ show why1 ++ " "
-              ++ summaryBuffer ibuf' ++ " " ++ summaryBuffer mbuf'
-    case getCharBufEncoding of
-      CharBuff_UTF16 -> return (why1, ibuf', mbuf')
-      CharBuff_UTF32 -> do
+                  ++ summaryBuffer ibuf' ++ " " ++ summaryBuffer mbuf'
         -- Convert as much UTF-16 as possible to UTF-32. Note that it's
         -- impossible for this to fail due to illegal characters since the
         -- output from Window's encoding function should be correct UTF-16.
@@ -278,24 +260,52 @@ cpDecode cp max_char_size = \ibuf obuf -> do
                                   target_utf16_count
                                   (target_utf16_count * max_char_size)
             return (OutputUnderflow, bufferRemove byte_count ibuf, obuf)
-  where
-    is_valid_prefix = c_IsDBCSLeadByteEx cp
-    try' iptr icnt optr ocnt
-     -- MultiByteToWideChar does surprising things if you have ocnt == 0
-     | ocnt == 0 = return (Left True)
-     | otherwise = do
-        err <- c_MultiByteToWideChar (fromIntegral cp) 8 -- MB_ERR_INVALID_CHARS == 8: Fail if an invalid input character is encountered
-                                     iptr (fromIntegral icnt) optr (fromIntegral ocnt)
-        debugIO $ "MultiByteToWideChar " ++ show cp ++ " 8 " ++ show iptr ++ " " ++ show icnt ++ " " ++ show optr ++ " " ++ show ocnt ++ "\n = " ++ show err
-        case err of
-          -- 0 indicates that we did not succeed
-          0 -> do
-            err <- getLastError
+    where
+      is_valid_prefix = c_IsDBCSLeadByteEx cp
+      try' iptr icnt optr ocnt
+        -- MultiByteToWideChar does surprising things if you have ocnt == 0
+        | ocnt == 0 = return (Left True)
+        | otherwise = do
+            err <- c_MultiByteToWideChar (fromIntegral cp) 8 -- MB_ERR_INVALID_CHARS == 8: Fail if an invalid input character is encountered
+                                        (castPtr iptr) (fromIntegral icnt) (castPtr optr) (fromIntegral ocnt)
+            debugIO $ "MultiByteToWideChar " ++ show cp ++ " 8 " ++ show iptr ++ " " ++ show icnt ++ " " ++ show optr ++ " " ++ show ocnt ++ "\n = " ++ show err
             case err of
-                122  -> return (Left True)
-                1113 -> return (Left False)
-                _    -> failWith "MultiByteToWideChar" err
-          wrote_chars -> return (Right (fromIntegral wrote_chars))
+              -- 0 indicates that we did not succeed
+              0 -> do
+                err <- getLastError
+                case err of
+                    122  -> return (Left True)
+                    1113 -> return (Left False)
+                    _    -> failWith "MultiByteToWideChar" err
+              wrote_chars -> return (Right (fromIntegral wrote_chars))
+
+instance CpEncoding Word16 where
+  cpDecode cp max_char_size = \ibuf obuf -> do
+        let mbuf = obuf
+        debugIO $ "cpDecode " ++ summaryBuffer ibuf ++ " " ++ summaryBuffer mbuf
+        (why1, ibuf', mbuf') <-
+            cpRecode try' is_valid_prefix max_char_size 1 0 1 ibuf mbuf
+        debugIO $ "cpRecode (cpDecode) = " ++ show why1 ++ " "
+            ++ summaryBuffer ibuf' ++ " " ++ summaryBuffer mbuf'
+        return (why1, ibuf', mbuf')
+    where
+      is_valid_prefix _ = return False
+      try' iptr icnt optr ocnt
+        -- MultiByteToWideChar does surprising things if you have ocnt == 0
+        | ocnt == 0 = return (Left True)
+        | otherwise = do
+            err <- c_MultiByteToWideChar (fromIntegral cp) 8 -- MB_ERR_INVALID_CHARS == 8: Fail if an invalid input character is encountered
+                                        iptr (fromIntegral icnt) optr (fromIntegral ocnt)
+            debugIO $ "MultiByteToWideChar " ++ show cp ++ " 8 " ++ show iptr ++ " " ++ show icnt ++ " " ++ show optr ++ " " ++ show ocnt ++ "\n = " ++ show err
+            case err of
+              -- 0 indicates that we did not succeed
+              0 -> do
+                err <- getLastError
+                case err of
+                    122  -> return (Left True)
+                    1113 -> return (Left False)
+                    _    -> failWith "MultiByteToWideChar" err
+              wrote_chars -> return (Right (fromIntegral wrote_chars))
 
 cpEncode :: Encodable e => Word32 -> Int -> EncodeBuffer e
 cpEncode cp _max_char_size = \ibuf obuf -> do
@@ -384,7 +394,7 @@ cpEncode cp _max_char_size = \ibuf obuf -> do
           wrote_bytes | defaulted -> return (Left False)
                       | otherwise -> return (Right (fromIntegral wrote_bytes))
 
-bSearch :: (Encodable from, Encodable to) => String
+bSearch :: String
         -> CodeBuffer from to
         -> Buffer from -> Buffer to -- From buffer (crucial data source) and to buffer (temporary storage only). To buffer must be empty (L=R).
         -> Int               -- Target size of to buffer
@@ -428,7 +438,7 @@ bSearch msg code ibuf mbuf target_to_elems = go
     go' mn mx | mn <= mx  = go mn (mn + ((mx - mn) `div` 2)) mx
               | otherwise = errorWithoutStackTrace $ "bSearch(" ++ msg ++ "): search crossed! " ++ show (summaryBuffer ibuf, summaryBuffer mbuf, target_to_elems, mn, mx)
 
-cpRecode :: forall from to. (Encodable from, Encodable to, Storable from)
+cpRecode :: forall from to. Storable from
          => (Ptr from -> Int -> Ptr to -> Int -> IO (Either Bool Int))
          -> (from -> IO Bool)
          -> Int -- ^ Maximum length of a complete translatable sequence in the input (e.g. 2 if the input is UTF-16, 1 if the input is a SBCS, 2 is the input is a DBCS). Must be at least 1.
