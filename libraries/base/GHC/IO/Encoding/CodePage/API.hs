@@ -177,27 +177,27 @@ saner code ibuf obuf = do
    then return (InputUnderflow, bufferElems ibuf,       ibuf', obuf')
    else return (why,            bufL ibuf' - bufL ibuf, ibuf', obuf')
 
-byteView :: Buffer CWchar -> Buffer Word8
+byteView :: Buffer Word16 -> Buffer Word8
 byteView (Buffer {..}) = Buffer { bufState = bufState, bufRaw = castForeignPtr bufRaw, bufSize = bufSize * 2, bufL = bufL * 2, bufR = bufR * 2 }
 
-cwcharView :: Buffer Word8 -> Buffer CWchar
+cwcharView :: Buffer Word8 -> Buffer Word16
 cwcharView (Buffer {..}) = Buffer { bufState = bufState, bufRaw = castForeignPtr bufRaw, bufSize = half bufSize, bufL = half bufL, bufR = half bufR }
   where half x = case x `divMod` 2 of (y, 0) -> y
                                       _      -> errorWithoutStackTrace "cwcharView: utf16_(encode|decode) (wrote out|consumed) non multiple-of-2 number of bytes"
 
-utf16_native_encode :: CodeBuffer Char CWchar
+utf16_native_encode :: CodeBuffer Char Word16
 utf16_native_encode ibuf obuf = do
   (why, ibuf, obuf) <- utf16_native_encode' ibuf (byteView obuf)
   return (why, ibuf, cwcharView obuf)
 
-utf16_native_decode :: CodeBuffer CWchar Char
+utf16_native_decode :: CodeBuffer Word16 Char
 utf16_native_decode ibuf obuf = do
   (why, ibuf, obuf) <- utf16_native_decode' (byteView ibuf) obuf
   return (why, cwcharView ibuf, obuf)
 
 class Encodable e => CpEncoding e where
   cpDecode :: Word32 -> Int -> DecodeBuffer e
---  cpEncode :: Word32 -> Int -> EncodeBuffer e
+  cpEncode :: Word32 -> Int -> EncodeBuffer e
 
 instance CpEncoding Char where
   cpDecode cp max_char_size = \ibuf obuf -> do
@@ -279,6 +279,86 @@ instance CpEncoding Char where
                     _    -> failWith "MultiByteToWideChar" err
               wrote_chars -> return (Right (fromIntegral wrote_chars))
 
+  cpEncode cp _max_char_size = \ibuf obuf -> do
+      -- FIXME: share the buffer between runs, even though that means we can't
+      -- size the buffer as we want.
+      -- UTF-32 always uses 4 bytes. UTF-16 uses at most 4 bytes.
+      let sz =       (bufferElems ibuf * 2)
+      -- In the best case, each pair of UTF-16 points fits into only 1 byte
+              `min` (bufferAvailable obuf * 2)
+      mbuf <- newBuffer (2 * sz) sz WriteBuffer
+
+      -- Convert as much UTF-32 as possible to UTF-16. NB: this can't fail
+      -- due to output underflow since we sized the output buffer correctly.
+      -- However, it could fail due to an illegal character in the input if
+      -- it encounters a lone surrogate. In this case, our recovery will be
+      -- applied as normal.
+      (why1, ibuf', mbuf') <- utf16_native_encode ibuf mbuf
+      debugIO $ "\ncpEncode " ++ summaryBuffer mbuf' ++ " " ++ summaryBuffer obuf
+      (why2, target_utf16_count, mbuf', obuf)
+        <- saner (cpRecode try' is_valid_prefix 2 1 1 0)
+                  (mbuf' { bufState = ReadBuffer }) obuf
+      debugIO $ "cpRecode (cpEncode) = " ++ show why2 ++ " "
+            ++ summaryBuffer mbuf' ++ " " ++ summaryBuffer obuf
+      case why2 of
+        -- If we succesfully translate all of the UTF-16 buffer, we need to
+        -- know why we weren't able to get any more UTF-16 out of the UTF-32
+        -- buffer
+        InputUnderflow | isEmptyBuffer mbuf' -> return (why1, ibuf', obuf)
+                       | otherwise            -> errorWithoutStackTrace
+                              "cpEncode: impossible underflown UTF-16 buffer"
+        -- With OutputUnderflow/InvalidSequence we only care about the
+        -- failings of the UTF-16->CP translation.
+        -- Yes, InvalidSequence is possible even though mbuf' is guaranteed to
+        -- be valid UTF-16, because the code page may not be able to represent
+        -- the encoded Unicode codepoint.
+        _ -> do
+          -- Here is an interesting problem. If we have only managed to
+          -- translate part of the mbuf' then we need to return an ibuf which
+          -- has consumed exactly those bytes required to obtain that part of
+          -- the mbuf'. To reconstruct this information, we binary search for
+          -- the number of UTF-32 characters required to get the consumed
+          -- count of UTF-16 characters:
+          --
+          -- When dealing with data from the BMP (the common case), consuming
+          -- N UTF-16 characters will be the same as consuming N UTF-32
+          -- characters. We start our search there so that most binary
+          -- searches will terminate in a single iteration. Furthermore, the
+          -- absolute minimum number of UTF-32 characters this can correspond
+          -- to is 1/2 the UTF-16 byte count
+          -- (this will be realised when the input data is entirely not in
+          -- the BMP).
+          utf32_count <- bSearch "cpEncode" utf16_native_encode ibuf mbuf
+                                  target_utf16_count
+                                  (target_utf16_count `div` 2)
+                                  target_utf16_count target_utf16_count
+          return (why2, bufferRemove utf32_count ibuf, obuf)
+    where
+      -- Single characters should be mappable to bytes. If they aren't supported by the CP then we have an invalid input sequence.
+      is_valid_prefix _ = return False
+
+      try' iptr icnt optr ocnt
+        -- WideCharToMultiByte does surprising things if you call it with ocnt == 0
+        | ocnt == 0 = return (Left True)
+        | otherwise = alloca $ \defaulted_ptr -> do
+          poke defaulted_ptr False
+          err <- c_WideCharToMultiByte (fromIntegral cp) 0 -- NB: the WC_ERR_INVALID_CHARS flag is uselses: only has an effect with the UTF-8 code page
+                                      (castPtr iptr) (fromIntegral icnt) (castPtr optr) (fromIntegral ocnt)
+                                      nullPtr defaulted_ptr
+          defaulted <- peek defaulted_ptr
+          debugIO $ "WideCharToMultiByte " ++ show cp ++ " 0 " ++ show iptr ++ " " ++ show icnt ++ " " ++ show optr ++ " " ++ show ocnt ++ " NULL " ++ show defaulted_ptr ++ "\n = " ++ show err ++ ", " ++ show defaulted
+          case err of
+              -- 0 indicates that we did not succeed
+              0 -> do
+                err <- getLastError
+                case err of
+                    122  -> return (Left True)
+                    1113 -> return (Left False)
+                    _    -> failWith "WideCharToMultiByte" err
+              wrote_bytes | defaulted -> return (Left False)
+                          | otherwise -> return (Right (fromIntegral wrote_bytes))
+
+
 instance CpEncoding Word16 where
   cpDecode cp max_char_size = \ibuf obuf -> do
         let mbuf = obuf
@@ -295,7 +375,7 @@ instance CpEncoding Word16 where
         | ocnt == 0 = return (Left True)
         | otherwise = do
             err <- c_MultiByteToWideChar (fromIntegral cp) 8 -- MB_ERR_INVALID_CHARS == 8: Fail if an invalid input character is encountered
-                                        iptr (fromIntegral icnt) optr (fromIntegral ocnt)
+                                        (castPtr iptr) (fromIntegral icnt) (castPtr optr) (fromIntegral ocnt)
             debugIO $ "MultiByteToWideChar " ++ show cp ++ " 8 " ++ show iptr ++ " " ++ show icnt ++ " " ++ show optr ++ " " ++ show ocnt ++ "\n = " ++ show err
             case err of
               -- 0 indicates that we did not succeed
@@ -306,93 +386,39 @@ instance CpEncoding Word16 where
                     1113 -> return (Left False)
                     _    -> failWith "MultiByteToWideChar" err
               wrote_chars -> return (Right (fromIntegral wrote_chars))
+  cpEncode cp _max_char_size = \ibuf obuf -> do
+      let mbuf' = ibuf
+      debugIO $ "\ncpEncode " ++ summaryBuffer mbuf' ++ " " ++ summaryBuffer obuf
+      (why2, target_utf16_count, mbuf', obuf)
+        <- saner (cpRecode try' is_valid_prefix 2 1 1 0)
+                (mbuf' { bufState = ReadBuffer }) obuf
+      debugIO $ "cpRecode (cpEncode) = " ++ show why2 ++ " "
+                ++ summaryBuffer mbuf' ++ " " ++ summaryBuffer obuf
+      return (why2, mbuf', obuf)
+    where
+      -- Single characters should be mappable to bytes. If they aren't supported by the CP then we have an invalid input sequence.
+      is_valid_prefix _ = return False
 
-cpEncode :: Encodable e => Word32 -> Int -> EncodeBuffer e
-cpEncode cp _max_char_size = \ibuf obuf -> do
-    tmp <- case getCharBufEncoding of
-      CharBuff_UTF16 -> return (undefined, undefined, ibuf)
-      CharBuff_UTF32 -> do
-        -- FIXME: share the buffer between runs, even though that means we can't
-        -- size the buffer as we want.
-        -- UTF-32 always uses 4 bytes. UTF-16 uses at most 4 bytes.
-        let sz =       (bufferElems ibuf * 2)
-        -- In the best case, each pair of UTF-16 points fits into only 1 byte
-                `min` (bufferAvailable obuf * 2)
-        mbuf <- newBuffer (2 * sz) sz WriteBuffer
-
-        -- Convert as much UTF-32 as possible to UTF-16. NB: this can't fail
-        -- due to output underflow since we sized the output buffer correctly.
-        -- However, it could fail due to an illegal character in the input if
-        -- it encounters a lone surrogate. In this case, our recovery will be
-        -- applied as normal.
-        utf16_native_encode ibuf mbuf
-    let (why1, ibuf', mbuf') = tmp
-    debugIO $ "\ncpEncode " ++ summaryBuffer mbuf' ++ " " ++ summaryBuffer obuf
-    (why2, target_utf16_count, mbuf', obuf)
-      <- saner (cpRecode try' is_valid_prefix 2 1 1 0)
-               (mbuf' { bufState = ReadBuffer }) obuf
-    debugIO $ "cpRecode (cpEncode) = " ++ show why2 ++ " "
-              ++ summaryBuffer mbuf' ++ " " ++ summaryBuffer obuf
-    case getCharBufEncoding of
-      CharBuff_UTF16 -> return (why2, mbuf', obuf)
-      CharBuff_UTF32 -> do
-        case why2 of
-          -- If we succesfully translate all of the UTF-16 buffer, we need to
-          -- know why we weren't able to get any more UTF-16 out of the UTF-32
-          -- buffer
-          InputUnderflow | isEmptyBuffer mbuf' -> return (why1, ibuf', obuf)
-                         | otherwise            -> errorWithoutStackTrace
-                                "cpEncode: impossible underflown UTF-16 buffer"
-          -- With OutputUnderflow/InvalidSequence we only care about the
-          -- failings of the UTF-16->CP translation.
-          -- Yes, InvalidSequence is possible even though mbuf' is guaranteed to
-          -- be valid UTF-16, because the code page may not be able to represent
-          -- the encoded Unicode codepoint.
-          _ -> do
-            -- Here is an interesting problem. If we have only managed to
-            -- translate part of the mbuf' then we need to return an ibuf which
-            -- has consumed exactly those bytes required to obtain that part of
-            -- the mbuf'. To reconstruct this information, we binary search for
-            -- the number of UTF-32 characters required to get the consumed
-            -- count of UTF-16 characters:
-            --
-            -- When dealing with data from the BMP (the common case), consuming
-            -- N UTF-16 characters will be the same as consuming N UTF-32
-            -- characters. We start our search there so that most binary
-            -- searches will terminate in a single iteration. Furthermore, the
-            -- absolute minimum number of UTF-32 characters this can correspond
-            -- to is 1/2 the UTF-16 byte count
-            -- (this will be realised when the input data is entirely not in
-            -- the BMP).
-            utf32_count <- bSearch "cpEncode" utf16_native_encode ibuf mbuf
-                                   target_utf16_count
-                                   (target_utf16_count `div` 2)
-                                   target_utf16_count target_utf16_count
-            return (why2, bufferRemove utf32_count ibuf, obuf)
-  where
-    -- Single characters should be mappable to bytes. If they aren't supported by the CP then we have an invalid input sequence.
-    is_valid_prefix _ = return False
-
-    try' iptr icnt optr ocnt
-     -- WideCharToMultiByte does surprising things if you call it with ocnt == 0
-     | ocnt == 0 = return (Left True)
-     | otherwise = alloca $ \defaulted_ptr -> do
-      poke defaulted_ptr False
-      err <- c_WideCharToMultiByte (fromIntegral cp) 0 -- NB: the WC_ERR_INVALID_CHARS flag is uselses: only has an effect with the UTF-8 code page
-                                   iptr (fromIntegral icnt) optr (fromIntegral ocnt)
-                                   nullPtr defaulted_ptr
-      defaulted <- peek defaulted_ptr
-      debugIO $ "WideCharToMultiByte " ++ show cp ++ " 0 " ++ show iptr ++ " " ++ show icnt ++ " " ++ show optr ++ " " ++ show ocnt ++ " NULL " ++ show defaulted_ptr ++ "\n = " ++ show err ++ ", " ++ show defaulted
-      case err of
-          -- 0 indicates that we did not succeed
-          0 -> do
-            err <- getLastError
-            case err of
-                122  -> return (Left True)
-                1113 -> return (Left False)
-                _    -> failWith "WideCharToMultiByte" err
-          wrote_bytes | defaulted -> return (Left False)
-                      | otherwise -> return (Right (fromIntegral wrote_bytes))
+      try' iptr icnt optr ocnt
+        -- WideCharToMultiByte does surprising things if you call it with ocnt == 0
+        | ocnt == 0 = return (Left True)
+        | otherwise = alloca $ \defaulted_ptr -> do
+          poke defaulted_ptr False
+          err <- c_WideCharToMultiByte (fromIntegral cp) 0 -- NB: the WC_ERR_INVALID_CHARS flag is uselses: only has an effect with the UTF-8 code page
+                                      (castPtr iptr) (fromIntegral icnt) (castPtr optr) (fromIntegral ocnt)
+                                      nullPtr defaulted_ptr
+          defaulted <- peek defaulted_ptr
+          debugIO $ "WideCharToMultiByte " ++ show cp ++ " 0 " ++ show iptr ++ " " ++ show icnt ++ " " ++ show optr ++ " " ++ show ocnt ++ " NULL " ++ show defaulted_ptr ++ "\n = " ++ show err ++ ", " ++ show defaulted
+          case err of
+              -- 0 indicates that we did not succeed
+              0 -> do
+                err <- getLastError
+                case err of
+                    122  -> return (Left True)
+                    1113 -> return (Left False)
+                    _    -> failWith "WideCharToMultiByte" err
+              wrote_bytes | defaulted -> return (Left False)
+                          | otherwise -> return (Right (fromIntegral wrote_bytes))
 
 bSearch :: String
         -> CodeBuffer from to
