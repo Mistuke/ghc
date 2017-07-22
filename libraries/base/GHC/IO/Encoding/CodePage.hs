@@ -58,17 +58,17 @@ foreign import WINDOWS_CCONV unsafe "windows.h GetACP"
 currentCodePage :: Word32
 currentCodePage = unsafePerformIO getCurrentCodePage
 
-localeEncoding :: TextEncoding
+localeEncoding :: API.CpEncoding e => TextEncoding e
 localeEncoding = mkLocaleEncoding ErrorOnCodingFailure
 
-mkLocaleEncoding :: CodingFailureMode -> TextEncoding
+mkLocaleEncoding :: API.CpEncoding e => CodingFailureMode -> TextEncoding e
 mkLocaleEncoding cfm = mkCodePageEncoding cfm currentCodePage
 
 
-codePageEncoding :: Word32 -> TextEncoding
+codePageEncoding :: API.CpEncoding e => Word32 -> TextEncoding e
 codePageEncoding = mkCodePageEncoding ErrorOnCodingFailure
 
-mkCodePageEncoding :: CodingFailureMode -> Word32 -> TextEncoding
+mkCodePageEncoding :: API.CpEncoding e => CodingFailureMode -> Word32 -> TextEncoding e
 mkCodePageEncoding cfm 65001 = mkUTF8 cfm
 mkCodePageEncoding cfm 1200 = mkUTF16le cfm
 mkCodePageEncoding cfm 1201 = mkUTF16be cfm
@@ -76,7 +76,7 @@ mkCodePageEncoding cfm 12000 = mkUTF32le cfm
 mkCodePageEncoding cfm 12001 = mkUTF32be cfm
 mkCodePageEncoding cfm cp = maybe (API.mkCodePageEncoding cfm cp) (buildEncoding cfm cp) (lookup cp codePageMap)
 
-buildEncoding :: CodingFailureMode -> Word32 -> CodePageArrays -> TextEncoding
+buildEncoding :: Encodable e => CodingFailureMode -> Word32 -> CodePageArrays -> TextEncoding e
 buildEncoding cfm cp SingleByteCP {decoderArray = dec, encoderArray = enc}
   = TextEncoding {
       textEncodingName = "CP" ++ show cp
@@ -95,7 +95,7 @@ simpleCodec r f = BufferCodec {
     setState = return
   }
 
-decodeFromSingleByte :: ConvArray Char -> DecodeBuffer
+decodeFromSingleByte :: Encodable e => ConvArray Char -> DecodeBuffer e
 decodeFromSingleByte convArr
     input@Buffer  { bufRaw=iraw, bufL=ir0, bufR=iw,  bufSize=_  }
     output@Buffer { bufRaw=oraw, bufL=_,   bufR=ow0, bufSize=os }
@@ -117,7 +117,7 @@ decodeFromSingleByte convArr
             invalid = done InvalidSequence ir ow
     in loop ir0 ow0
 
-encodeToSingleByte :: CompactArray Char Word8 -> EncodeBuffer
+encodeToSingleByte :: Encodable e => CompactArray Char Word8 -> EncodeBuffer e
 encodeToSingleByte CompactArray { encoderMax = maxChar,
                          encoderIndices = indices,
                          encoderValues = values }

@@ -38,6 +38,7 @@ import GHC.IO.Encoding.Types
 import qualified GHC.IO.Encoding.Iconv as Iconv
 #else
 import qualified GHC.IO.Encoding.CodePage as CodePage
+import qualified GHC.IO.Encoding.CodePage.API as API
 import Text.Read (reads)
 #endif
 import qualified GHC.IO.Encoding.Latin1 as Latin1
@@ -104,7 +105,7 @@ utf32be = UTF32.utf32be
 -- | The Unicode encoding of the current locale
 --
 -- @since 4.5.0.0
-getLocaleEncoding :: Encodable e => IO (TextEncoding e)
+getLocaleEncoding :: API.CpEncoding e => IO (TextEncoding e)
 
 -- | The Unicode encoding of the current locale, but allowing arbitrary
 -- undecodable bytes to be round-tripped through it.
@@ -117,17 +118,17 @@ getLocaleEncoding :: Encodable e => IO (TextEncoding e)
 -- via the "wide" W-family of UTF-16 APIs instead
 --
 -- @since 4.5.0.0
-getFileSystemEncoding :: Encodable e => IO (TextEncoding e)
+getFileSystemEncoding :: API.CpEncoding e => IO (TextEncoding e)
 
 -- | The Unicode encoding of the current locale, but where undecodable
 -- bytes are replaced with their closest visual match. Used for
 -- the 'CString' marshalling functions in "Foreign.C.String"
 --
 -- @since 4.5.0.0
-getForeignEncoding :: Encodable e => IO (TextEncoding e)
+getForeignEncoding :: API.CpEncoding e => IO (TextEncoding e)
 
 -- | @since 4.5.0.0
-setLocaleEncoding, setFileSystemEncoding, setForeignEncoding :: Encodable e => TextEncoding e -> IO ()
+setLocaleEncoding, setFileSystemEncoding, setForeignEncoding :: API.CpEncoding e => TextEncoding e -> IO ()
 
 (getLocaleEncoding, setLocaleEncoding)         = mkGlobal initLocaleEncoding
 (getFileSystemEncoding, setFileSystemEncoding) = mkGlobal initFileSystemEncoding
@@ -139,7 +140,7 @@ mkGlobal x = unsafePerformIO $ do
     return (readIORef x_ref, writeIORef x_ref)
 
 -- | @since 4.5.0.0
-initLocaleEncoding, initFileSystemEncoding, initForeignEncoding :: Encodable e => TextEncoding e
+initLocaleEncoding, initFileSystemEncoding, initForeignEncoding :: API.CpEncoding e => TextEncoding e
 
 #if !defined(mingw32_HOST_OS)
 -- It is rather important that we don't just call Iconv.mkIconvEncoding here
@@ -221,7 +222,7 @@ char8 = Latin1.latin1
 -- On Windows, you can access supported code pages with the prefix
 -- @CP@; for example, @\"CP1250\"@.
 --
-mkTextEncoding :: Encodable e => String -> IO (TextEncoding e)
+mkTextEncoding :: API.CpEncoding e => String -> IO (TextEncoding e)
 mkTextEncoding e = case mb_coding_failure_mode of
     Nothing -> unknownEncodingErr e
     Just cfm -> mkTextEncoding' cfm enc
@@ -234,7 +235,7 @@ mkTextEncoding e = case mb_coding_failure_mode of
         "//ROUNDTRIP" -> Just RoundtripFailure
         _             -> Nothing
 
-mkTextEncoding' :: Encodable e => CodingFailureMode -> String -> IO (TextEncoding e)
+mkTextEncoding' :: API.CpEncoding e => CodingFailureMode -> String -> IO (TextEncoding e)
 mkTextEncoding' cfm enc =
   case [toUpper c | c <- enc, c /= '-'] of
   -- UTF-8 and friends we can handle ourselves
@@ -281,11 +282,11 @@ mkTextEncoding' cfm enc =
       ]
 
 
-latin1_encode :: CharBuffer -> Buffer Word8 -> IO (CharBuffer, Buffer Word8)
+latin1_encode ::  Encodable e => Buffer e -> Buffer Word8 -> IO (Buffer e, Buffer Word8)
 latin1_encode input output = fmap (\(_why,input',output') -> (input',output')) $ Latin1.latin1_encode input output -- unchecked, used for char8
 --latin1_encode = unsafePerformIO $ do mkTextEncoder Iconv.latin1 >>= return.encode
 
-latin1_decode :: Buffer Word8 -> CharBuffer -> IO (Buffer Word8, CharBuffer)
+latin1_decode ::  Encodable e => Buffer Word8 -> Buffer e -> IO (Buffer Word8, Buffer e)
 latin1_decode input output = fmap (\(_why,input',output') -> (input',output')) $ Latin1.latin1_decode input output
 --latin1_decode = unsafePerformIO $ do mkTextDecoder Iconv.latin1 >>= return.encode
 

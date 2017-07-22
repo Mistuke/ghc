@@ -4,7 +4,8 @@
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
 module GHC.IO.Encoding.CodePage.API (
-    mkCodePageEncoding
+    mkCodePageEncoding,
+    CpEncoding()
   ) where
 
 import Foreign.C
