@@ -8,7 +8,7 @@ module GHC.IO.Encoding.CodePage.API (
     CpEncoding()
   ) where
 
-import Foreign.C
+import Foreign.C.Types
 import Foreign.Ptr
 import Foreign.Marshal
 import Foreign.Storable
@@ -22,15 +22,14 @@ import GHC.IO.Buffer
 import GHC.IO.Encoding.Failure
 import GHC.IO.Encoding.Types
 import GHC.IO.Encoding.UTF16
-import GHC.IO.SubSystem
 import GHC.Num
 import GHC.Show
 import GHC.Real
+import {-# SOURCE #-} GHC.Windows hiding (LPCSTR)
 import GHC.Windows.Types hiding (LPCSTR)
 import GHC.ForeignPtr (castForeignPtr)
 
-import System.Posix.Internals
-
+import {-# SOURCE #-} System.Posix.Internals
 
 c_DEBUG_DUMP :: Bool
 c_DEBUG_DUMP = False

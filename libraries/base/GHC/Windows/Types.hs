@@ -1,3 +1,6 @@
+{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  GHC.Windows.Types
@@ -35,8 +38,10 @@ module GHC.Windows.Types (
     LPCWSTR
     ) where
 
-import Foreign.C.Types
+import Data.Bool
 import Data.Word
+import Foreign.C.Types
+import Foreign.Ptr
 
 type BOOL    = Bool
 type LPBOOL  = Ptr BOOL

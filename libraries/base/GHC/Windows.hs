@@ -22,7 +22,7 @@
 
 module GHC.Windows (
         -- * Types
-        GHC.Windows.Types,
+        module GHC.Windows.Types,
 
         -- * Constants
         iNFINITE,
@@ -67,9 +67,12 @@ import Foreign.Ptr
 import GHC.Base
 import GHC.Enum (maxBound)
 import GHC.IO
+import GHC.IO.Exception
 import GHC.Num
 import GHC.Real (fromIntegral)
-import System.IO.Error
+import GHC.Windows.Types
+
+import System.IO.Error (ioeSetErrorString)
 
 import qualified Numeric
 

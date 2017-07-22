@@ -363,6 +363,7 @@ Library
             GHC.IO.Encoding.CodePage.Table
             GHC.Conc.Windows
             GHC.Windows
+            GHC.Windows.Types
             GHC.Event.Windows
             GHC.Event.Windows.Clock
             GHC.Event.Windows.FFI
