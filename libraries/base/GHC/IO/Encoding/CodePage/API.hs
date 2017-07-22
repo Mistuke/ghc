@@ -26,7 +26,7 @@ import GHC.IO.SubSystem
 import GHC.Num
 import GHC.Show
 import GHC.Real
-import GHC.Windows hiding (LPCSTR)
+import GHC.Windows.Types hiding (LPCSTR)
 import GHC.ForeignPtr (castForeignPtr)
 
 import System.Posix.Internals

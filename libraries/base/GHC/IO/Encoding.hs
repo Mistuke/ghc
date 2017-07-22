@@ -27,6 +27,7 @@ module GHC.IO.Encoding (
         setLocaleEncoding, setFileSystemEncoding, setForeignEncoding,
         char8,
         mkTextEncoding,
+        CharEncoding(),
     ) where
 
 import GHC.Base
@@ -102,42 +103,59 @@ utf32le = UTF32.utf32le
 utf32be  :: Encodable e => TextEncoding e
 utf32be = UTF32.utf32be
 
--- | The Unicode encoding of the current locale
---
--- @since 4.5.0.0
-getLocaleEncoding :: API.CpEncoding e => IO (TextEncoding e)
+class API.CpEncoding e => CharEncoding e where
+    -- | The Unicode encoding of the current locale
+    --
+    -- @since 4.5.0.0
+    getLocaleEncoding :: IO (TextEncoding e)
+    getLocaleEncoding = mkGetGlobal initLocaleEncoding
 
--- | The Unicode encoding of the current locale, but allowing arbitrary
--- undecodable bytes to be round-tripped through it.
---
--- This 'TextEncoding' is used to decode and encode command line arguments
--- and environment variables on non-Windows platforms.
---
--- On Windows, this encoding *should not* be used if possible because
--- the use of code pages is deprecated: Strings should be retrieved
--- via the "wide" W-family of UTF-16 APIs instead
---
--- @since 4.5.0.0
-getFileSystemEncoding :: API.CpEncoding e => IO (TextEncoding e)
+    -- | The Unicode encoding of the current locale, but allowing arbitrary
+    -- undecodable bytes to be round-tripped through it.
+    --
+    -- This 'TextEncoding' is used to decode and encode command line arguments
+    -- and environment variables on non-Windows platforms.
+    --
+    -- On Windows, this encoding *should not* be used if possible because
+    -- the use of code pages is deprecated: Strings should be retrieved
+    -- via the "wide" W-family of UTF-16 APIs instead
+    --
+    -- @since 4.5.0.0
+    getFileSystemEncoding :: IO (TextEncoding e)
+    getFileSystemEncoding = mkGetGlobal initFileSystemEncoding
 
--- | The Unicode encoding of the current locale, but where undecodable
--- bytes are replaced with their closest visual match. Used for
--- the 'CString' marshalling functions in "Foreign.C.String"
---
--- @since 4.5.0.0
-getForeignEncoding :: API.CpEncoding e => IO (TextEncoding e)
+    -- | The Unicode encoding of the current locale, but where undecodable
+    -- bytes are replaced with their closest visual match. Used for
+    -- the 'CString' marshalling functions in "Foreign.C.String"
+    --
+    -- @since 4.5.0.0
+    getForeignEncoding :: IO (TextEncoding e)
+    getForeignEncoding = mkGetGlobal initForeignEncoding
 
--- | @since 4.5.0.0
-setLocaleEncoding, setFileSystemEncoding, setForeignEncoding :: API.CpEncoding e => TextEncoding e -> IO ()
+    -- | @since 4.5.0.0
+    setLocaleEncoding :: TextEncoding e -> IO ()
+    setLocaleEncoding = mkSetGlobal initLocaleEncoding
 
-(getLocaleEncoding, setLocaleEncoding)         = mkGlobal initLocaleEncoding
-(getFileSystemEncoding, setFileSystemEncoding) = mkGlobal initFileSystemEncoding
-(getForeignEncoding, setForeignEncoding)       = mkGlobal initForeignEncoding
+    -- | @since 4.5.0.0
+    setFileSystemEncoding :: TextEncoding e -> IO ()
+    setFileSystemEncoding = mkSetGlobal initFileSystemEncoding
 
-mkGlobal :: a -> (IO a, a -> IO ())
-mkGlobal x = unsafePerformIO $ do
+    -- | @since 4.5.0.0
+    setForeignEncoding :: TextEncoding e -> IO ()
+    setForeignEncoding = mkSetGlobal initForeignEncoding
+
+instance CharEncoding Word16 where
+instance CharEncoding Char where
+
+mkGetGlobal :: a -> IO a
+mkGetGlobal x = unsafePerformIO $ do
     x_ref <- newIORef x
-    return (readIORef x_ref, writeIORef x_ref)
+    return $ readIORef x_ref
+
+mkSetGlobal :: a -> (a -> IO ())
+mkSetGlobal x = unsafePerformIO $ do
+    x_ref <- newIORef x
+    return $ writeIORef x_ref
 
 -- | @since 4.5.0.0
 initLocaleEncoding, initFileSystemEncoding, initForeignEncoding :: API.CpEncoding e => TextEncoding e

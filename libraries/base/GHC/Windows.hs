@@ -22,22 +22,7 @@
 
 module GHC.Windows (
         -- * Types
-        BOOL,
-        LPBOOL,
-        BYTE,
-        DWORD,
-        DDWORD,
-        UINT,
-        ErrCode,
-        HANDLE,
-        LPWSTR,
-        LPTSTR,
-        LPCTSTR,
-        LPVOID,
-        LPDWORD,
-        LPSTR,
-        LPCSTR,
-        LPCWSTR,
+        GHC.Windows.Types,
 
         -- * Constants
         iNFINITE,
@@ -99,31 +84,8 @@ finiteBitSize = bitSize
 
 #include "windows_cconv.h"
 
-type BOOL    = Bool
-type LPBOOL  = Ptr BOOL
-type BYTE    = Word8
-type DWORD   = Word32
-type UINT    = Word32
-type ErrCode = DWORD
-type HANDLE  = Ptr ()
-type LPWSTR  = Ptr CWchar
-type LPCTSTR = LPTSTR
-type LPVOID  = Ptr ()
-type LPDWORD = Ptr DWORD
-type LPSTR   = Ptr CChar
-type LPCSTR  = LPSTR
-type LPCWSTR = LPWSTR
-
 nullHANDLE :: HANDLE
 nullHANDLE = nullPtr
-
--- Not really a basic type, but used in many places
-type DDWORD        = Word64
-
--- | Be careful with this.  LPTSTR can mean either WCHAR* or CHAR*, depending
--- on whether the UNICODE macro is defined in the corresponding C code.
--- Consider using LPWSTR instead.
-type LPTSTR = LPWSTR
 
 iNFINITE :: DWORD
 iNFINITE = 0xFFFFFFFF -- urgh
