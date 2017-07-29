@@ -4,6 +4,7 @@
            , BangPatterns
            , NondecreasingIndentation
            , RankNTypes
+           , ScopedTypeVariables
   #-}
 {-# OPTIONS_GHC -Wno-unused-matches #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
@@ -436,8 +437,8 @@ handleFinalizer fp m = do
 dEFAULT_CHAR_BUFFER_SIZE :: Int
 dEFAULT_CHAR_BUFFER_SIZE = 2048 -- 8k/sizeof(HsChar)
 
-getCharBuffer :: IODevice dev => dev -> BufferState
-              -> IO (IORef CharBuffer, BufferMode)
+getCharBuffer :: (Encodable e, IODevice dev) => dev -> BufferState
+              -> IO (IORef (Buffer e), BufferMode)
 getCharBuffer dev state = do
   buffer <- newCharBuffer dEFAULT_CHAR_BUFFER_SIZE state
   ioref  <- newIORef buffer
@@ -449,7 +450,7 @@ getCharBuffer dev state = do
 
   return (ioref, buffer_mode)
 
-mkUnBuffer :: BufferState -> IO (IORef CharBuffer, BufferMode)
+mkUnBuffer :: Encodable e => BufferState -> IO (IORef (Buffer e), BufferMode)
 mkUnBuffer state = do
   buffer <- newCharBuffer dEFAULT_CHAR_BUFFER_SIZE state
               --  See [note Buffer Sizing], GHC.IO.Handle.Types
@@ -508,7 +509,7 @@ flushByteWriteBuffer h_@Handle__{..} = do
 -- write the contents of the CharBuffer to the Handle__.
 -- The data will be encoded and pushed to the byte buffer,
 -- flushing if the buffer becomes full.
-writeCharBuffer :: Handle__ -> CharBuffer -> IO ()
+writeCharBuffer :: forall e. Encodable e => Handle__ -> Buffer e -> IO ()
 writeCharBuffer h_@Handle__{..} !cbuf = do
   --
   bbuf <- readIORef haByteBuffer
@@ -517,8 +518,8 @@ writeCharBuffer h_@Handle__{..} !cbuf = do
         " bbuf=" ++ summaryBuffer bbuf)
 
   (cbuf',bbuf') <- case haEncoder of
-    Nothing      -> latin1_encode cbuf bbuf
-    Just encoder -> (streamEncode encoder) cbuf bbuf
+    Nothing      -> latin1_encode cbuf bbuf -- Why latin-1??
+    Just encoder -> (\enc -> streamEncode enc cbuf bbuf) (encoder :: BufferCodec e Word8 enc_state)
 
   debugIO ("writeCharBuffer after encoding: cbuf=" ++ summaryBuffer cbuf' ++
         " bbuf=" ++ summaryBuffer bbuf')
@@ -612,11 +613,11 @@ flushByteReadBuffer h_@Handle__{..} = do
 -- ----------------------------------------------------------------------------
 -- Making Handles
 
-mkHandle :: (IODevice dev, BufferedIO dev, Typeable dev) => dev
+mkHandle :: (Encodable e, IODevice dev, BufferedIO dev, Typeable dev) => dev
             -> FilePath
             -> HandleType
             -> Bool                     -- buffered?
-            -> Maybe TextEncoding
+            -> Maybe (TextEncoding e)
             -> NewlineMode
             -> Maybe HandleFinalizer
             -> Maybe (MVar Handle__)
@@ -652,7 +653,7 @@ mkHandle dev filepath ha_type buffered mb_codec nl finalizer other_side = do
                       })
 
 -- | makes a new 'Handle'
-mkFileHandle :: (IODevice dev, BufferedIO dev, Typeable dev)
+mkFileHandle :: (Encodable e, IODevice dev, BufferedIO dev, Typeable dev)
              => dev -- ^ the underlying IO device, which must support
                     -- 'IODevice', 'BufferedIO' and 'Typeable'
              -> FilePath
@@ -660,7 +661,7 @@ mkFileHandle :: (IODevice dev, BufferedIO dev, Typeable dev)
                     -- path for a file.  Used in error messages.
              -> IOMode
                     -- The mode in which the 'Handle' is to be used
-             -> Maybe TextEncoding
+             -> Maybe (TextEncoding e)
                     -- Create the 'Handle' with no text encoding?
              -> NewlineMode
                     -- Translate newlines?
@@ -673,8 +674,8 @@ mkFileHandle dev filepath iomode mb_codec tr_newlines = do
 -- | like 'mkFileHandle', except that a 'Handle' is created with two
 -- independent buffers, one for reading and one for writing.  Used for
 -- full-duplex streams, such as network sockets.
-mkDuplexHandle :: (IODevice dev, BufferedIO dev, Typeable dev) => dev
-               -> FilePath -> Maybe TextEncoding -> NewlineMode -> IO Handle
+mkDuplexHandle :: (Encodable e, IODevice dev, BufferedIO dev, Typeable dev) => dev
+               -> FilePath -> Maybe (TextEncoding e) -> NewlineMode -> IO Handle
 mkDuplexHandle dev filepath mb_codec tr_newlines = do
 
   write_side@(FileHandle _ write_m) <-
@@ -702,9 +703,9 @@ initBufferState ReadHandle = ReadBuffer
 initBufferState _          = WriteBuffer
 
 openTextEncoding
-   :: Maybe TextEncoding
+   :: Encodable e => Maybe (TextEncoding e)
    -> HandleType
-   -> (forall es ds . Maybe (TextEncoder es) -> Maybe (TextDecoder ds) -> IO a)
+   -> (forall es ds . Maybe (TextEncoder e es) -> Maybe (TextDecoder e ds) -> IO a)
    -> IO a
 
 openTextEncoding Nothing   ha_type cont = cont Nothing Nothing
@@ -779,7 +780,7 @@ hClose_handle_ h_@Handle__{..} = do
     return (Handle__{ haType = ClosedHandle, .. }, maybe_exception)
 
 {-# NOINLINE noCharBuffer #-}
-noCharBuffer :: CharBuffer
+noCharBuffer :: Encodable e => Buffer e
 noCharBuffer = unsafePerformIO $ newCharBuffer 1 ReadBuffer
 
 {-# NOINLINE noByteBuffer #-}
@@ -828,7 +829,7 @@ debugIO s
 --
 -- Users of this function expect that the buffer returned contains
 -- at least 1 more character than the input buffer.
-readTextDevice :: Handle__ -> CharBuffer -> IO CharBuffer
+readTextDevice :: Encodable e => Handle__ -> Buffer e -> IO (Buffer e)
 readTextDevice h_@Handle__{..} cbuf = do
   --
   bbuf0 <- readIORef haByteBuffer
@@ -869,7 +870,7 @@ readTextDevice h_@Handle__{..} cbuf = do
 
 -- we have an incomplete byte sequence at the end of the buffer: try to
 -- read more bytes.
-readTextDevice' :: Handle__ -> Buffer Word8 -> CharBuffer -> IO CharBuffer
+readTextDevice' :: Encodable e => Handle__ -> Buffer Word8 -> Buffer e -> IO (Buffer e)
 readTextDevice' h_@Handle__{..} bbuf0 cbuf0 = do
   --
   -- copy the partial sequence to the beginning of the buffer, so we have
@@ -917,7 +918,7 @@ readTextDevice' h_@Handle__{..} bbuf0 cbuf0 = do
 
 -- Read characters into the provided buffer.  Do not block;
 -- return zero characters instead.  Raises an exception on end-of-file.
-readTextDeviceNonBlocking :: Handle__ -> CharBuffer -> IO CharBuffer
+readTextDeviceNonBlocking :: Encodable e => Handle__ -> Buffer e -> IO (Buffer e)
 readTextDeviceNonBlocking h_@Handle__{..} cbuf = do
   --
   bbuf0 <- readIORef haByteBuffer
@@ -929,7 +930,7 @@ readTextDeviceNonBlocking h_@Handle__{..} cbuf = do
   decodeByteBuf h_ cbuf
 
 -- Decode bytes from the byte buffer into the supplied CharBuffer.
-decodeByteBuf :: Handle__ -> CharBuffer -> IO CharBuffer
+decodeByteBuf :: Encodable e => Handle__ -> Buffer e -> IO (Buffer e)
 decodeByteBuf h_@Handle__{..} cbuf = do
   --
   bbuf0 <- readIORef haByteBuffer
