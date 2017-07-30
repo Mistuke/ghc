@@ -1,5 +1,7 @@
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 
 -----------------------------------------------------------------------------
@@ -35,21 +37,21 @@ import GHC.IO.Buffer
 -- and bytestrings.  The underlying device implementing a 'Handle' must
 -- provide 'BufferedIO'.
 --
-class BufferedIO dev where
+class BufferedIO dev e | dev -> e where
   -- | allocate a new buffer.  The size of the buffer is at the
   -- discretion of the device; e.g. for a memory-mapped file the
   -- buffer will probably cover the entire file.
-  newBuffer         :: dev -> BufferState -> IO (Buffer Word8)
+  newBuffer         :: dev -> BufferState -> IO (Buffer e)
 
   -- | reads bytes into the buffer, blocking if there are no bytes
   -- available.  Returns the number of bytes read (zero indicates
   -- end-of-file), and the new buffer.
-  fillReadBuffer    :: dev -> Buffer Word8 -> IO (Int, Buffer Word8)
+  fillReadBuffer    :: dev -> Buffer e -> IO (Int, Buffer e)
 
   -- | reads bytes into the buffer without blocking.  Returns the
   -- number of bytes read (Nothing indicates end-of-file), and the new
   -- buffer.
-  fillReadBuffer0   :: dev -> Buffer Word8 -> IO (Maybe Int, Buffer Word8)
+  fillReadBuffer0   :: dev -> Buffer e -> IO (Maybe Int, Buffer e)
 
   -- | Prepares an empty write buffer.  This lets the device decide
   -- how to set up a write buffer: the buffer may need to point to a
@@ -59,18 +61,18 @@ class BufferedIO dev where
   --
   -- There is no corresponding operation for read buffers, because before
   -- reading the client will always call 'fillReadBuffer'.
-  emptyWriteBuffer  :: dev -> Buffer Word8 -> IO (Buffer Word8)
+  emptyWriteBuffer  :: dev -> Buffer e -> IO (Buffer e)
   emptyWriteBuffer _dev buf
     = return buf{ bufL=0, bufR=0, bufState = WriteBuffer }
 
   -- | Flush all the data from the supplied write buffer out to the device.
   -- The returned buffer should be empty, and ready for writing.
-  flushWriteBuffer  :: dev -> Buffer Word8 -> IO (Buffer Word8)
+  flushWriteBuffer  :: dev -> Buffer e -> IO (Buffer e)
 
   -- | Flush data from the supplied write buffer out to the device
   -- without blocking.  Returns the number of bytes written and the
   -- remaining buffer.
-  flushWriteBuffer0 :: dev -> Buffer Word8 -> IO (Int, Buffer Word8)
+  flushWriteBuffer0 :: dev -> Buffer e -> IO (Int, Buffer e)
 
 -- for an I/O device, these operations will perform reading/writing
 -- to/from the device.
@@ -89,7 +91,7 @@ class BufferedIO dev where
 -- These operations make it easy to implement an instance of 'BufferedIO'
 -- for an object that supports 'RawIO'.
 
-readBuf :: RawIO dev => dev -> Buffer Word8 -> IO (Int, Buffer Word8)
+readBuf :: RawIO dev => dev -> Buffer e -> IO (Int, Buffer e)
 readBuf dev bbuf = do
   let bytes = bufferAvailable bbuf
   res <- withBuffer bbuf $ \ptr ->
@@ -97,10 +99,10 @@ readBuf dev bbuf = do
   return (res, bbuf{ bufR = bufR bbuf + res })
          -- zero indicates end of file
 
-readBufNonBlocking :: RawIO dev => dev -> Buffer Word8
+readBufNonBlocking :: RawIO dev => dev -> Buffer e
                      -> IO (Maybe Int,   -- Nothing ==> end of file
                                          -- Just n  ==> n bytes were read (n>=0)
-                            Buffer Word8)
+                            Buffer e)
 readBufNonBlocking dev bbuf = do
   let bytes = bufferAvailable bbuf
   res <- withBuffer bbuf $ \ptr ->
@@ -109,7 +111,7 @@ readBufNonBlocking dev bbuf = do
      Nothing -> return (Nothing, bbuf)
      Just n  -> return (Just n, bbuf{ bufR = bufR bbuf + n })
 
-writeBuf :: RawIO dev => dev -> Buffer Word8 -> IO (Buffer Word8)
+writeBuf :: RawIO dev => dev -> Buffer e -> IO (Buffer e)
 writeBuf dev bbuf = do
   let bytes = bufferElems bbuf
   withBuffer bbuf $ \ptr ->
@@ -117,7 +119,7 @@ writeBuf dev bbuf = do
   return bbuf{ bufL=0, bufR=0 }
 
 -- XXX ToDo
-writeBufNonBlocking :: RawIO dev => dev -> Buffer Word8 -> IO (Int, Buffer Word8)
+writeBufNonBlocking :: RawIO dev => dev -> Buffer e -> IO (Int, Buffer e)
 writeBufNonBlocking dev bbuf = do
   let bytes = bufferElems bbuf
   res <- withBuffer bbuf $ \ptr ->

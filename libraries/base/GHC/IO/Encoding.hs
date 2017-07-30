@@ -300,11 +300,11 @@ mkTextEncoding' cfm enc =
       ]
 
 
-latin1_encode ::  Encodable e => Buffer e -> Buffer Word8 -> IO (Buffer e, Buffer Word8)
+latin1_encode ::  Encodable e => Buffer e -> Buffer a -> IO (Buffer e, Buffer a)
 latin1_encode input output = fmap (\(_why,input',output') -> (input',output')) $ Latin1.latin1_encode input output -- unchecked, used for char8
 --latin1_encode = unsafePerformIO $ do mkTextEncoder Iconv.latin1 >>= return.encode
 
-latin1_decode ::  Encodable e => Buffer Word8 -> Buffer e -> IO (Buffer Word8, Buffer e)
+latin1_decode ::  Encodable e => Buffer a -> Buffer e -> IO (Buffer a, Buffer e)
 latin1_decode input output = fmap (\(_why,input',output') -> (input',output')) $ Latin1.latin1_decode input output
 --latin1_decode = unsafePerformIO $ do mkTextDecoder Iconv.latin1 >>= return.encode
 

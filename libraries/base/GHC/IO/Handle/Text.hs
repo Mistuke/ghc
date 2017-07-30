@@ -196,8 +196,8 @@ hGetLineBuffered handle_@Handle__{..} = do
   buf <- readIORef haCharBuffer
   hGetLineBufferedLoop handle_ buf []
 
-hGetLineBufferedLoop :: Handle__
-                     -> CharBuffer -> [String]
+hGetLineBufferedLoop :: Encodable e => Handle__
+                     -> Buffer e -> [String]
                      -> IO String
 hGetLineBufferedLoop handle_@Handle__{..}
         buf@Buffer{ bufL=r0, bufR=w, bufRaw=raw0 } xss =
@@ -245,7 +245,7 @@ hGetLineBufferedLoop handle_@Handle__{..}
                 Just new_buf ->
                      hGetLineBufferedLoop handle_ new_buf (xs:xss)
 
-maybeFillReadBuffer :: Handle__ -> CharBuffer -> IO (Maybe CharBuffer)
+maybeFillReadBuffer ::  Encodable e => Handle__ -> Buffer e -> IO (Maybe (Buffer e))
 maybeFillReadBuffer handle_ buf
   = catchException
      (do buf' <- getSomeCharacters handle_ buf
@@ -256,7 +256,7 @@ maybeFillReadBuffer handle_ buf
                   else ioError e)
 
 -- NB. performance-critical code: eyeball the Core.
-unpack :: RawCharBuffer -> Int -> Int -> [Char] -> IO [Char]
+unpack :: Encodable e => RawBuffer e -> Int -> Int -> [Char] -> IO [Char]
 unpack !buf !r !w acc0
  | r == w    = return acc0
  | otherwise =
@@ -286,7 +286,7 @@ unpack !buf !r !w acc0
      unpackRB acc0 (w-1)
 
 -- NB. performance-critical code: eyeball the Core.
-unpack_nl :: RawCharBuffer -> Int -> Int -> [Char] -> IO ([Char],Int)
+unpack_nl ::Encodable e => RawBuffer e -> Int -> Int -> [Char] -> IO ([Char],Int)
 unpack_nl !buf !r !w acc0
  | r == w    =  return (acc0, 0)
  | otherwise =
@@ -424,7 +424,7 @@ lazyReadBuffered h handle_@Handle__{..} = do
         )
 
 -- ensure we have some characters in the buffer
-getSomeCharacters :: Handle__ -> CharBuffer -> IO CharBuffer
+getSomeCharacters :: Encodable e => Handle__ -> Buffer e -> IO (Buffer e)
 getSomeCharacters handle_@Handle__{..} buf@Buffer{..} =
   case bufferElems buf of
 
@@ -555,7 +555,7 @@ hPutChars :: Handle -> [Char] -> IO ()
 hPutChars _      [] = return ()
 hPutChars handle (c:cs) = hPutChar handle c >> hPutChars handle cs
 
-getSpareBuffer :: Handle__ -> IO (BufferMode, CharBuffer)
+getSpareBuffer ::  Encodable e => Handle__ -> IO (BufferMode, Buffer e)
 getSpareBuffer Handle__{haCharBuffer=ref,
                         haBuffers=spare_ref,
                         haBufferMode=mode}
@@ -575,7 +575,7 @@ getSpareBuffer Handle__{haCharBuffer=ref,
 
 
 -- NB. performance-critical code: eyeball the Core.
-writeBlocks :: Handle -> Bool -> Bool -> Newline -> Buffer CharBufElem -> String -> IO ()
+writeBlocks :: Encodable e => Handle -> Bool -> Bool -> Newline -> Buffer e -> String -> IO ()
 writeBlocks hdl line_buffered add_nl nl
             buf@Buffer{ bufRaw=raw, bufSize=len } s =
   let
@@ -616,8 +616,8 @@ writeBlocks hdl line_buffered add_nl nl
 -- 'count' bytes of data) to handle (handle must be block or line buffered).
 
 commitBuffer
-        :: Handle                       -- handle to commit to
-        -> RawCharBuffer -> Int         -- address and size (in bytes) of buffer
+        :: Encodable e => Handle        -- handle to commit to
+        -> RawBuffer e -> Int           -- address and size (in bytes) of buffer
         -> Int                          -- number of bytes of data in buffer
         -> Bool                         -- True <=> flush the handle afterward
         -> Bool                         -- release the buffer?
@@ -644,8 +644,8 @@ commitBuffer hdl !raw !sz !count flush release =
       return ()
 
 -- backwards compatibility; the text package uses this
-commitBuffer' :: RawCharBuffer -> Int -> Int -> Bool -> Bool -> Handle__
-              -> IO CharBuffer
+commitBuffer' ::  Encodable e => RawBuffer e -> Int -> Int -> Bool -> Bool -> Handle__
+              -> IO (Buffer e)
 commitBuffer' raw sz@(I# _) count@(I# _) flush release h_@Handle__{..}
    = do
       debugIO ("commitBuffer: sz=" ++ show sz ++ ", count=" ++ show count

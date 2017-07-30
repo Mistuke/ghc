@@ -20,6 +20,7 @@ module GHC.IO.Handle.Windows (
  ) where
 
 import Data.Maybe
+import Data.Word
 import Data.Typeable
 import Foreign.C.Types
 
@@ -52,7 +53,7 @@ mkConsoleHandle :: Win.IoHandle Win.ConsoleHandle
                 -> FilePath
                 -> HandleType
                 -> Bool                     -- buffered?
-                -> Maybe TextEncoding
+                -> Maybe (TextEncoding Word16)
                 -> NewlineMode
                 -> Maybe HandleFinalizer
                 -> Maybe (MVar Handle__)
@@ -200,7 +201,7 @@ mkHandleFromHANDLE
    -> IODeviceType
    -> FilePath  -- a string describing this file descriptor (e.g. the filename)
    -> IOMode
-   -> Maybe TextEncoding
+   -> Maybe (TextEncoding Word16)
    -> IO Handle
 
 mkHandleFromHANDLE dev hw_type filepath iomode mb_codec

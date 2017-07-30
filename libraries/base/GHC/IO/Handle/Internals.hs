@@ -5,6 +5,7 @@
            , NondecreasingIndentation
            , RankNTypes
            , ScopedTypeVariables
+           , MultiParamTypeClasses
   #-}
 {-# OPTIONS_GHC -Wno-unused-matches #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
@@ -78,6 +79,7 @@ import Data.Typeable
 import Data.Maybe
 import Foreign
 import System.Posix.Internals hiding (FD)
+import Unsafe.Coerce
 
 import Foreign.C
 
@@ -519,7 +521,7 @@ writeCharBuffer h_@Handle__{..} !cbuf = do
 
   (cbuf',bbuf') <- case haEncoder of
     Nothing      -> latin1_encode cbuf bbuf -- Why latin-1??
-    Just encoder -> (\enc -> streamEncode enc cbuf bbuf) (encoder :: BufferCodec e Word8 enc_state)
+    Just encoder -> (unsafeCoerce $ streamEncode encoder) cbuf bbuf
 
   debugIO ("writeCharBuffer after encoding: cbuf=" ++ summaryBuffer cbuf' ++
         " bbuf=" ++ summaryBuffer bbuf')
@@ -613,7 +615,7 @@ flushByteReadBuffer h_@Handle__{..} = do
 -- ----------------------------------------------------------------------------
 -- Making Handles
 
-mkHandle :: (Encodable e, IODevice dev, BufferedIO dev, Typeable dev) => dev
+mkHandle :: (Encodable e, IODevice dev, BufferedIO dev e, Typeable dev) => dev
             -> FilePath
             -> HandleType
             -> Bool                     -- buffered?
@@ -653,7 +655,7 @@ mkHandle dev filepath ha_type buffered mb_codec nl finalizer other_side = do
                       })
 
 -- | makes a new 'Handle'
-mkFileHandle :: (Encodable e, IODevice dev, BufferedIO dev, Typeable dev)
+mkFileHandle :: (Encodable e, IODevice dev, BufferedIO dev e, Typeable dev)
              => dev -- ^ the underlying IO device, which must support
                     -- 'IODevice', 'BufferedIO' and 'Typeable'
              -> FilePath
@@ -674,7 +676,7 @@ mkFileHandle dev filepath iomode mb_codec tr_newlines = do
 -- | like 'mkFileHandle', except that a 'Handle' is created with two
 -- independent buffers, one for reading and one for writing.  Used for
 -- full-duplex streams, such as network sockets.
-mkDuplexHandle :: (Encodable e, IODevice dev, BufferedIO dev, Typeable dev) => dev
+mkDuplexHandle :: (Encodable e, IODevice dev, BufferedIO dev e, Typeable dev) => dev
                -> FilePath -> Maybe (TextEncoding e) -> NewlineMode -> IO Handle
 mkDuplexHandle dev filepath mb_codec tr_newlines = do
 
@@ -854,7 +856,7 @@ readTextDevice h_@Handle__{..} cbuf = do
           Just decoder -> do
                state <- getState decoder
                writeIORef haLastDecode (state, bbuf1)
-               (streamEncode decoder) bbuf1 cbuf
+               (unsafeCoerce $ streamEncode decoder) bbuf1 cbuf
 
   debugIO ("readTextDevice after decoding: cbuf=" ++ summaryBuffer cbuf' ++
         " bbuf=" ++ summaryBuffer bbuf2)
@@ -887,7 +889,7 @@ readTextDevice' h_@Handle__{..} bbuf0 cbuf0 = do
      -- bbuf2 can be empty here when we encounter an invalid byte sequence at the end of the input
      -- with a //IGNORE codec which consumes bytes without outputting characters
      if isEmptyBuffer bbuf2 then ioe_EOF else do
-     (bbuf3, cbuf1) <- recover decoder bbuf2 cbuf0
+     (bbuf3, cbuf1) <- recover (unsafeCoerce decoder) bbuf2 cbuf0
      debugIO ("readTextDevice' after recovery: bbuf=" ++ summaryBuffer bbuf3 ++ ", cbuf=" ++ summaryBuffer cbuf1)
      writeIORef haByteBuffer bbuf3
      -- We should recursively invoke readTextDevice after recovery,
@@ -906,7 +908,7 @@ readTextDevice' h_@Handle__{..} bbuf0 cbuf0 = do
     (bbuf3,cbuf1) <- do
        state <- getState decoder
        writeIORef haLastDecode (state, bbuf2)
-       (streamEncode decoder) bbuf2 cbuf0
+       (unsafeCoerce $ streamEncode decoder) bbuf2 cbuf0
 
     debugIO ("readTextDevice' after decoding: cbuf=" ++ summaryBuffer cbuf1 ++
           " bbuf=" ++ summaryBuffer bbuf3)
@@ -943,7 +945,7 @@ decodeByteBuf h_@Handle__{..} cbuf = do
           Just decoder -> do
                state <- getState decoder
                writeIORef haLastDecode (state, bbuf0)
-               (streamEncode decoder) bbuf0 cbuf
+               (unsafeCoerce $ streamEncode decoder) bbuf0 cbuf
 
   writeIORef haByteBuffer bbuf2
   return cbuf'

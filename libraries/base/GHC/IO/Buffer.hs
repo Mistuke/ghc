@@ -25,6 +25,7 @@ module GHC.IO.Buffer (
     newByteBuffer,
     newCharBuffer,
     newBuffer,
+    newBuffer',
     emptyBuffer,
 
     -- ** Insertion/removal
@@ -220,6 +221,9 @@ emptyBuffer raw sz state =
 
 newByteBuffer :: Int -> BufferState -> IO (Buffer Word8)
 newByteBuffer c st = newBuffer c c st
+
+newBuffer' :: Int -> BufferState -> IO (Buffer e)
+newBuffer' c st = newBuffer c c st
 
 newBuffer :: Int -> Int -> BufferState -> IO (Buffer e)
 newBuffer bytes sz state = do

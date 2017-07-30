@@ -1,11 +1,12 @@
-{-# LANGUAGE Trustworthy          #-}
-{-# LANGUAGE CPP                  #-}
-{-# LANGUAGE NoImplicitPrelude    #-}
-{-# LANGUAGE BangPatterns         #-}
-{-# LANGUAGE GADTs                #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE FlexibleInstances    #-}
-{-# LANGUAGE FlexibleContexts     #-}
+{-# LANGUAGE Trustworthy           #-}
+{-# LANGUAGE CPP                   #-}
+{-# LANGUAGE NoImplicitPrelude     #-}
+{-# LANGUAGE BangPatterns          #-}
+{-# LANGUAGE GADTs                 #-}
+{-# LANGUAGE TypeSynonymInstances  #-}
+{-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 -- Whether there are identities depends on the platform
 {-# OPTIONS_HADDOCK hide #-}
 
@@ -42,7 +43,7 @@ module GHC.IO.Windows.Handle
 #include <windows.h>
 ##include "windows_cconv.h"
 
-import Data.Word (Word8)
+import Data.Word (Word8, Word16)
 import Data.Functor ((<$>))
 import Data.Typeable
 
@@ -108,7 +109,7 @@ instance GHC.IO.Device.RawIO (Io ConsoleHandle) where
   writeNonBlocking = consoleWriteNonBlocking
 
 -- | Generalize a way to get and create handles.
-class (IODevice a, BufferedIO a, Typeable a) => RawHandle a where
+class (IODevice a, BufferedIO a Word16, Typeable a) => RawHandle a where
   toHANDLE   :: a -> HANDLE
   fromHANDLE :: HANDLE -> a
 
@@ -163,8 +164,8 @@ dEFAULT_BUFFER_SIZE = 8192
 
 -- | @since 4.11.0.0
 -- See libraries/base/GHC/IO/BufferedIO.hs
-instance BufferedIO (Io NativeHandle) where
-  newBuffer _dev state = newByteBuffer dEFAULT_BUFFER_SIZE state
+instance BufferedIO (Io NativeHandle) Word16 where
+  newBuffer _dev state = newBuffer' dEFAULT_BUFFER_SIZE state
   fillReadBuffer       = readBuf
   fillReadBuffer0      = readBufNonBlocking
   flushWriteBuffer     = writeBuf
@@ -172,8 +173,8 @@ instance BufferedIO (Io NativeHandle) where
 
 -- | @since 4.11.0.0
 -- See libraries/base/GHC/IO/BufferedIO.hs
-instance BufferedIO (Io ConsoleHandle) where
-  newBuffer _dev state = newByteBuffer dEFAULT_BUFFER_SIZE state
+instance BufferedIO (Io ConsoleHandle) Word16 where
+  newBuffer _dev state = newBuffer' dEFAULT_BUFFER_SIZE state
   fillReadBuffer       = readBuf
   fillReadBuffer0      = readBufNonBlocking
   flushWriteBuffer     = writeBuf
