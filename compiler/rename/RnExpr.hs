@@ -57,6 +57,7 @@ import qualified GHC.LanguageExtensions as LangExt
 
 import Data.Ord
 import Data.Array
+import qualified Data.List.NonEmpty as NE
 
 {-
 ************************************************************************
@@ -970,7 +971,7 @@ rnParallelStmts ctxt return_op segs thing_inside
 
     cmpByOcc n1 n2 = nameOccName n1 `compare` nameOccName n2
     dupErr vs = addErr (text "Duplicate binding in parallel list comprehension for:"
-                    <+> quotes (ppr (head vs)))
+                    <+> quotes (ppr (NE.head vs)))
 
 lookupStmtName :: HsStmtContext Name -> Name -> RnM (SyntaxExpr GhcRn, FreeVars)
 -- Like lookupSyntaxName, but respects contexts
@@ -1766,6 +1767,7 @@ isStrictPattern (L _ pat) =
     SigPatIn p _ -> isStrictPattern p
     SigPatOut p _ -> isStrictPattern p
     BangPat{} -> True
+    ListPat{} -> True
     TuplePat{} -> True
     SumPat{} -> True
     PArrPat{} -> True

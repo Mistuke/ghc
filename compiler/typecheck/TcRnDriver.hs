@@ -1028,8 +1028,8 @@ checkBootTyCon is_boot tc1 tc2
             = eqClosedFamilyAx ax1 ax2
         eqFamFlav (BuiltInSynFamTyCon {}) (BuiltInSynFamTyCon {}) = tc1 == tc2
         eqFamFlav _ _ = False
-        injInfo1 = familyTyConInjectivityInfo tc1
-        injInfo2 = familyTyConInjectivityInfo tc2
+        injInfo1 = tyConInjectivityInfo tc1
+        injInfo2 = tyConInjectivityInfo tc2
     in
     -- check equality of roles, family flavours and injectivity annotations
     -- (NB: Type family roles are always nominal. But the check is
@@ -2120,7 +2120,7 @@ tcGhciStmts stmts
                        (noLoc $ ExplicitList unitTy Nothing (map mk_item ids)) ;
             mk_item id = let ty_args = [idType id, unitTy] in
                          nlHsApp (nlHsTyApp unsafeCoerceId
-                                   (map (getRuntimeRep "tcGhciStmts") ty_args ++ ty_args))
+                                   (map getRuntimeRep ty_args ++ ty_args))
                                  (nlHsVar id) ;
             stmts = tc_stmts ++ [noLoc (mkLastStmt ret_expr)]
         } ;
@@ -2514,7 +2514,7 @@ rnDump :: (Outputable a, Data a) => a -> TcRn ()
 -- Dump, with a banner, if -ddump-rn
 rnDump rn = do { traceOptTcRn Opt_D_dump_rn (mkDumpDoc "Renamer" (ppr rn))
                ; traceOptTcRn Opt_D_dump_rn_ast
-                 (mkDumpDoc "Renamer" (text (showAstData NoBlankSrcSpan rn))) }
+                 (mkDumpDoc "Renamer" (showAstData NoBlankSrcSpan rn)) }
 
 tcDump :: TcGblEnv -> TcRn ()
 tcDump env
@@ -2535,7 +2535,7 @@ tcDump env
     full_dump  = pprLHsBinds (tcg_binds env)
         -- NB: foreign x-d's have undefined's in their types;
         --     hence can't show the tc_fords
-    ast_dump = text (showAstData NoBlankSrcSpan (tcg_binds env))
+    ast_dump = showAstData NoBlankSrcSpan (tcg_binds env)
 
 -- It's unpleasant having both pprModGuts and pprModDetails here
 pprTcGblEnv :: TcGblEnv -> SDoc

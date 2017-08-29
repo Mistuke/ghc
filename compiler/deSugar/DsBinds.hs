@@ -356,7 +356,8 @@ dsAbsBinds dflags tyvars dicts exports
 makeCorePair :: DynFlags -> Id -> Bool -> Arity -> CoreExpr
              -> (Id, CoreExpr)
 makeCorePair dflags gbl_id is_default_method dict_arity rhs
-  | is_default_method                 -- Default methods are *always* inlined
+  | is_default_method    -- Default methods are *always* inlined
+                         -- See Note [INLINE and default methods] in TcInstDcls
   = (gbl_id `setIdUnfolding` mkCompulsoryUnfolding rhs, rhs)
 
   | otherwise
@@ -1184,7 +1185,7 @@ dsEvTerm (EvDelayedError ty msg) = return $ dsEvDelayedError ty msg
 
 dsEvDelayedError :: Type -> FastString -> CoreExpr
 dsEvDelayedError ty msg
-  = Var errorId `mkTyApps` [getRuntimeRep "dsEvTerm" ty, ty] `mkApps` [litMsg]
+  = Var errorId `mkTyApps` [getRuntimeRep ty, ty] `mkApps` [litMsg]
   where
     errorId = tYPE_ERROR_ID
     litMsg  = Lit (MachStr (fastStringToByteString msg))
@@ -1260,8 +1261,8 @@ ds_ev_typeable ty (EvTypeableTrFun ev1 ev2)
        ; mkTrFun <- dsLookupGlobalId mkTrFunName
                     -- mkTrFun :: forall r1 r2 (a :: TYPE r1) (b :: TYPE r2).
                     --            TypeRep a -> TypeRep b -> TypeRep (a -> b)
-       ; let r1 = getRuntimeRep "ds_ev_typeable" t1
-             r2 = getRuntimeRep "ds_ev_typeable" t2
+       ; let r1 = getRuntimeRep t1
+             r2 = getRuntimeRep t2
        ; return $ mkApps (mkTyApps (Var mkTrFun) [r1, r2, t1, t2])
                          [ e1, e2 ]
        }

@@ -66,6 +66,8 @@ import DynFlags
 import Control.Monad
 import qualified Control.Monad.Fail as MonadFail
 import MonadUtils
+import Data.Foldable      ( toList )
+import Data.List.NonEmpty ( NonEmpty )
 import Data.Maybe
 import Pair
 import qualified GHC.LanguageExtensions as LangExt
@@ -546,6 +548,7 @@ lintSingleBinding top_lvl_flag rec_flag (binder,rhs)
                                   (mkInvalidJoinPointMsg binder binder_ty)
 
        ; when (lf_check_inline_loop_breakers flags
+               && isStableUnfolding (realIdUnfolding binder)
                && isStrongLoopBreaker (idOccInfo binder)
                && isInlinePragma (idInlinePragma binder))
               (addWarnL (text "INLINE binder is (non-rule) loop breaker:" <+> ppr binder))
@@ -1388,23 +1391,28 @@ lint_app doc kfn kas
          -- Note [The substitution invariant] in TyCoRep
          ; foldlM (go_app in_scope) kfn kas }
   where
-    fail_msg = vcat [ hang (text "Kind application error in") 2 doc
-                    , nest 2 (text "Function kind =" <+> ppr kfn)
-                    , nest 2 (text "Arg kinds =" <+> ppr kas) ]
+    fail_msg extra = vcat [ hang (text "Kind application error in") 2 doc
+                          , nest 2 (text "Function kind =" <+> ppr kfn)
+                          , nest 2 (text "Arg kinds =" <+> ppr kas)
+                          , extra ]
 
-    go_app in_scope kfn ka
+    go_app in_scope kfn tka
       | Just kfn' <- coreView kfn
-      = go_app in_scope kfn' ka
+      = go_app in_scope kfn' tka
 
-    go_app _ (FunTy kfa kfb) (_,ka)
-      = do { unless (ka `eqType` kfa) (addErrL fail_msg)
+    go_app _ (FunTy kfa kfb) tka@(_,ka)
+      = do { unless (ka `eqType` kfa) $
+             addErrL (fail_msg (text "Fun:" <+> (ppr kfa $$ ppr tka)))
            ; return kfb }
 
-    go_app in_scope (ForAllTy (TvBndr kv _vis) kfn) (ta,ka)
-      = do { unless (ka `eqType` tyVarKind kv) (addErrL fail_msg)
+    go_app in_scope (ForAllTy (TvBndr kv _vis) kfn) tka@(ta,ka)
+      = do { let kv_kind = tyVarKind kv
+           ; unless (ka `eqType` kv_kind) $
+             addErrL (fail_msg (text "Forall:" <+> (ppr kv $$ ppr kv_kind $$ ppr tka)))
            ; return (substTyWithInScope in_scope [kv] [ta] kfn) }
 
-    go_app _ _ _ = failWithL fail_msg
+    go_app _ kfn ka
+       = failWithL (fail_msg (text "Not a fun:" <+> (ppr kfn $$ ppr ka)))
 
 {- *********************************************************************
 *                                                                      *
@@ -2427,15 +2435,15 @@ pprLeftOrRight :: LeftOrRight -> MsgDoc
 pprLeftOrRight CLeft  = text "left"
 pprLeftOrRight CRight = text "right"
 
-dupVars :: [[Var]] -> MsgDoc
+dupVars :: [NonEmpty Var] -> MsgDoc
 dupVars vars
   = hang (text "Duplicate variables brought into scope")
-       2 (ppr vars)
+       2 (ppr (map toList vars))
 
-dupExtVars :: [[Name]] -> MsgDoc
+dupExtVars :: [NonEmpty Name] -> MsgDoc
 dupExtVars vars
   = hang (text "Duplicate top-level variables with the same qualified name")
-       2 (ppr vars)
+       2 (ppr (map toList vars))
 
 {-
 ************************************************************************
