@@ -83,7 +83,7 @@ import TysWiredIn       ( unitTyCon, unitDataCon, tupleTyCon, tupleDataCon, nilD
 
 -- compiler/utils
 import Util             ( looksLikePackageName )
-import Prelude
+import GhcPrelude
 
 import qualified GHC.LanguageExtensions as LangExt
 }
@@ -2311,7 +2311,7 @@ sigdecl :: { LHsDecl GhcPs }
         | '{-# SPECIALISE' activation qvar '::' sigtypes1 '#-}'
              {% ams (
                  let inl_prag = mkInlinePragma (getSPEC_PRAGs $1)
-                                             (EmptyInlineSpec, FunLike) (snd $2)
+                                             (NoUserInline, FunLike) (snd $2)
                   in sLL $1 $> $ SigD (SpecSig $3 (fromOL $5) inl_prag))
                     (mo $1:mu AnnDcolon $4:mc $6:(fst $2)) }
 

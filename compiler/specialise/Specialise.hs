@@ -9,6 +9,8 @@ module Specialise ( specProgram, specUnfolding ) where
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import Id
 import TcType hiding( substTy )
 import Type   hiding( substTy, extendTvSubstList )
@@ -733,7 +735,7 @@ specImport dflags this_mod top_env done callers rb fn calls_for_fn
   = do { warnMsg (vcat [ hang (text "Could not specialise imported function" <+> quotes (ppr fn))
                             2 (vcat [ text "when specialising" <+> quotes (ppr caller)
                                     | caller <- callers])
-                      , ifPprDebug (text "calls:" <+> vcat (map (pprCallInfo fn) calls_for_fn))
+                      , whenPprDebug (text "calls:" <+> vcat (map (pprCallInfo fn) calls_for_fn))
                       , text "Probable fix: add INLINABLE pragma on" <+> quotes (ppr fn) ])
        ; return ([], []) }
 
@@ -1341,7 +1343,7 @@ specCalls mb_mod env existing_rules calls_for_me fn rhs
                         -- See Note [Specialising imported functions] in OccurAnal
 
                   | InlinePragma { inl_inline = Inlinable } <- inl_prag
-                  = (inl_prag { inl_inline = EmptyInlineSpec }, noUnfolding)
+                  = (inl_prag { inl_inline = NoUserInline }, noUnfolding)
 
                   | otherwise
                   = (inl_prag, specUnfolding poly_tyvars spec_app
@@ -2285,7 +2287,7 @@ instance Monad SpecM where
                                case f y of
                                    SpecM z ->
                                        z
-    fail str = SpecM $ fail str
+    fail = MonadFail.fail
 
 instance MonadFail.MonadFail SpecM where
     fail str = SpecM $ fail str

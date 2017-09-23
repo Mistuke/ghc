@@ -90,6 +90,8 @@ class (MonadIO m, Fail.MonadFail m) => Quasi m where
 
   qAddModFinalizer :: Q () -> m ()
 
+  qAddCorePlugin :: String -> m ()
+
   qGetQ :: Typeable a => m (Maybe a)
 
   qPutQ :: Typeable a => a -> m ()
@@ -129,6 +131,7 @@ instance Quasi IO where
   qAddTopDecls _        = badIO "addTopDecls"
   qAddForeignFile _ _   = badIO "addForeignFile"
   qAddModFinalizer _    = badIO "addModFinalizer"
+  qAddCorePlugin _      = badIO "addCorePlugin"
   qGetQ                 = badIO "getQ"
   qPutQ _               = badIO "putQ"
   qIsExtEnabled _       = badIO "isExtEnabled"
@@ -476,6 +479,16 @@ addForeignFile lang str = Q (qAddForeignFile lang str)
 addModFinalizer :: Q () -> Q ()
 addModFinalizer act = Q (qAddModFinalizer (unQ act))
 
+-- | Adds a core plugin to the compilation pipeline.
+--
+-- @addCorePlugin m@ has almost the same effect as passing @-fplugin=m@ to ghc
+-- in the command line. The major difference is that the plugin module @m@
+-- must not belong to the current package. When TH executes, it is too late
+-- to tell the compiler that we needed to compile first a plugin module in the
+-- current package.
+addCorePlugin :: String -> Q ()
+addCorePlugin plugin = Q (qAddCorePlugin plugin)
+
 -- | Get state from the 'Q' monad. Note that the state is local to the
 -- Haskell module in which the Template Haskell expression is executed.
 getQ :: Typeable a => Q (Maybe a)
@@ -514,6 +527,7 @@ instance Quasi Q where
   qAddTopDecls        = addTopDecls
   qAddForeignFile     = addForeignFile
   qAddModFinalizer    = addModFinalizer
+  qAddCorePlugin      = addCorePlugin
   qGetQ               = getQ
   qPutQ               = putQ
   qIsExtEnabled       = isExtEnabled
@@ -1833,6 +1847,35 @@ data DecidedStrictness = DecidedLazy
                        | DecidedUnpack
         deriving (Show, Eq, Ord, Data, Generic)
 
+-- | A single data constructor.
+--
+-- The constructors for 'Con' can roughly be divided up into two categories:
+-- those for constructors with \"vanilla\" syntax ('NormalC', 'RecC', and
+-- 'InfixC'), and those for constructors with GADT syntax ('GadtC' and
+-- 'RecGadtC'). The 'ForallC' constructor, which quantifies additional type
+-- variables and class contexts, can surround either variety of constructor.
+-- However, the type variables that it quantifies are different depending
+-- on what constructor syntax is used:
+--
+-- * If a 'ForallC' surrounds a constructor with vanilla syntax, then the
+--   'ForallC' will only quantify /existential/ type variables. For example:
+--
+--   @
+--   data Foo a = forall b. MkFoo a b
+--   @
+--
+--   In @MkFoo@, 'ForallC' will quantify @b@, but not @a@.
+--
+-- * If a 'ForallC' surrounds a constructor with GADT syntax, then the
+--   'ForallC' will quantify /all/ type variables used in the constructor.
+--   For example:
+--
+--   @
+--   data Bar a b where
+--     MkBar :: (a ~ b) => c -> MkBar a b
+--   @
+--
+--   In @MkBar@, 'ForallC' will quantify @a@, @b@, and @c@.
 data Con = NormalC Name [BangType]       -- ^ @C Int a@
          | RecC Name [VarBangType]       -- ^ @C { v :: Int, w :: a }@
          | InfixC BangType Name BangType -- ^ @Int :+ a@

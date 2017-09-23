@@ -25,6 +25,8 @@ where
 #include "HsVersions.h"
 #include "../includes/MachDeps.h"
 
+import GhcPrelude
+
 import {-# SOURCE #-} MkId ( mkPrimOpId, magicDictId )
 
 import CoreSyn
@@ -56,9 +58,7 @@ import Coercion     (mkUnbranchedAxInstCo,mkSymCo,Role(..))
 import Control.Applicative ( Alternative(..) )
 
 import Control.Monad
-#if __GLASGOW_HASKELL__ > 710
 import qualified Control.Monad.Fail as MonadFail
-#endif
 import Data.Bits as Bits
 import qualified Data.ByteString as BS
 import Data.Int
@@ -649,12 +649,10 @@ instance Monad RuleM where
   RuleM f >>= g = RuleM $ \dflags iu e -> case f dflags iu e of
     Nothing -> Nothing
     Just r -> runRuleM (g r) dflags iu e
-  fail _ = mzero
+  fail = MonadFail.fail
 
-#if __GLASGOW_HASKELL__ > 710
 instance MonadFail.MonadFail RuleM where
     fail _ = mzero
-#endif
 
 instance Alternative RuleM where
   empty = RuleM $ \_ _ _ -> Nothing
@@ -1423,7 +1421,7 @@ caseRules dflags (App (App (Var f) (Lit l)) v)   -- x# `op` v
   , Just x  <- isLitValue_maybe l
   , Just adjust_lit <- adjustDyadicLeft x op
   = Just (v, tx_lit_con dflags adjust_lit
-           , \v -> (App (App (Var f) (Var v)) (Lit l)))
+           , \v -> (App (App (Var f) (Lit l)) (Var v)))
 
 
 caseRules dflags (App (Var f) v              )   -- op v

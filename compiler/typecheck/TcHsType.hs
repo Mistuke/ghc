@@ -30,13 +30,15 @@ module TcHsType (
         kcHsTyVarBndrs,
         tcHsLiftedType,   tcHsOpenType,
         tcHsLiftedTypeNC, tcHsOpenTypeNC,
-        tcLHsType, tcCheckLHsType,
-        tcHsContext, tcLHsPredType, tcInferApps, tcTyApps,
+        tcLHsType, tcLHsTypeUnsaturated, tcCheckLHsType,
+        tcHsContext, tcLHsPredType, tcInferApps,
         solveEqualities, -- useful re-export
 
         typeLevelMode, kindLevelMode,
 
         kindGeneralize, checkExpectedKindX, instantiateTyUntilN,
+
+        reportFloatingKvs,
 
         -- Sort-checking kinds
         tcLHsKindSig,
@@ -46,6 +48,8 @@ module TcHsType (
    ) where
 
 #include "HsVersions.h"
+
+import GhcPrelude
 
 import HsSyn
 import TcRnMonad
@@ -86,7 +90,7 @@ import PrelNames hiding ( wildCardName )
 import qualified GHC.LanguageExtensions as LangExt
 
 import Maybes
-import Data.List ( partition, zipWith4 )
+import Data.List ( partition, zipWith4, mapAccumR )
 import Control.Monad
 
 {-
@@ -331,6 +335,13 @@ tcLHsType :: LHsType GhcRn -> TcM (TcType, TcKind)
 -- Called from outside: set the context
 tcLHsType ty = addTypeCtxt ty (tc_infer_lhs_type typeLevelMode ty)
 
+-- Like tcLHsType, but use it in a context where type synonyms and type families
+-- do not need to be saturated, like in a GHCi :kind call
+tcLHsTypeUnsaturated :: LHsType GhcRn -> TcM (TcType, TcKind)
+tcLHsTypeUnsaturated ty = addTypeCtxt ty (tc_infer_lhs_type mode ty)
+  where
+    mode = allowUnsaturated typeLevelMode
+
 ---------------------------
 -- | Should we generalise the kind of this type signature?
 -- We *should* generalise if the type is closed
@@ -390,15 +401,21 @@ concern things that the renamer can't handle.
 -- differentiates only between types and kinds, but this will likely
 -- grow, at least to include the distinction between patterns and
 -- not-patterns.
-newtype TcTyMode
-  = TcTyMode { mode_level :: TypeOrKind  -- True <=> type, False <=> kind
+data TcTyMode
+  = TcTyMode { mode_level :: TypeOrKind
+             , mode_unsat :: Bool        -- True <=> allow unsaturated type families
              }
+ -- The mode_unsat field is solely so that type families/synonyms can be unsaturated
+ -- in GHCi :kind calls
 
 typeLevelMode :: TcTyMode
-typeLevelMode = TcTyMode { mode_level = TypeLevel }
+typeLevelMode = TcTyMode { mode_level = TypeLevel, mode_unsat = False }
 
 kindLevelMode :: TcTyMode
-kindLevelMode = TcTyMode { mode_level = KindLevel }
+kindLevelMode = TcTyMode { mode_level = KindLevel, mode_unsat = False }
+
+allowUnsaturated :: TcTyMode -> TcTyMode
+allowUnsaturated mode = mode { mode_unsat = True }
 
 -- switch to kind level
 kindLevel :: TcTyMode -> TcTyMode
@@ -725,9 +742,9 @@ tcWildCardOcc wc_info exp_kind
 ---------------------------
 -- | Call 'tc_infer_hs_type' and check its result against an expected kind.
 tc_infer_hs_type_ek :: TcTyMode -> HsType GhcRn -> TcKind -> TcM TcType
-tc_infer_hs_type_ek mode ty ek
-  = do { (ty', k) <- tc_infer_hs_type mode ty
-       ; checkExpectedKind ty ty' k ek }
+tc_infer_hs_type_ek mode hs_ty ek
+  = do { (ty, k) <- tc_infer_hs_type mode hs_ty
+       ; checkExpectedKind hs_ty ty k ek }
 
 ---------------------------
 tupKindSort_maybe :: TcKind -> Maybe TupleSort
@@ -800,61 +817,63 @@ tcInferApps :: TcTyMode
             -> TcKind               -- ^ Function kind (zonked)
             -> [LHsType GhcRn]      -- ^ Args
             -> TcM (TcType, [TcType], TcKind) -- ^ (f args, args, result kind)
-tcInferApps mode mb_kind_info orig_ty ty ki args
-  = do { traceTc "tcInferApps" (ppr orig_ty $$ ppr args $$ ppr ki)
-       ; go [] [] orig_subst ty orig_ki_binders orig_inner_ki args 1 }
+tcInferApps mode mb_kind_info orig_hs_ty fun_ty fun_ki orig_hs_args
+  = do { traceTc "tcInferApps" (ppr orig_hs_ty $$ ppr orig_hs_args $$ ppr fun_ki)
+       ; go 1 [] empty_subst fun_ty orig_ki_binders orig_inner_ki orig_hs_args }
   where
-    orig_subst                       = mkEmptyTCvSubst $ mkInScopeSet $ tyCoVarsOfType ki
-    (orig_ki_binders, orig_inner_ki) = tcSplitPiTys ki
+    empty_subst                      = mkEmptyTCvSubst $ mkInScopeSet $
+                                       tyCoVarsOfType fun_ki
+    (orig_ki_binders, orig_inner_ki) = tcSplitPiTys fun_ki
 
-    go :: [LHsType GhcRn] -- already type-checked args, in reverse order, for errors
+    go :: Int             -- the # of the next argument
        -> [TcType]        -- already type-checked args, in reverse order
        -> TCvSubst        -- instantiating substitution
        -> TcType          -- function applied to some args, could be knot-tied
        -> [TyBinder]      -- binders in function kind (both vis. and invis.)
        -> TcKind          -- function kind body (not a Pi-type)
        -> [LHsType GhcRn] -- un-type-checked args
-       -> Int             -- the # of the next argument
        -> TcM (TcType, [TcType], TcKind)  -- same as overall return type
 
       -- no user-written args left. We're done!
-    go _acc_hs_args acc_args subst fun ki_binders inner_ki [] _
+    go _ acc_args subst fun ki_binders inner_ki []
       = return (fun, reverse acc_args, substTy subst $ mkPiTys ki_binders inner_ki)
 
       -- The function's kind has a binder. Is it visible or invisible?
-    go acc_hs_args acc_args subst fun (ki_binder:ki_binders) inner_ki
-       all_args@(arg:args) n
+    go n acc_args subst fun (ki_binder:ki_binders) inner_ki
+       all_args@(arg:args)
       | isInvisibleBinder ki_binder
         -- It's invisible. Instantiate.
       = do { traceTc "tcInferApps (invis)" (ppr ki_binder $$ ppr subst)
            ; (subst', arg') <- tcInstBinder mb_kind_info subst ki_binder
-           ; go acc_hs_args (arg' : acc_args) subst' (mkNakedAppTy fun arg')
-                ki_binders inner_ki all_args n }
+           ; go n (arg' : acc_args) subst' (mkNakedAppTy fun arg')
+                ki_binders inner_ki all_args }
 
       | otherwise
         -- It's visible. Check the next user-written argument
-      = do { traceTc "tcInferApps (vis)" (ppr ki_binder $$ ppr arg $$ ppr subst)
-           ; arg' <- addErrCtxt (funAppCtxt orig_ty arg n) $
+      = do { traceTc "tcInferApps (vis)" (vcat [ ppr ki_binder, ppr arg
+                                               , ppr (tyBinderType ki_binder)
+                                               , ppr subst ])
+           ; arg' <- addErrCtxt (funAppCtxt orig_hs_ty arg n) $
                      tc_lhs_type mode arg (substTy subst $ tyBinderType ki_binder)
            ; let subst' = extendTvSubstBinderAndInScope subst ki_binder arg'
-           ; go (arg : acc_hs_args) (arg' : acc_args) subst' (mkNakedAppTy fun arg')
-                ki_binders inner_ki args (n+1) }
+           ; go (n+1) (arg' : acc_args) subst' (mkNakedAppTy fun arg')
+                ki_binders inner_ki args }
 
        -- We've run out of known binders in the functions's kind.
-    go acc_hs_args acc_args subst fun [] inner_ki all_args n
+    go n acc_args subst fun [] inner_ki all_args
       | not (null new_ki_binders)
          -- But, after substituting, we have more binders.
-      = go acc_hs_args acc_args zapped_subst fun new_ki_binders new_inner_ki all_args n
+      = go n acc_args zapped_subst fun new_ki_binders new_inner_ki all_args
 
       | otherwise
          -- Even after substituting, still no binders. Use matchExpectedFunKind
       = do { traceTc "tcInferApps (no binder)" (ppr new_inner_ki $$ ppr zapped_subst)
            ; (co, arg_k, res_k)
-               <- matchExpectedFunKind (mkHsAppTys orig_ty (reverse acc_hs_args))
+               <- matchExpectedFunKind (mkHsAppTys orig_hs_ty (take (n-1) orig_hs_args))
                                        substed_inner_ki
            ; let subst' = zapped_subst `extendTCvInScopeSet` tyCoVarsOfTypes [arg_k, res_k]
-           ; go acc_hs_args acc_args subst' (fun `mkNakedCastTy` co)
-                [mkAnonBinder arg_k] res_k all_args n }
+           ; go n acc_args subst' (fun `mkNakedCastTy` co)
+                [mkAnonBinder arg_k] res_k all_args }
       where
         substed_inner_ki               = substTy subst inner_ki
         (new_ki_binders, new_inner_ki) = tcSplitPiTys substed_inner_ki
@@ -871,8 +890,8 @@ tcTyApps :: TcTyMode
          -> TcKind               -- ^ Function kind (zonked)
          -> [LHsType GhcRn]      -- ^ Args
          -> TcM (TcType, TcKind) -- ^ (f args, result kind)
-tcTyApps mode orig_ty ty ki args
-  = do { (ty', _args, ki') <- tcInferApps mode Nothing orig_ty ty ki args
+tcTyApps mode orig_hs_ty ty ki args
+  = do { (ty', _args, ki') <- tcInferApps mode Nothing orig_hs_ty ty ki args
        ; return (ty', ki') }
 
 --------------------------
@@ -882,7 +901,8 @@ checkExpectedKind :: HsType GhcRn
                   -> TcKind
                   -> TcKind
                   -> TcM TcType
-checkExpectedKind hs_ty ty act exp = fstOf3 <$> checkExpectedKindX Nothing (ppr hs_ty) ty act exp
+checkExpectedKind hs_ty ty act exp
+  = fstOf3 <$> checkExpectedKindX Nothing (ppr hs_ty) ty act exp
 
 checkExpectedKindX :: Maybe (VarEnv Kind)  -- Possibly, instantiations for kind vars
                    -> SDoc                 -- HsType whose kind we're checking
@@ -1036,7 +1056,8 @@ tcTyVar mode name         -- Could be a tyvar, a tycon, or a datacon
                   -> TcTyCon   -- a non-loopy version of the tycon
                   -> TcM (TcType, TcKind)
     handle_tyfams tc tc_tc
-      | mightBeUnsaturatedTyCon tc_tc
+      | mightBeUnsaturatedTyCon tc_tc || mode_unsat mode
+                                         -- This is where mode_unsat is used
       = do { traceTc "tcTyVar2a" (ppr tc_tc $$ ppr tc_kind)
            ; return (ty, tc_kind) }
 
@@ -1308,7 +1329,7 @@ Here
 and
   T :: forall {k3} k1. forall k3 -> k1 -> k2 -> k3 -> *
 
-See Note [TyVarBndrs, TyVarBinders, TyConBinders, and visiblity]
+See Note [TyVarBndrs, TyVarBinders, TyConBinders, and visibility]
 in TyCoRep.
 
 kcHsTyVarBndrs uses the hsq_dependent field to decide whether
@@ -1744,6 +1765,46 @@ CUSK: When we determine the tycon's final, never-to-be-changed kind
 in kcHsTyVarBndrs, we check to make sure all implicitly-bound kind
 vars are indeed mentioned in a kind somewhere. If not, error.
 
+We also perform free-floating kind var analysis for type family instances
+(see #13985). Here is an interesting example:
+
+    type family   T :: k
+    type instance T = (Nothing :: Maybe a)
+
+Upon a cursory glance, it may appear that the kind variable `a` is
+free-floating above, since there are no (visible) LHS patterns in `T`. However,
+there is an *invisible* pattern due to the return kind, so inside of GHC, the
+instance looks closer to this:
+
+    type family T @k :: k
+    type instance T @(Maybe a) = (Nothing :: Maybe a)
+
+Here, we can see that `a` really is bound by a LHS type pattern, so `a` is in
+fact not free-floating. Contrast that with this example:
+
+    type instance T = Proxy (Nothing :: Maybe a)
+
+This would looks like this inside of GHC:
+
+    type instance T @(*) = Proxy (Nothing :: Maybe a)
+
+So this time, `a` is neither bound by a visible nor invisible type pattern on
+the LHS, so it would be reported as free-floating.
+
+Finally, here's one more brain-teaser (from #9574). In the example below:
+
+    class Funct f where
+      type Codomain f :: *
+    instance Funct ('KProxy :: KProxy o) where
+      type Codomain 'KProxy = NatTr (Proxy :: o -> *)
+
+As it turns out, `o` is not free-floating in this example. That is because `o`
+bound by the kind signature of the LHS type pattern 'KProxy. To make this more
+obvious, one can also write the instance like so:
+
+    instance Funct ('KProxy :: KProxy o) where
+      type Codomain ('KProxy :: KProxy o) = NatTr (Proxy :: o -> *)
+
 -}
 
 --------------------
@@ -1790,8 +1851,8 @@ tcTyClTyVars tycon_name thing_inside
 
        ; let scoped_tvs = tcTyConScopedTyVars tycon
                -- these are all zonked:
-             binders    = tyConBinders tycon
              res_kind   = tyConResKind tycon
+             binders    = correct_binders (tyConBinders tycon) res_kind
 
           -- See Note [Free-floating kind vars]
        ; zonked_scoped_tvs <- mapM zonkTcTyVarToTyVar scoped_tvs
@@ -1804,6 +1865,39 @@ tcTyClTyVars tycon_name thing_inside
        ; traceTc "tcTyClTyVars" (ppr tycon_name <+> ppr binders)
        ; tcExtendTyVarEnv scoped_tvs $
          thing_inside binders res_kind }
+  where
+    -- Given some TyConBinders and a TyCon's result kind, make sure that the
+    -- correct any wrong Named/Anon choices. For example, consider
+    --   type Syn k = forall (a :: k). Proxy a
+    -- At first, it looks like k should be named -- after all, it appears on the RHS.
+    -- However, the correct kind for Syn is (* -> *).
+    -- (Why? Because k is the kind of a type, so k's kind is *. And the RHS also has
+    -- kind *.) See also #13963.
+    correct_binders :: [TyConBinder] -> Kind -> [TyConBinder]
+    correct_binders binders kind
+      = binders'
+      where
+        (_, binders') = mapAccumR go (tyCoVarsOfType kind) binders
+
+        go :: TyCoVarSet -> TyConBinder -> (TyCoVarSet, TyConBinder)
+        go fvs binder
+          | isNamedTyConBinder binder
+          , not (tv `elemVarSet` fvs)
+          = (new_fvs, mkAnonTyConBinder tv)
+
+          | not (isNamedTyConBinder binder)
+          , tv `elemVarSet` fvs
+          = (new_fvs, mkNamedTyConBinder Required tv)
+             -- always Required, because it was anonymous (i.e. visible) previously
+
+          | otherwise
+          = (new_fvs, binder)
+
+          where
+            tv      = binderVar binder
+            new_fvs = fvs `delVarSet` tv `unionVarSet` tyCoVarsOfType (tyVarKind tv)
+
+
 
 -----------------------------------
 tcDataKindSig :: Bool  -- ^ Do we require the result to be *?

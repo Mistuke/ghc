@@ -31,8 +31,11 @@ module TcSplice(
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import HsSyn
 import Annotations
+import Finder
 import Name
 import TcRnMonad
 import TcType
@@ -918,6 +921,22 @@ instance TH.Quasi TcM where
       fref <- liftIO $ mkForeignRef r (freeRemoteRef r)
       addModFinalizerRef fref
 
+  qAddCorePlugin plugin = do
+      hsc_env <- env_top <$> getEnv
+      r <- liftIO $ findHomeModule hsc_env (mkModuleName plugin)
+      let err = hang
+            (text "addCorePlugin: invalid plugin module "
+               <+> text (show plugin)
+            )
+            2
+            (text "Plugins in the current package can't be specified.")
+      case r of
+        Found {} -> addErr err
+        FoundMultiple {} -> addErr err
+        _ -> return ()
+      th_coreplugins_var <- tcg_th_coreplugins <$> getGblEnv
+      updTcRef th_coreplugins_var (plugin:)
+
   qGetQ :: forall a. Typeable a => TcM (Maybe a)
   qGetQ = do
       th_state_var <- fmap tcg_th_state getGblEnv
@@ -1102,6 +1121,7 @@ handleTHMessage msg = case msg of
   AddModFinalizer r -> do
     hsc_env <- env_top <$> getEnv
     wrapTHResult $ liftIO (mkFinalizedHValue hsc_env r) >>= addModFinalizerRef
+  AddCorePlugin str -> wrapTHResult $ TH.qAddCorePlugin str
   AddTopDecls decs -> wrapTHResult $ TH.qAddTopDecls decs
   AddForeignFile lang str -> wrapTHResult $ TH.qAddForeignFile lang str
   IsExtEnabled ext -> wrapTHResult $ TH.qIsExtEnabled ext
@@ -1357,7 +1377,7 @@ reifyAxBranch fam_tc (CoAxBranch { cab_lhs = lhs, cab_rhs = rhs })
        ; rhs'  <- reifyType rhs
        ; return (TH.TySynEqn annot_th_lhs rhs') }
   where
-    fam_tvs = filterOutInvisibleTyVars fam_tc (tyConTyVars fam_tc)
+    fam_tvs = tyConVisibleTyVars fam_tc
 
 reifyTyCon :: TyCon -> TcM TH.Info
 reifyTyCon tc
@@ -1391,7 +1411,7 @@ reifyTyCon tc
                                      injRHS = map (reifyName . tyVarName)
                                                   (filterByList ms tvs)
                      in (sig, inj)
-       ; tvs' <- reifyTyVars tvs (Just tc)
+       ; tvs' <- reifyTyVars (tyConVisibleTyVars tc)
        ; let tfHead =
                TH.TypeFamilyHead (reifyName tc) tvs' resultSig injectivity
        ; if isOpenTypeFamilyTyCon tc
@@ -1408,20 +1428,19 @@ reifyTyCon tc
                       []) } }
 
   | isDataFamilyTyCon tc
-  = do { let tvs      = tyConTyVars tc
-             res_kind = tyConResKind tc
+  = do { let res_kind = tyConResKind tc
 
        ; kind' <- fmap Just (reifyKind res_kind)
 
-       ; tvs' <- reifyTyVars tvs (Just tc)
+       ; tvs' <- reifyTyVars (tyConVisibleTyVars tc)
        ; fam_envs <- tcGetFamInstEnvs
        ; instances <- reifyFamilyInstances tc (familyInstances fam_envs tc)
        ; return (TH.FamilyI
                        (TH.DataFamilyD (reifyName tc) tvs' kind') instances) }
 
-  | Just (tvs, rhs) <- synTyConDefn_maybe tc  -- Vanilla type synonym
+  | Just (_, rhs) <- synTyConDefn_maybe tc  -- Vanilla type synonym
   = do { rhs' <- reifyType rhs
-       ; tvs' <- reifyTyVars tvs (Just tc)
+       ; tvs' <- reifyTyVars (tyConVisibleTyVars tc)
        ; return (TH.TyConI
                    (TH.TySynD (reifyName tc) tvs' rhs'))
        }
@@ -1430,10 +1449,9 @@ reifyTyCon tc
   = do  { cxt <- reifyCxt (tyConStupidTheta tc)
         ; let tvs      = tyConTyVars tc
               dataCons = tyConDataCons tc
-              -- see Note [Reifying GADT data constructors]
-              isGadt   = any (not . null . dataConEqSpec) dataCons
+              isGadt   = isGadtSyntaxTyCon tc
         ; cons <- mapM (reifyDataCon isGadt (mkTyVarTys tvs)) dataCons
-        ; r_tvs <- reifyTyVars tvs (Just tc)
+        ; r_tvs <- reifyTyVars (tyConVisibleTyVars tc)
         ; let name = reifyName tc
               deriv = []        -- Don't know about deriving
               decl | isNewTyCon tc =
@@ -1443,7 +1461,6 @@ reifyTyCon tc
         ; return (TH.TyConI decl) }
 
 reifyDataCon :: Bool -> [Type] -> DataCon -> TcM TH.Con
--- For GADTs etc, see Note [Reifying GADT data constructors]
 reifyDataCon isGadtDataCon tys dc
   = do { let -- used for H98 data constructors
              (ex_tvs, theta, arg_tys)
@@ -1499,40 +1516,15 @@ reifyDataCon isGadtDataCon tys dc
              ret_con | null ex_tvs' && null theta' = return main_con
                      | otherwise                   = do
                          { cxt <- reifyCxt theta'
-                         ; ex_tvs'' <- reifyTyVars ex_tvs' Nothing
+                         ; ex_tvs'' <- reifyTyVars ex_tvs'
                          ; return (TH.ForallC ex_tvs'' cxt main_con) }
        ; ASSERT( arg_tys `equalLength` dcdBangs )
          ret_con }
 
 {-
-Note [Reifying GADT data constructors]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-At this point in the compilation pipeline we have no way of telling whether a
-data type was declared as a H98 data type or as a GADT.  We have to rely on
-heuristics here.  We look at dcEqSpec field of all data constructors in a
-data type declaration.  If at least one data constructor has non-empty
-dcEqSpec this means that the data type must have been declared as a GADT.
-Consider these declarations:
-
-  data T1 a where
-     MkT1 :: T1 Int
-
-  data T2 a where
-     MkT2 :: forall a. (a ~ Int) => T2 a
-
-T1 will be reified as a GADT, as it has a non-empty EqSpec [(a, Int)] due to
-MkT1's return type. T2 will be reified as a normal H98 data type declaration
-since MkT2 uses an explicit type equality in its context instead of an implicit
-equality in its return type, and therefore has an empty EqSpec.
-
 Note [Freshen reified GADT constructors' universal tyvars]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Suppose one were to reify this data type:
-
-  data a :~: b = (a ~ b) => Refl
-
-This will be reified as if it were a GADT definiton, so the reified definition
-will be closer to:
+Suppose one were to reify this GADT:
 
   data a :~: b where
     Refl :: forall a b. (a ~ b) => a :~: b
@@ -1562,11 +1554,11 @@ reifyClass cls
         ; insts <- reifyClassInstances cls (InstEnv.classInstances inst_envs cls)
         ; assocTys <- concatMapM reifyAT ats
         ; ops <- concatMapM reify_op op_stuff
-        ; tvs' <- reifyTyVars tvs (Just $ classTyCon cls)
+        ; tvs' <- reifyTyVars (tyConVisibleTyVars (classTyCon cls))
         ; let dec = TH.ClassD cxt (reifyName cls) tvs' fds' (assocTys ++ ops)
         ; return (TH.ClassI dec insts) }
   where
-    (tvs, fds, theta, _, ats, op_stuff) = classExtraBigSig cls
+    (_, fds, theta, _, ats, op_stuff) = classExtraBigSig cls
     fds' = map reifyFunDep fds
     reify_op (op, def_meth)
       = do { ty <- reifyType (idType op)
@@ -1634,7 +1626,7 @@ reifyClassInstances :: Class -> [ClsInst] -> TcM [TH.Dec]
 reifyClassInstances cls insts
   = mapM (reifyClassInstance (mkIsPolyTvs tvs)) insts
   where
-    tvs = filterOutInvisibleTyVars (classTyCon cls) (classTyVars cls)
+    tvs = tyConVisibleTyVars (classTyCon cls)
 
 reifyClassInstance :: [Bool]  -- True <=> the corresponding tv is poly-kinded
                               -- includes only *visible* tvs
@@ -1662,7 +1654,7 @@ reifyFamilyInstances :: TyCon -> [FamInst] -> TcM [TH.Dec]
 reifyFamilyInstances fam_tc fam_insts
   = mapM (reifyFamilyInstance (mkIsPolyTvs fam_tvs)) fam_insts
   where
-    fam_tvs = filterOutInvisibleTyVars fam_tc (tyConTyVars fam_tc)
+    fam_tvs = tyConVisibleTyVars fam_tc
 
 reifyFamilyInstance :: [Bool] -- True <=> the corresponding tv is poly-kinded
                               -- includes only *visible* tvs
@@ -1697,8 +1689,7 @@ reifyFamilyInstance is_poly_tvs inst@(FamInst { fi_flavor = flavor
                  eta_expanded_tvs = mkTyVarTys fam_tvs `chkAppend` etad_tys
                  eta_expanded_lhs = lhs `chkAppend` etad_tys
                  dataCons         = tyConDataCons rep_tc
-                 -- see Note [Reifying GADT data constructors]
-                 isGadt   = any (not . null . dataConEqSpec) dataCons
+                 isGadt           = isGadtSyntaxTyCon rep_tc
            ; cons <- mapM (reifyDataCon isGadt eta_expanded_tvs) dataCons
            ; let types_only = filterOutInvisibleTypes fam_tc eta_expanded_lhs
            ; th_tys <- reifyTypes types_only
@@ -1731,7 +1722,7 @@ reify_for_all :: TyCoRep.Type -> TcM TH.Type
 reify_for_all ty
   = do { cxt' <- reifyCxt cxt;
        ; tau' <- reifyType tau
-       ; tvs' <- reifyTyVars tvs Nothing
+       ; tvs' <- reifyTyVars tvs
        ; return (TH.ForallT tvs' cxt' tau') }
   where
     (tvs, cxt, tau) = tcSplitSigmaTy ty
@@ -1749,9 +1740,9 @@ reifyPatSynType
 -- signature; see NOTE [Pattern synonym signatures and Template
 -- Haskell]
 reifyPatSynType (univTyVars, req, exTyVars, prov, argTys, resTy)
-  = do { univTyVars' <- reifyTyVars univTyVars Nothing
+  = do { univTyVars' <- reifyTyVars univTyVars
        ; req'        <- reifyCxt req
-       ; exTyVars'   <- reifyTyVars exTyVars Nothing
+       ; exTyVars'   <- reifyTyVars exTyVars
        ; prov'       <- reifyCxt prov
        ; tau'        <- reifyType (mkFunTys argTys resTy)
        ; return $ TH.ForallT univTyVars' req'
@@ -1766,16 +1757,9 @@ reifyCxt   = mapM reifyPred
 reifyFunDep :: ([TyVar], [TyVar]) -> TH.FunDep
 reifyFunDep (xs, ys) = TH.FunDep (map reifyName xs) (map reifyName ys)
 
-reifyTyVars :: [TyVar]
-            -> Maybe TyCon  -- the tycon if the tycovars are from a tycon.
-                            -- Used to detect which tvs are implicit.
-            -> TcM [TH.TyVarBndr]
-reifyTyVars tvs m_tc = mapM reify_tv tvs'
+reifyTyVars :: [TyVar] -> TcM [TH.TyVarBndr]
+reifyTyVars tvs = mapM reify_tv tvs
   where
-    tvs' = case m_tc of
-             Just tc -> filterOutInvisibleTyVars tc tvs
-             Nothing -> tvs
-
     -- even if the kind is *, we need to include a kind annotation,
     -- in case a poly-kind would be inferred without the annotation.
     -- See #8953 or test th/T8953

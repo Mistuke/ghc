@@ -9,6 +9,7 @@ module TcSimplify(
        simplifyInteractive, solveEqualities,
        simplifyWantedsTcM,
        tcCheckSatisfiability,
+       tcSubsumes,
 
        -- For Rules we need these
        solveWanteds, solveWantedsAndDrop,
@@ -16,6 +17,8 @@ module TcSimplify(
   ) where
 
 #include "HsVersions.h"
+
+import GhcPrelude
 
 import Bag
 import Class         ( Class, classKey, classTyCon )
@@ -42,6 +45,7 @@ import TrieMap       () -- DV: for now
 import Type
 import TysWiredIn    ( liftedRepTy )
 import Unify         ( tcMatchTyKi )
+import TcUnify       ( tcSubType_NC )
 import Util
 import Var
 import VarSet
@@ -478,6 +482,24 @@ simplifyDefault theta
        ; reportAllUnsolved unsolved
        ; traceTc "reportUnsolved }" empty
        ; return () }
+
+-- | Reports whether first type (ty_a) subsumes the second type (ty_b),
+-- discarding any errors. Subsumption here means that the ty_b can fit into the
+-- ty_a, i.e. `tcSubsumes a b == True` if b is a subtype of a.
+-- N.B.: Make sure that the types contain all the constraints
+-- contained in any associated implications.
+tcSubsumes :: TcSigmaType -> TcSigmaType -> TcM Bool
+tcSubsumes ty_a ty_b | ty_a `eqType` ty_b = return True
+tcSubsumes ty_a ty_b = discardErrs $
+ do {  (_, wanted, _) <- pushLevelAndCaptureConstraints $
+                           tcSubType_NC ExprSigCtxt ty_b ty_a
+    ; (rem, _) <- runTcS (simpl_top wanted)
+    -- We don't want any insoluble or simple constraints left,
+    -- but solved implications are ok (and neccessary for e.g. undefined)
+    ; return (isEmptyBag (wc_simple rem)
+         && isEmptyBag (wc_insol rem)
+         && allBag (isSolvedStatus . ic_status) (wc_impl rem))
+    }
 
 ------------------
 tcCheckSatisfiability :: Bag EvVar -> TcM Bool
@@ -1559,11 +1581,22 @@ neededEvVars :: (EvBindMap, TcTyVarSet) -> VarSet -> VarSet
 -- Find all the evidence variables that are "needed",
 --    and then delete all those bound by the evidence bindings
 -- See Note [Tracking redundant constraints]
+--
+--   - Start from initial_seeds (from nested implications)
+--   - Add free vars of RHS of all Wanted evidence bindings
+--     and coercion variables accumulated in tcvs (all Wanted)
+--   - Do transitive closure through Given bindings
+--     e.g.   Neede {a,b}
+--            Given  a = sc_sel a2
+--            Then a2 is needed too
+--   - Finally delete all the binders of the evidence bindings
+--
 neededEvVars (ev_binds, tcvs) initial_seeds
- = (needed `unionVarSet` tcvs) `minusVarSet` bndrs
+ = needed `minusVarSet` bndrs
  where
-   seeds  = foldEvBindMap add_wanted initial_seeds ev_binds
    needed = transCloVarSet also_needs seeds
+   seeds  = foldEvBindMap add_wanted initial_seeds ev_binds
+            `unionVarSet` tcvs
    bndrs  = foldEvBindMap add_bndr emptyVarSet ev_binds
 
    add_wanted :: EvBind -> VarSet -> VarSet

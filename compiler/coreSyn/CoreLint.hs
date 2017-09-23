@@ -21,6 +21,8 @@ module CoreLint (
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import CoreSyn
 import CoreFVs
 import CoreUtils
@@ -1948,7 +1950,7 @@ instance Applicative LintM where
       (<*>) = ap
 
 instance Monad LintM where
-  fail err = failWithL (text err)
+  fail = MonadFail.fail
   m >>= k  = LintM (\ env errs ->
                        let (res, errs') = unLintM m env errs in
                          case res of
@@ -2021,10 +2023,9 @@ addMsg env msgs msg
    locs = le_loc env
    (loc, cxt1) = dumpLoc (head locs)
    cxts        = [snd (dumpLoc loc) | loc <- locs]
-   context     = sdocWithPprDebug $ \dbg -> if dbg
-                  then vcat (reverse cxts) $$ cxt1 $$
-                         text "Substitution:" <+> ppr (le_subst env)
-                  else cxt1
+   context     = ifPprDebug (vcat (reverse cxts) $$ cxt1 $$
+                             text "Substitution:" <+> ppr (le_subst env))
+                            cxt1
 
    mk_msg msg = mkLocMessage SevWarning (mkSrcSpan loc loc) (context $$ msg)
 

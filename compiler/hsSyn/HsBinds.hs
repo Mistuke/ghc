@@ -17,6 +17,8 @@ Datatype for: @BindGroup@, @Bind@, @Sig@, @Bind@.
 
 module HsBinds where
 
+import GhcPrelude
+
 import {-# SOURCE #-} HsExpr ( pprExpr, LHsExpr,
                                MatchGroup, pprFunBind,
                                GRHSs, pprPatBind )
@@ -675,9 +677,9 @@ ppr_monobind (FunBind { fun_id = fun,
                         fun_tick = ticks })
   = pprTicks empty (if null ticks then empty
                     else text "-- ticks = " <> ppr ticks)
-    $$  ifPprDebug (pprBndr LetBind (unLoc fun))
+    $$  whenPprDebug (pprBndr LetBind (unLoc fun))
     $$  pprFunBind  matches
-    $$  ifPprDebug (ppr wrap)
+    $$  whenPprDebug (ppr wrap)
 ppr_monobind (PatSynBind psb) = ppr psb
 ppr_monobind (AbsBinds { abs_tvs = tyvars, abs_ev_vars = dictvars
                        , abs_exports = exports, abs_binds = val_binds
@@ -778,7 +780,7 @@ deriving instance (DataId name) => Data (IPBind name)
 
 instance (SourceTextX p, OutputableBndrId p) => Outputable (HsIPBinds p) where
   ppr (IPBinds bs ds) = pprDeeperList vcat (map ppr bs)
-                        $$ ifPprDebug (ppr ds)
+                        $$ whenPprDebug (ppr ds)
 
 instance (SourceTextX p, OutputableBndrId p ) => Outputable (IPBind p) where
   ppr (IPBind lr rhs) = name <+> equals <+> pprExpr (unLoc rhs)
@@ -1069,8 +1071,8 @@ ppr_sig (SpecSig var ty inl@(InlinePragma { inl_inline = spec }))
                                              (interpp'SP ty) inl)
     where
       pragmaSrc = case spec of
-        EmptyInlineSpec -> "{-# SPECIALISE"
-        _               -> "{-# SPECIALISE_INLINE"
+        NoUserInline -> "{-# SPECIALISE"
+        _            -> "{-# SPECIALISE_INLINE"
 ppr_sig (InlineSig var inl)
   = pragSrcBrackets (inl_src inl) "{-# INLINE"  (pprInline inl
                                    <+> pprPrefixOcc (unLoc var))

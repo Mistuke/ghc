@@ -14,6 +14,8 @@ module TcInstDcls ( tcInstDecls1, tcInstDeclsDeriv, tcInstDecls2 ) where
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import HsSyn
 import TcBinds
 import TcTyClsDecls
@@ -612,7 +614,7 @@ tcTyFamInstDecl mb_clsinfo (L loc decl@(TyFamInstDecl { tfid_eqn = eqn }))
        ; checkTc (isOpenTypeFamilyTyCon fam_tc) (notOpenFamily fam_tc)
 
          -- (1) do the work of verifying the synonym group
-       ; co_ax_branch <- tcTyFamInstEqn (famTyConShape fam_tc) mb_clsinfo
+       ; co_ax_branch <- tcTyFamInstEqn fam_tc mb_clsinfo
                                         (L (getLoc fam_lname) eqn)
 
          -- (2) check for validity
@@ -648,7 +650,7 @@ tcDataFamInstDecl mb_clsinfo
 
          -- Kind check type patterns
        ; let mb_kind_env = thdOf3 <$> mb_clsinfo
-       ; tcFamTyPats (famTyConShape fam_tc) mb_clsinfo tv_names pats
+       ; tcFamTyPats fam_tc mb_clsinfo tv_names pats
                      (kcDataDefn mb_kind_env decl) $
              \tvs pats res_kind ->
     do { stupid_theta <- solveEqualities $ tcHsContext ctxt
@@ -1670,7 +1672,7 @@ generic default methods.
 Note [INLINE and default methods]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Default methods need special case.  They are supposed to behave rather like
-macros.  For exmample
+macros.  For example
 
   class Foo a where
     op1, op2 :: Bool -> a -> a

@@ -76,6 +76,9 @@ module DynFlags (
         safeDirectImpsReq, safeImplicitImpsReq,
         unsafeFlags, unsafeFlagsForInfer,
 
+        -- ** LLVM Targets
+        LlvmTarget(..), LlvmTargets,
+
         -- ** System tool settings and locations
         Settings(..),
         targetPlatform, programName, projectVersion,
@@ -83,12 +86,12 @@ module DynFlags (
         versionedAppDir,
         extraGccViaCFlags, systemPackageConfig,
         pgm_L, pgm_P, pgm_F, pgm_c, pgm_s, pgm_a, pgm_l, pgm_dll, pgm_T,
-        pgm_windres, pgm_libtool, pgm_lo, pgm_lc, pgm_i,
-        opt_L, opt_P, opt_F, opt_c, opt_a, opt_l, opt_i,
-        opt_windres, opt_lo, opt_lc,
-
+        pgm_windres, pgm_libtool, pgm_ar, pgm_ranlib, pgm_lo, pgm_lc,
+        pgm_lcc, pgm_i, opt_L, opt_P, opt_F, opt_c, opt_a, opt_l, opt_i,
+        opt_windres, opt_lo, opt_lc, opt_lcc,
 
         -- ** Manipulating DynFlags
+        addPluginModuleName,
         defaultDynFlags,                -- Settings -> DynFlags
         defaultWays,
         interpWays,
@@ -162,6 +165,8 @@ module DynFlags (
   ) where
 
 #include "HsVersions.h"
+
+import GhcPrelude
 
 import Platform
 import PlatformConstants
@@ -405,6 +410,7 @@ data GeneralFlag
    | Opt_DoAsmLinting
    | Opt_DoAnnotationLinting
    | Opt_NoLlvmMangler                 -- hidden flag
+   | Opt_FastLlvm                      -- hidden flag
 
    | Opt_WarnIsError                    -- -Werror; makes warnings fatal
    | Opt_ShowWarnGroups                 -- Show the group a warning belongs to
@@ -700,6 +706,7 @@ data DynFlags = DynFlags {
   ghcLink               :: GhcLink,
   hscTarget             :: HscTarget,
   settings              :: Settings,
+  llvmTargets           :: LlvmTargets,
   verbosity             :: Int,         -- ^ Verbosity level: see Note [Verbosity levels]
   optLevel              :: Int,         -- ^ Optimisation level
   debugLevel            :: Int,         -- ^ How much debug information to produce
@@ -996,6 +1003,14 @@ data ProfAuto
   | ProfAutoCalls      -- ^ annotate call-sites
   deriving (Eq,Enum)
 
+data LlvmTarget = LlvmTarget
+  { lDataLayout :: String
+  , lCPU        :: String
+  , lAttributes :: [String]
+  }
+
+type LlvmTargets = [(String, LlvmTarget)]
+
 data Settings = Settings {
   sTargetPlatform        :: Platform,    -- Filled in by SysTools
   sGhcUsagePath          :: FilePath,    -- Filled in by SysTools
@@ -1026,8 +1041,11 @@ data Settings = Settings {
   sPgm_T                 :: String,
   sPgm_windres           :: String,
   sPgm_libtool           :: String,
+  sPgm_ar                :: String,
+  sPgm_ranlib            :: String,
   sPgm_lo                :: (String,[Option]), -- LLVM: opt llvm optimiser
   sPgm_lc                :: (String,[Option]), -- LLVM: llc static compiler
+  sPgm_lcc               :: (String,[Option]), -- LLVM: c compiler
   sPgm_i                 :: String,
   -- options for particular phases
   sOpt_L                 :: [String],
@@ -1039,6 +1057,7 @@ data Settings = Settings {
   sOpt_windres           :: [String],
   sOpt_lo                :: [String], -- LLVM: llvm optimiser
   sOpt_lc                :: [String], -- LLVM: llc static compiler
+  sOpt_lcc               :: [String], -- LLVM: c compiler
   sOpt_i                 :: [String], -- iserv options
 
   sPlatformConstants     :: PlatformConstants
@@ -1086,6 +1105,12 @@ pgm_windres           :: DynFlags -> String
 pgm_windres dflags = sPgm_windres (settings dflags)
 pgm_libtool           :: DynFlags -> String
 pgm_libtool dflags = sPgm_libtool (settings dflags)
+pgm_lcc               :: DynFlags -> (String,[Option])
+pgm_lcc dflags = sPgm_lcc (settings dflags)
+pgm_ar                :: DynFlags -> String
+pgm_ar dflags = sPgm_ar (settings dflags)
+pgm_ranlib            :: DynFlags -> String
+pgm_ranlib dflags = sPgm_ranlib (settings dflags)
 pgm_lo                :: DynFlags -> (String,[Option])
 pgm_lo dflags = sPgm_lo (settings dflags)
 pgm_lc                :: DynFlags -> (String,[Option])
@@ -1109,6 +1134,8 @@ opt_l dflags = concatMap (wayOptl (targetPlatform dflags)) (ways dflags)
             ++ sOpt_l (settings dflags)
 opt_windres           :: DynFlags -> [String]
 opt_windres dflags = sOpt_windres (settings dflags)
+opt_lcc                :: DynFlags -> [String]
+opt_lcc dflags = sOpt_lcc (settings dflags)
 opt_lo                :: DynFlags -> [String]
 opt_lo dflags = sOpt_lo (settings dflags)
 opt_lc                :: DynFlags -> [String]
@@ -1542,8 +1569,8 @@ initDynFlags dflags = do
 
 -- | The normal 'DynFlags'. Note that they are not suitable for use in this form
 -- and must be fully initialized by 'GHC.runGhc' first.
-defaultDynFlags :: Settings -> DynFlags
-defaultDynFlags mySettings =
+defaultDynFlags :: Settings -> LlvmTargets -> DynFlags
+defaultDynFlags mySettings myLlvmTargets =
 -- See Note [Updating flag description in the User's Guide]
      DynFlags {
         ghcMode                 = CompManager,
@@ -1633,6 +1660,8 @@ defaultDynFlags mySettings =
         buildTag                = mkBuildTag (defaultWays mySettings),
         splitInfo               = Nothing,
         settings                = mySettings,
+        llvmTargets             = myLlvmTargets,
+
         -- ghc -M values
         depMakefile       = "Makefile",
         depIncludePkgDeps = False,
@@ -2672,6 +2701,11 @@ dynamic_flags_deps = [
       (hasArg (\f -> alterSettings (\s -> s { sPgm_windres = f})))
   , make_ord_flag defFlag "pgmlibtool"
       (hasArg (\f -> alterSettings (\s -> s { sPgm_libtool = f})))
+  , make_ord_flag defFlag "pgmar"
+      (hasArg (\f -> alterSettings (\s -> s { sPgm_ar = f})))
+  , make_ord_flag defFlag "pgmranlib"
+      (hasArg (\f -> alterSettings (\s -> s { sPgm_ranlib = f})))
+
 
     -- need to appear before -optl/-opta to be parsed as LLVM flags.
   , make_ord_flag defFlag "optlo"
@@ -3058,6 +3092,8 @@ dynamic_flags_deps = [
         (NoArg (setGeneralFlag Opt_D_faststring_stats))
   , make_ord_flag defGhcFlag "dno-llvm-mangler"
         (NoArg (setGeneralFlag Opt_NoLlvmMangler)) -- hidden flag
+  , make_ord_flag defGhcFlag "fast-llvm"
+        (NoArg (setGeneralFlag Opt_FastLlvm)) -- hidden flag
   , make_ord_flag defGhcFlag "ddump-debug"
         (setDumpFlag Opt_D_dump_debug)
   , make_ord_flag defGhcFlag "ddump-json"
@@ -5240,9 +5276,10 @@ makeDynFlagsConsistent dflags
 -- initialized.
 defaultGlobalDynFlags :: DynFlags
 defaultGlobalDynFlags =
-    (defaultDynFlags settings) { verbosity = 2 }
+    (defaultDynFlags settings llvmTargets) { verbosity = 2 }
   where
-    settings = panic "v_unsafeGlobalDynFlags: not initialised"
+    settings = panic "v_unsafeGlobalDynFlags: settings not initialised"
+    llvmTargets = panic "v_unsafeGlobalDynFlags: llvmTargets not initialised"
 
 #if STAGE < 2
 GLOBAL_VAR(v_unsafeGlobalDynFlags, defaultGlobalDynFlags, DynFlags)

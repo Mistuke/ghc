@@ -67,6 +67,8 @@ module RdrName (
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import Module
 import Name
 import Avail
@@ -1237,9 +1239,8 @@ pprNameProvenance :: GlobalRdrElt -> SDoc
 -- ^ Print out one place where the name was define/imported
 -- (With -dppr-debug, print them all)
 pprNameProvenance (GRE { gre_name = name, gre_lcl = lcl, gre_imp = iss })
-  = sdocWithPprDebug $ \dbg -> if dbg
-      then vcat pp_provs
-      else head pp_provs
+  = ifPprDebug (vcat pp_provs)
+               (head pp_provs)
   where
     pp_provs = pp_lcl ++ map pp_is iss
     pp_lcl = if lcl then [text "defined at" <+> ppr (nameSrcLoc name)]

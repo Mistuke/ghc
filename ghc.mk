@@ -470,6 +470,7 @@ else
 libraries/haskeline_CONFIGURE_OPTS += --flags=-terminfo
 endif
 
+PACKAGES_STAGE1 += stm
 PACKAGES_STAGE1 += haskeline
 PACKAGES_STAGE1 += ghci
 
@@ -539,6 +540,9 @@ utils/runghc/dist-install/package-data.mk: $(fixed_pkg_prev)
 iserv/stage2/package-data.mk: $(fixed_pkg_prev)
 iserv/stage2_p/package-data.mk: $(fixed_pkg_prev)
 iserv/stage2_dyn/package-data.mk: $(fixed_pkg_prev)
+ifeq "$(Windows_Host)" "YES"
+utils/gen-dll/dist-install/package-data.mk: $(fixed_pkg_prev)
+endif
 
 # the GHC package doesn't live in libraries/, so we add its dependency manually:
 compiler/stage2/package-data.mk: $(fixed_pkg_prev)
@@ -646,6 +650,9 @@ BUILD_DIRS += includes
 BUILD_DIRS += rts
 BUILD_DIRS += bindisttest
 BUILD_DIRS += utils/genapply
+ifeq "$(Windows_Host)" "YES"
+BUILD_DIRS += utils/gen-dll
+endif
 
 # When cleaning, don't add any library packages to BUILD_DIRS. We include
 # ghc.mk files for all BUILD_DIRS, but they don't exist until after running
@@ -1044,6 +1051,7 @@ $(eval $(call bindist-list,.,\
     INSTALL \
     configure config.sub config.guess install-sh \
     settings.in \
+    llvm-targets \
     packages \
     Makefile \
     mk/config.mk.in \
@@ -1070,7 +1078,7 @@ $(eval $(call bindist-list,.,\
     $(wildcard compiler/stage2/doc) \
     $(wildcard libraries/*/dist-install/doc/) \
     $(wildcard libraries/*/*/dist-install/doc/) \
-    $(filter-out settings,$(INSTALL_LIBS)) \
+    $(filter-out settings llvm-targets,$(INSTALL_LIBS)) \
     $(RTS_INSTALL_LIBS) \
     $(filter-out %/project.mk mk/config.mk %/mk/install.mk,$(MAKEFILE_LIST)) \
     mk/project.mk \
@@ -1103,7 +1111,7 @@ BIN_DIST_MK = $(BIN_DIST_PREP_DIR)/bindist.mk
 unix-binary-dist-prep:
 	$(call removeTrees,bindistprep/)
 	"$(MKDIRHIER)" $(BIN_DIST_PREP_DIR)
-	set -e; for i in packages LICENSE compiler ghc iserv rts libraries utils docs libffi includes driver mk rules Makefile aclocal.m4 config.sub config.guess install-sh settings.in ghc.mk inplace distrib/configure.ac distrib/README distrib/INSTALL; do ln -s ../../$$i $(BIN_DIST_PREP_DIR)/; done
+	set -e; for i in packages LICENSE compiler ghc iserv rts libraries utils docs libffi includes driver mk rules Makefile aclocal.m4 config.sub config.guess install-sh settings.in llvm-targets ghc.mk inplace distrib/configure.ac distrib/README distrib/INSTALL; do ln -s ../../$$i $(BIN_DIST_PREP_DIR)/; done
 	echo "HADDOCK_DOCS       = $(HADDOCK_DOCS)"       >> $(BIN_DIST_MK)
 	echo "BUILD_SPHINX_HTML  = $(BUILD_SPHINX_HTML)"  >> $(BIN_DIST_MK)
 	echo "BUILD_SPHINX_PDF   = $(BUILD_SPHINX_PDF)"   >> $(BIN_DIST_MK)
@@ -1201,7 +1209,7 @@ SRC_DIST_GHC_DIRS = mk rules docs distrib bindisttest libffi includes \
 SRC_DIST_GHC_FILES += \
     configure.ac config.guess config.sub configure \
     aclocal.m4 README.md ANNOUNCE HACKING.md INSTALL.md LICENSE Makefile \
-    install-sh settings.in VERSION GIT_COMMIT_ID \
+    install-sh settings.in llvm-targets VERSION GIT_COMMIT_ID \
     boot packages ghc.mk MAKEHELP.md
 
 .PHONY: VERSION
@@ -1227,7 +1235,7 @@ GIT_COMMIT_ID:
 sdist-ghc-prep-tree : VERSION GIT_COMMIT_ID
 
 # Extra packages which shouldn't be in the source distribution: see #8801
-EXTRA_PACKAGES=parallel stm random primitive vector dph
+EXTRA_PACKAGES=parallel random primitive vector dph
 
 .PHONY: sdist-ghc-prep-tree
 sdist-ghc-prep-tree :
@@ -1393,6 +1401,7 @@ distclean : clean
 	$(call removeFiles,ghc/ghc-bin.cabal)
 	$(call removeFiles,libraries/ghci/ghci.cabal)
 	$(call removeFiles,utils/runghc/runghc.cabal)
+	$(call removeFiles,utils/gen-dll/gen-dll.cabal)
 	$(call removeFiles,settings)
 	$(call removeFiles,docs/users_guide/ug-book.xml)
 	$(call removeFiles,docs/users_guide/ug-ent.xml)

@@ -1,6 +1,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 
 module Type where
+
+import GhcPrelude
 import TyCon
 import Var ( TyCoVar )
 import {-# SOURCE #-} TyCoRep( Type, Coercion )
@@ -14,8 +16,6 @@ mkCastTy :: Type -> Coercion -> Type
 piResultTy :: HasDebugCallStack => Type -> Type -> Type
 
 eqType :: Type -> Type -> Bool
-
-partitionInvisibles :: TyCon -> (a -> Type) -> [a] -> ([a], [a])
 
 coreView :: Type -> Maybe Type
 tcView :: Type -> Maybe Type

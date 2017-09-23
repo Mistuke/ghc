@@ -12,6 +12,8 @@ module CmmMonad (
   , liftP
   ) where
 
+import GhcPrelude
+
 import Control.Monad
 import qualified Control.Monad.Fail as MonadFail
 
@@ -29,7 +31,7 @@ instance Applicative PD where
 
 instance Monad PD where
   (>>=) = thenPD
-  fail = failPD
+  fail = MonadFail.fail
 
 instance MonadFail.MonadFail PD where
   fail = failPD

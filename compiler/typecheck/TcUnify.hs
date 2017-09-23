@@ -31,14 +31,14 @@ module TcUnify (
   matchActualFunTys, matchActualFunTysPart,
   matchExpectedFunKind,
 
-  wrapFunResCoercion,
-
   occCheckExpand, metaTyVarUpdateOK,
   occCheckForErrors, OccCheckResult(..)
 
   ) where
 
 #include "HsVersions.h"
+
+import GhcPrelude
 
 import HsSyn
 import TyCoRep
@@ -64,7 +64,6 @@ import Util
 import Pair( pFst )
 import qualified GHC.LanguageExtensions as LangExt
 import Outputable
-import FastString
 
 import Control.Monad
 import Control.Arrow ( second )
@@ -830,20 +829,6 @@ tcWrapResultO orig rn_expr expr actual_ty res_ty
                                  (Just rn_expr) actual_ty res_ty
        ; return (mkHsWrap cow expr) }
 
------------------------------------
-wrapFunResCoercion
-        :: [TcType]        -- Type of args
-        -> HsWrapper       -- HsExpr a -> HsExpr b
-        -> TcM HsWrapper   -- HsExpr (arg_tys -> a) -> HsExpr (arg_tys -> b)
-wrapFunResCoercion arg_tys co_fn_res
-  | isIdHsWrapper co_fn_res
-  = return idHsWrapper
-  | null arg_tys
-  = return co_fn_res
-  | otherwise
-  = do  { arg_ids <- newSysLocalIds (fsLit "sub") arg_tys
-        ; return (mkWpLams arg_ids <.> co_fn_res <.> mkWpEvVarApps arg_ids) }
-
 
 {- **********************************************************************
 %*                                                                      *
@@ -1153,7 +1138,7 @@ buildImplication skol_info skol_tvs given thing_inside
 
          else -- Fast path.  We check every function argument with
               -- tcPolyExpr, which uses tcSkolemise and hence checkConstraints.
-              -- So tihs fast path is well-exercised
+              -- So this fast path is well-exercised
               do { res <- thing_inside
                  ; return (emptyBag, emptyTcEvBinds, res) } }
 
@@ -1162,7 +1147,7 @@ implicationNeeded :: [TcTyVar] -> [EvVar] -> TcM Bool
 -- to have an EvBindsVar for them when they might be deferred to
 -- runtime. Otherwise, they end up as top-level unlifted bindings,
 -- which are verboten. See also Note [Deferred errors for coercion holes]
--- in TcErrors.  cf Trac #14149 for an exmample of what goes wrong.
+-- in TcErrors.  cf Trac #14149 for an example of what goes wrong.
 implicationNeeded skol_tvs given
   | null skol_tvs
   , null given
@@ -1280,8 +1265,11 @@ uType_defer t_or_k origin ty1 ty2
        ; whenDOptM Opt_D_dump_tc_trace $ do
             { ctxt <- getErrCtxt
             ; doc <- mkErrInfo emptyTidyEnv ctxt
-            ; traceTc "utype_defer" (vcat [ppr co, ppr ty1,
-                                           ppr ty2, pprCtOrigin origin, doc])
+            ; traceTc "utype_defer" (vcat [ debugPprType ty1
+                                          , debugPprType ty2
+                                          , pprCtOrigin origin
+                                          , doc])
+            ; traceTc "utype_defer2" (ppr co)
             }
        ; return co }
 

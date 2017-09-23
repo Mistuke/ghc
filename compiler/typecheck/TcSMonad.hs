@@ -117,6 +117,8 @@ module TcSMonad (
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import HscTypes
 
 import qualified Inst as TcM
@@ -362,10 +364,8 @@ instance Outputable WorkList where
           , ppUnless (null ders) $
             text "Derived =" <+> vcat (map ppr ders)
           , ppUnless (isEmptyBag implics) $
-            sdocWithPprDebug $ \dbg ->
-            if dbg  -- Typically we only want the work list for this level
-            then text "Implics =" <+> vcat (map ppr (bagToList implics))
-            else text "(Implics omitted)"
+            ifPprDebug (text "Implics =" <+> vcat (map ppr (bagToList implics)))
+                       (text "(Implics omitted)")
           ])
 
 
@@ -2293,7 +2293,7 @@ instance Applicative TcS where
   (<*>) = ap
 
 instance Monad TcS where
-  fail err  = TcS (\_ -> fail err)
+  fail = MonadFail.fail
   m >>= k   = TcS (\ebs -> unTcS m ebs >>= \r -> unTcS (k r) ebs)
 
 instance MonadFail.MonadFail TcS where

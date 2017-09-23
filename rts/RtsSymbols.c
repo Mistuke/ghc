@@ -495,6 +495,8 @@
       SymI_HasProto(enterFunCCS)                \
       SymI_HasProto(pushCostCentre)             \
       SymI_HasProto(mkCostCentre)               \
+      SymI_HasProto(registerCcList)             \
+      SymI_HasProto(registerCcsList)            \
       SymI_HasProto(era)
 #else
 #define RTS_PROF_SYMBOLS /* empty */
@@ -603,6 +605,7 @@
       SymI_HasProto(getFullProgArgv)                                    \
       SymI_HasProto(setFullProgArgv)                                    \
       SymI_HasProto(freeFullProgArgv)                                   \
+      SymI_HasProto(getProcessElapsedTime)                              \
       SymI_HasProto(getStablePtr)                                       \
       SymI_HasProto(foreignExportStablePtr)                             \
       SymI_HasProto(hs_init)                                            \

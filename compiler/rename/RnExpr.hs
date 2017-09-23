@@ -21,6 +21,8 @@ module RnExpr (
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import RnBinds   ( rnLocalBindsAndThen, rnLocalValBindsLHS, rnLocalValBindsRHS,
                    rnMatchGroup, rnGRHS, makeMiniFixityEnv)
 import HsSyn
@@ -375,6 +377,16 @@ wired-in. See the Notes about the NameSorts in Name.hs.
 -}
 
 rnExpr e@(HsStatic _ expr) = do
+    -- Normally, you wouldn't be able to construct a static expression without
+    -- first enabling -XStaticPointers in the first place, since that extension
+    -- is what makes the parser treat `static` as a keyword. But this is not a
+    -- sufficient safeguard, as one can construct static expressions by another
+    -- mechanism: Template Haskell (see #14204). To ensure that GHC is
+    -- absolutely prepared to cope with static forms, we check for
+    -- -XStaticPointers here as well.
+    unlessXOptM LangExt.StaticPointers $
+      addErr $ hang (text "Illegal static expression:" <+> ppr e)
+                  2 (text "Use StaticPointers to enable this extension")
     (expr',fvExpr) <- rnLExpr expr
     stage <- getStage
     case stage of
@@ -720,7 +732,8 @@ postProcessStmtsForApplicativeDo ctxt stmts
        ; let is_do_expr | DoExpr <- ctxt = True
                         | otherwise = False
        ; if ado_is_on && is_do_expr
-            then rearrangeForApplicativeDo ctxt stmts
+            then do { traceRn "ppsfa" (ppr stmts)
+                    ; rearrangeForApplicativeDo ctxt stmts }
             else noPostProcessStmts ctxt stmts }
 
 -- | strip the FreeVars annotations from statements
@@ -1513,6 +1526,7 @@ rearrangeForApplicativeDo ctxt stmts0 = do
   optimal_ado <- goptM Opt_OptimalApplicativeDo
   let stmt_tree | optimal_ado = mkStmtTreeOptimal stmts
                 | otherwise = mkStmtTreeHeuristic stmts
+  traceRn "rearrangeForADo" (ppr stmt_tree)
   return_name <- lookupSyntaxName' returnMName
   pure_name   <- lookupSyntaxName' pureAName
   let monad_names = MonadNames { return_name = return_name
@@ -1529,6 +1543,13 @@ data StmtTree a
   = StmtTreeOne a
   | StmtTreeBind (StmtTree a) (StmtTree a)
   | StmtTreeApplicative [StmtTree a]
+
+instance Outputable a => Outputable (StmtTree a) where
+  ppr (StmtTreeOne x)          = parens (text "StmtTreeOne" <+> ppr x)
+  ppr (StmtTreeBind x y)       = parens (hang (text "StmtTreeBind")
+                                            2 (sep [ppr x, ppr y]))
+  ppr (StmtTreeApplicative xs) = parens (hang (text "StmtTreeApplicative")
+                                            2 (vcat (map ppr xs)))
 
 flattenStmtTree :: StmtTree a -> [a]
 flattenStmtTree t = go t []
@@ -1812,9 +1833,12 @@ slurpIndependentStmts
 slurpIndependentStmts stmts = go [] [] emptyNameSet stmts
  where
   -- If we encounter a BindStmt that doesn't depend on a previous BindStmt
-  -- in this group, then add it to the group.
+  -- in this group, then add it to the group. We have to be careful about
+  -- strict patterns though; splitSegments expects that if we return Just
+  -- then we have actually done some splitting. Otherwise it will go into
+  -- an infinite loop (#14163).
   go lets indep bndrs ((L loc (BindStmt pat body bind_op fail_op ty), fvs) : rest)
-    | isEmptyNameSet (bndrs `intersectNameSet` fvs)
+    | isEmptyNameSet (bndrs `intersectNameSet` fvs) && not (isStrictPattern pat)
     = go lets ((L loc (BindStmt pat body bind_op fail_op ty), fvs) : indep)
          bndrs' rest
     where bndrs' = bndrs `unionNameSet` mkNameSet (collectPatBinders pat)

@@ -58,7 +58,7 @@ module Type (
         stripCoercionTy, splitCoercionType_maybe,
 
         splitPiTysInvisible, filterOutInvisibleTypes,
-        filterOutInvisibleTyVars, partitionInvisibles,
+        partitionInvisibles,
         synTyConResKind,
 
         modifyJoinResTy, setJoinResTy,
@@ -204,6 +204,8 @@ module Type (
     ) where
 
 #include "HsVersions.h"
+
+import GhcPrelude
 
 import BasicTypes
 
@@ -687,7 +689,7 @@ splitAppTy_maybe ty | Just ty' <- coreView ty
 splitAppTy_maybe ty = repSplitAppTy_maybe ty
 
 -------------
-repSplitAppTy_maybe :: Type -> Maybe (Type,Type)
+repSplitAppTy_maybe :: HasDebugCallStack => Type -> Maybe (Type,Type)
 -- ^ Does the AppTy split as in 'splitAppTy_maybe', but assumes that
 -- any Core view stuff is already done
 repSplitAppTy_maybe (FunTy ty1 ty2)
@@ -868,7 +870,7 @@ pprUserTypeErrorTy ty =
       | tyConName tc == typeErrorVAppendDataConName ->
         pprUserTypeErrorTy t1 $$ pprUserTypeErrorTy t2
 
-    -- An uneavaluated type function
+    -- An unevaluated type function
     _ -> ppr ty
 
 
@@ -1186,7 +1188,7 @@ to differ, leading to a contradiction. Thus, co is reflexive.
 Accordingly, by eliminating reflexive casts, splitTyConApp need not worry
 about outermost casts to uphold (*).
 
-Unforunately, that's not the end of the story. Consider comparing
+Unfortunately, that's not the end of the story. Consider comparing
   (T a b c)      =?       (T a b |> (co -> <Type>)) (c |> sym co)
 These two types have the same kind (Type), but the left type is a TyConApp
 while the right type is not. To handle this case, we will have to implement
@@ -1429,10 +1431,6 @@ splitPiTysInvisible ty = split ty ty []
 -- | Given a tycon and its arguments, filters out any invisible arguments
 filterOutInvisibleTypes :: TyCon -> [Type] -> [Type]
 filterOutInvisibleTypes tc tys = snd $ partitionInvisibles tc id tys
-
--- | Like 'filterOutInvisibles', but works on 'TyVar's
-filterOutInvisibleTyVars :: TyCon -> [TyVar] -> [TyVar]
-filterOutInvisibleTyVars tc tvs = snd $ partitionInvisibles tc mkTyVarTy tvs
 
 -- | Given a tycon and a list of things (which correspond to arguments),
 -- partitions the things into

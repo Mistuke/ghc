@@ -34,8 +34,8 @@ module IfaceType (
         pprIfaceContext, pprIfaceContextArr,
         pprIfaceIdBndr, pprIfaceLamBndr, pprIfaceTvBndr, pprIfaceTyConBinders,
         pprIfaceBndrs, pprIfaceTcArgs, pprParendIfaceTcArgs,
-        pprIfaceForAllPart, pprIfaceForAll, pprIfaceSigmaType,
-        pprIfaceTyLit,
+        pprIfaceForAllPart, pprIfaceForAllPartMust, pprIfaceForAll,
+        pprIfaceSigmaType, pprIfaceTyLit,
         pprIfaceCoercion, pprParendIfaceCoercion,
         splitIfaceSigmaTy, pprIfaceTypeApp, pprUserIfaceForAll,
         pprIfaceCoTcApp, pprTyTcApp, pprIfacePrefixApp,
@@ -48,6 +48,8 @@ module IfaceType (
     ) where
 
 #include "HsVersions.h"
+
+import GhcPrelude
 
 import {-# SOURCE #-} TysWiredIn ( liftedRepDataConTyCon )
 
@@ -66,6 +68,7 @@ import Util
 
 import Data.Maybe( isJust )
 import Data.List (foldl')
+import qualified Data.Semigroup as Semi
 
 {-
 ************************************************************************
@@ -149,11 +152,14 @@ data IfaceTcArgs
   | ITC_Invis IfaceKind IfaceTcArgs   -- "Invis" means don't show when pretty-printing
                                       --         except with -fprint-explicit-kinds
 
+instance Semi.Semigroup IfaceTcArgs where
+  ITC_Nil <> xs           = xs
+  ITC_Vis ty rest <> xs   = ITC_Vis ty (rest Semi.<> xs)
+  ITC_Invis ki rest <> xs = ITC_Invis ki (rest Semi.<> xs)
+
 instance Monoid IfaceTcArgs where
   mempty = ITC_Nil
-  ITC_Nil `mappend` xs           = xs
-  ITC_Vis ty rest `mappend` xs   = ITC_Vis ty (rest `mappend` xs)
-  ITC_Invis ki rest `mappend` xs = ITC_Invis ki (rest `mappend` xs)
+  mappend = (Semi.<>)
 
 -- Encodes type constructors, kind constructors,
 -- coercion constructors, the lot.
@@ -321,9 +327,9 @@ suppressIfaceInvisibles dflags tys xs
     where
       suppress _       []      = []
       suppress []      a       = a
-      suppress (k:ks) a@(_:xs)
-        | isInvisibleTyConBinder k = suppress ks xs
-        | otherwise                = a
+      suppress (k:ks) (x:xs)
+        | isInvisibleTyConBinder k =     suppress ks xs
+        | otherwise                = x : suppress ks xs
 
 stripIfaceInvisVars :: DynFlags -> [IfaceTyConBinder] -> [IfaceTyConBinder]
 stripIfaceInvisVars dflags tyvars
@@ -677,11 +683,13 @@ defaultRuntimeRepVars = go emptyFsEnv
     go :: FastStringEnv () -> IfaceType -> IfaceType
     go subs (IfaceForAllTy bndr ty)
       | isRuntimeRep var_kind
+      , isInvisibleArgFlag (binderArgFlag bndr) -- don't default *visible* quantification
+                                                -- or we get the mess in #13963
       = let subs' = extendFsEnv subs var ()
         in go subs' ty
       | otherwise
       = IfaceForAllTy (TvBndr (var, go subs var_kind) (binderArgFlag bndr))
-        (go subs ty)
+                      (go subs ty)
       where
         var :: IfLclName
         (var, var_kind) = binderVar bndr
@@ -739,6 +747,11 @@ ppr_tc_args ctx_prec args
 pprIfaceForAllPart :: [IfaceForAllBndr] -> [IfacePredType] -> SDoc -> SDoc
 pprIfaceForAllPart tvs ctxt sdoc
   = ppr_iface_forall_part ShowForAllWhen tvs ctxt sdoc
+
+-- | Like 'pprIfaceForAllPart', but always uses an explicit @forall@.
+pprIfaceForAllPartMust :: [IfaceForAllBndr] -> [IfacePredType] -> SDoc -> SDoc
+pprIfaceForAllPartMust tvs ctxt sdoc
+  = ppr_iface_forall_part ShowForAllMust tvs ctxt sdoc
 
 pprIfaceForAllCoPart :: [(IfLclName, IfaceCoercion)] -> SDoc -> SDoc
 pprIfaceForAllCoPart tvs sdoc
@@ -882,7 +895,7 @@ pprTyTcApp' ctxt_prec tc tys dflags style
   = kindStar
 
   | otherwise
-  = sdocWithPprDebug $ \dbg ->
+  = getPprDebug $ \dbg ->
     if | not dbg && tc `ifaceTyConHasKey` errorMessageTypeErrorFamKey
          -- Suppress detail unles you _really_ want to see
          -> text "(TypeError ...)"

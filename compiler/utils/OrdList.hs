@@ -15,6 +15,8 @@ module OrdList (
         mapOL, fromOL, toOL, foldrOL, foldlOL
 ) where
 
+import GhcPrelude
+
 import Outputable
 
 import Data.Semigroup   ( Semigroup )
@@ -41,7 +43,7 @@ instance Semigroup (OrdList a) where
 
 instance Monoid (OrdList a) where
   mempty = nilOL
-  mappend = appOL
+  mappend = (Semigroup.<>)
   mconcat = concatOL
 
 instance Functor OrdList where

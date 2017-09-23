@@ -26,6 +26,7 @@ module GHC.ST (
 
 import GHC.Base
 import GHC.Show
+import qualified Control.Monad.Fail as Fail
 
 default ()
 
@@ -78,9 +79,16 @@ instance Monad (ST s) where
         (k2 new_s) }})
 
 -- | @since 4.11.0.0
+instance Fail.MonadFail (ST s) where
+    fail s = errorWithoutStackTrace s
+
+-- | @since 4.11.0.0
+instance Semigroup a => Semigroup (ST s a) where
+    (<>) = liftA2 (<>)
+
+-- | @since 4.11.0.0
 instance Monoid a => Monoid (ST s a) where
     mempty = pure mempty
-    mappend = liftA2 mappend
 
 data STret s a = STret (State# s) a
 

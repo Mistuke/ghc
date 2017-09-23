@@ -62,6 +62,8 @@ module SetLevels (
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import CoreSyn
 import CoreMonad        ( FloatOutSwitches(..) )
 import CoreUtils        ( exprType, exprIsHNF
@@ -120,7 +122,7 @@ data FloatSpec
   = FloatMe Level       -- Float to just inside the binding
                         --    tagged with this level
   | StayPut Level       -- Stay where it is; binding is
-                        --     tagged with tihs level
+                        --     tagged with this level
 
 floatSpecLevel :: FloatSpec -> Level
 floatSpecLevel (FloatMe l) = l
@@ -558,7 +560,8 @@ lvlMFE env _ (_, AnnType ty)
 -- and then inline lvl.  Better just to float out the payload.
 lvlMFE env strict_ctxt (_, AnnTick t e)
   = do { e' <- lvlMFE env strict_ctxt e
-       ; return (Tick t e') }
+       ; let t' = substTickish (le_subst env) t
+       ; return (Tick t' e') }
 
 lvlMFE env strict_ctxt (_, AnnCast e (_, co))
   = do  { e' <- lvlMFE env strict_ctxt e

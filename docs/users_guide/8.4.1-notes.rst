@@ -27,6 +27,56 @@ Language
   wish to; this is quite like how regular datatypes with a kind signature can omit
   some type variables.
 
+- There are now fewer restrictions regarding whether kind variables can appear
+  on the right-hand sides of type and data family instances. Before, there was
+  a strict requirements that all kind variables on the RHS had to be explicitly
+  bound by type patterns on the LHS. Now, kind variables can be *implicitly*
+  bound, which allows constructions like these: ::
+
+    data family Nat :: k -> k -> *
+    -- k is implicitly bound by an invisible kind pattern
+    newtype instance Nat :: (k -> *) -> (k -> *) -> * where
+      Nat :: (forall xx. f xx -> g xx) -> Nat f g
+
+    class Funct f where
+      type Codomain f :: *
+    instance Funct ('KProxy :: KProxy o) where
+      -- o is implicitly bound by the kind signature
+      -- of the LHS type pattern ('KProxy)
+      type Codomain 'KProxy = NatTr (Proxy :: o -> *)
+
+- Implicitly bidirectional pattern synonyms no longer allow bang patterns
+  (``!``) or irrefutable patterns (``~``) on the right-hand side. Previously,
+  this was allowed, although the bang patterns and irrefutable patterns would
+  be silently ignored when used in an expression context. This is now a proper
+  error, and explicitly bidirectional pattern synonyms should be used in their
+  stead. That is, instead of using this (which is an error): ::
+
+      data StrictJust a = Just !a
+
+  Use this: ::
+
+      data StrictJust a <- Just !a where
+        StrictJust !a = Just a
+
+- GADTs with kind-polymorphic type arguments now require :ghc-flag:`TypeInType`.
+  For instance, consider the following, ::
+
+      data G :: k -> * where
+        GInt   :: G Int
+        GMaybe :: G Maybe
+
+  In previous releases this would compile with :ghc-flag:`PolyKinds` alone due
+  to bug :ghc-ticket:`13391`. As of GHC 8.4, however, this requires
+  :ghc-flag:`TypeInType`. Note that since GADT kind signatures aren't generalized,
+  this will also require that you provide a :ref:`CUSK
+  <complete-kind-signatures>` by explicitly quantifying over the kind argument,
+  ``k``, ::
+
+      data G :: forall k. k -> * where
+        GInt   :: G Int
+        GMaybe :: G Maybe
+
 Compiler
 ~~~~~~~~
 
@@ -107,8 +157,18 @@ Runtime system
 
 - The GHCi runtime linker on Windows now supports the `big-obj` file format.
 
+- The runtime linker on Windows has been overhauled to properly handle section
+  alignment, lower the amount of wasted memory and lower the amount of in use memory.
+  See :ghc-ticket:`13617`. Note that committed memory may be slightly higher.
+
 Template Haskell
 ~~~~~~~~~~~~~~~~
+
+- Template Haskell now reifies data types with GADT syntax accurately.
+  Previously, TH used heuristics to determine whether a data type
+  should be reified using GADT syntax, which could lead to incorrect results,
+  such as ``data T1 a = (a ~ Int) => MkT1`` being reified as a GADT and
+  ``data T2 a where MkT2 :: Show a => T2 a`` *not* being reified as a GADT.
 
 ``ghc`` library
 ~~~~~~~~~~~~~~~
@@ -152,3 +212,21 @@ Template Haskell
 
 - Blank strings can now be used as values for environment variables using the
   System.Environment.Blank module. See :ghc-ticket:`12494`
+
+- ``Data.Type.Equality.==`` is now a closed type family. It works for all kinds
+  out of the box. Any modules that previously declared instances of this family
+  will need to remove them. Whereas the previous definition was somewhat ad
+  hoc, the behavior is now completely uniform. As a result, some applications
+  that used to reduce no longer do, and conversely. Most notably, ``(==)`` no
+  longer treats the ``*``, ``j -> k``, or ``()`` kinds specially; equality is
+  tested structurally in all cases.
+
+Build system
+~~~~~~~~~~~~
+
+- ``dll-split`` has been removed and replaced with an automatic partitioning utility ``gen-dll``.
+  This utility can transparently split and compile any DLLs that require this. Note that the ``rts`` and
+  ``base`` can not be split at this point because of the mutual recursion between ``base`` and ``rts``.
+  There is currently no explicit dependency between the two in the build system and such there is no way
+  to notify ``base`` that the ``rts`` has been split, or vice versa.
+  (see :ghc-ticket:`5987`).

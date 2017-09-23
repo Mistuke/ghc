@@ -42,6 +42,8 @@ module TcRnDriver (
         missingBootThing,
     ) where
 
+import GhcPrelude
+
 import {-# SOURCE #-} TcSplice ( finishTH )
 import RnSplice ( rnTopSpliceDecls, traceSplice, SpliceInfo(..) )
 import IfaceEnv( externaliseName )
@@ -1036,7 +1038,7 @@ checkBootTyCon is_boot tc1 tc2
     -- harmless enough.)
     checkRoles roles1 roles2 `andThenCheck`
     check (eqFamFlav fam_flav1 fam_flav2)
-        (ifPprDebug $
+        (whenPprDebug $
             text "Family flavours" <+> ppr fam_flav1 <+> text "and" <+> ppr fam_flav2 <+>
             text "do not match") `andThenCheck`
     check (injInfo1 == injInfo2) (text "Injectivities do not match")
@@ -2255,7 +2257,7 @@ tcRnType hsc_env normalise rdr_type
        ; traceTc "tcRnType" (vcat [ppr wcs, ppr rn_type])
        ; (ty, kind) <- solveEqualities $
                        tcWildCardBinders wcs  $ \ _ ->
-                       tcLHsType rn_type
+                       tcLHsTypeUnsaturated rn_type
 
        -- Do kind generalisation; see Note [Kind-generalise in tcRnType]
        ; kvs <- kindGeneralize kind
@@ -2512,9 +2514,7 @@ loadUnqualIfaces hsc_env ictxt
 
 rnDump :: (Outputable a, Data a) => a -> TcRn ()
 -- Dump, with a banner, if -ddump-rn
-rnDump rn = do { traceOptTcRn Opt_D_dump_rn (mkDumpDoc "Renamer" (ppr rn))
-               ; traceOptTcRn Opt_D_dump_rn_ast
-                 (mkDumpDoc "Renamer" (showAstData NoBlankSrcSpan rn)) }
+rnDump rn = do { traceOptTcRn Opt_D_dump_rn (mkDumpDoc "Renamer" (ppr rn)) }
 
 tcDump :: TcGblEnv -> TcRn ()
 tcDump env
@@ -2559,7 +2559,7 @@ pprTcGblEnv (TcGblEnv { tcg_type_env  = type_env,
                 -- wobbling in testsuite output
 
 ppr_types :: TypeEnv -> SDoc
-ppr_types type_env = sdocWithPprDebug $ \dbg ->
+ppr_types type_env = getPprDebug $ \dbg ->
   let
     ids = [id | id <- typeEnvIds type_env, want_sig id]
     want_sig id | dbg
@@ -2573,7 +2573,7 @@ ppr_types type_env = sdocWithPprDebug $ \dbg ->
   text "TYPE SIGNATURES" $$ nest 2 (ppr_sigs ids)
 
 ppr_tycons :: [FamInst] -> TypeEnv -> SDoc
-ppr_tycons fam_insts type_env = sdocWithPprDebug $ \dbg ->
+ppr_tycons fam_insts type_env = getPprDebug $ \dbg ->
   let
     fi_tycons = famInstsRepTyCons fam_insts
     tycons = [tycon | tycon <- typeEnvTyCons type_env, want_tycon tycon]

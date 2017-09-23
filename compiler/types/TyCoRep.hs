@@ -66,6 +66,8 @@ module TyCoRep (
 
         pprCo, pprParendCo,
 
+        debugPprType,
+
         -- * Free variables
         tyCoVarsOfType, tyCoVarsOfTypeDSet, tyCoVarsOfTypes, tyCoVarsOfTypesDSet,
         tyCoFVsBndr, tyCoFVsOfType, tyCoVarsOfTypeList,
@@ -132,6 +134,8 @@ module TyCoRep (
     ) where
 
 #include "HsVersions.h"
+
+import GhcPrelude
 
 import {-# SOURCE #-} DataCon( dataConFullSig
                              , dataConUnivTyVarBinders, dataConExTyVarBinders
@@ -458,8 +462,8 @@ words, if `x` is either a function or a polytype, `x arg` makes sense
 (for an appropriate `arg`).
 
 
-Note [TyVarBndrs, TyVarBinders, TyConBinders, and visiblity]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Note [TyVarBndrs, TyVarBinders, TyConBinders, and visibility]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 * A ForAllTy (used for both types and kinds) contains a TyVarBinder.
   Each TyVarBinder
       TvBndr a tvis
@@ -472,7 +476,7 @@ Note [TyVarBndrs, TyVarBinders, TyConBinders, and visiblity]
   and kind arguments for this TyCon should be visible (explicit) in
   source Haskell.
 
-This table summarises the visiblity rules:
+This table summarises the visibility rules:
 ---------------------------------------------------------------------------------------
 |                                                      Occurrences look like this
 |                             GHC displays type as     in Haskell source code
@@ -2433,7 +2437,11 @@ pprType       = pprPrecType TopPrec
 pprParendType = pprPrecType TyConPrec
 
 pprPrecType :: TyPrec -> Type -> SDoc
-pprPrecType prec ty = getPprStyle $ \sty -> pprPrecIfaceType prec (tidyToIfaceTypeSty ty sty)
+pprPrecType prec ty
+  = getPprStyle $ \sty ->
+    if debugStyle sty           -- Use pprDebugType when in
+    then debug_ppr_ty prec ty   -- when in debug-style
+    else pprPrecIfaceType prec (tidyToIfaceTypeSty ty sty)
 
 pprTyLit :: TyLit -> SDoc
 pprTyLit = pprIfaceTyLit . toIfaceTyLit
@@ -2505,7 +2513,6 @@ instance Outputable TyLit where
    ppr = pprTyLit
 
 ------------------
-
 pprSigmaType :: Type -> SDoc
 pprSigmaType = pprIfaceSigmaType ShowForAllWhen . tidyToIfaceType
 
@@ -2545,6 +2552,57 @@ instance Outputable TyBinder where
 -----------------
 instance Outputable Coercion where -- defined here to avoid orphans
   ppr = pprCo
+
+debugPprType :: Type -> SDoc
+-- ^ debugPprType is a simple pretty printer that prints a type
+-- without going through IfaceType.  It does not format as prettily
+-- as the normal route, but it's much more direct, and that can
+-- be useful for debugging.  E.g. with -dppr-debug it prints the
+-- kind on type-variable /occurrences/ which the normal route
+-- fundamentally cannot do.
+debugPprType ty = debug_ppr_ty TopPrec ty
+
+debug_ppr_ty :: TyPrec -> Type -> SDoc
+debug_ppr_ty _ (LitTy l)
+  = ppr l
+
+debug_ppr_ty _ (TyVarTy tv)
+  = ppr tv  -- With -dppr-debug we get (tv :: kind)
+
+debug_ppr_ty prec (FunTy arg res)
+  = maybeParen prec FunPrec $
+    sep [debug_ppr_ty FunPrec arg, arrow <+> debug_ppr_ty prec res]
+
+debug_ppr_ty prec (TyConApp tc tys)
+  | null tys  = ppr tc
+  | otherwise = maybeParen prec TyConPrec $
+                hang (ppr tc) 2 (sep (map (debug_ppr_ty TyConPrec) tys))
+
+debug_ppr_ty prec (AppTy t1 t2)
+  = hang (debug_ppr_ty prec t1)
+       2 (debug_ppr_ty TyConPrec t2)
+
+debug_ppr_ty prec (CastTy ty co)
+  = maybeParen prec TopPrec $
+    hang (debug_ppr_ty TopPrec ty)
+       2 (text "|>" <+> ppr co)
+
+debug_ppr_ty _ (CoercionTy co)
+  = parens (text "CO" <+> ppr co)
+
+debug_ppr_ty prec ty@(ForAllTy {})
+  | (tvs, body) <- split ty
+  = maybeParen prec FunPrec $
+    hang (text "forall" <+> fsep (map ppr tvs) <> dot)
+         -- The (map ppr tvs) will print kind-annotated
+         -- tvs, because we are (usually) in debug-style
+       2 (ppr body)
+  where
+    split ty | ForAllTy tv ty' <- ty
+             , (tvs, body) <- split ty'
+             = (tv:tvs, body)
+             | otherwise
+             = ([], ty)
 
 {-
 Note [When to print foralls]

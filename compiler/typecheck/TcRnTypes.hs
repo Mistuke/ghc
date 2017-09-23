@@ -38,7 +38,7 @@ module TcRnTypes(
         WhereFrom(..), mkModDeps, modDepsElts,
 
         -- Typechecker types
-        TcTypeEnv, TcIdBinderStack, TcIdBinder(..),
+        TcTypeEnv, TcBinderStack, TcBinder(..),
         TcTyThing(..), PromotionErr(..),
         IdBindingInfo(..), ClosedTypeId, RhsNames,
         IsGroupClosed(..),
@@ -102,6 +102,7 @@ module TcRnTypes(
         pprCtOrigin, pprCtLoc,
         pushErrCtxt, pushErrCtxtSameOrigin,
 
+
         SkolemInfo(..), pprSigSkolInfo, pprSkolInfo,
         termEvidenceAllowed,
 
@@ -109,6 +110,8 @@ module TcRnTypes(
         mkKindLoc, toKindLoc, mkGivenLoc,
         isWanted, isGiven, isDerived, isGivenOrWDeriv,
         ctEvRole,
+
+        wrapType,
 
         -- Constraint solver plugins
         TcPlugin(..), TcPluginResult(..), TcPluginSolver,
@@ -137,6 +140,8 @@ module TcRnTypes(
   ) where
 
 #include "HsVersions.h"
+
+import GhcPrelude
 
 import HsSyn
 import CoreSyn
@@ -614,10 +619,12 @@ data TcGblEnv
         -- The binds, rules and foreign-decl fields are collected
         -- initially in un-zonked form and are finally zonked in tcRnSrcDecls
 
-        tcg_rn_exports :: Maybe [Located (IE GhcRn)],
+        tcg_rn_exports :: Maybe [(Located (IE GhcRn), Avails)],
                 -- Nothing <=> no explicit export list
                 -- Is always Nothing if we don't want to retain renamed
-                -- exports
+                -- exports.
+                -- If present contains each renamed export list item
+                -- together with its exported names.
 
         tcg_rn_imports :: [LImportDecl GhcRn],
                 -- Keep the renamed imports regardless.  They are not
@@ -643,6 +650,9 @@ data TcGblEnv
         --
         -- They are computations in the @TcM@ monad rather than @Q@ because we
         -- set them to use particular local environments.
+
+        tcg_th_coreplugins :: TcRef [String],
+        -- ^ Core plugins added by Template Haskell code.
 
         tcg_th_state :: TcRef (Map TypeRep Dynamic),
         tcg_th_remote_state :: TcRef (Maybe (ForeignRef (IORef QState))),
@@ -826,10 +836,8 @@ data TcLclEnv           -- Changes as we move inside an expression
         tcl_env  :: TcTypeEnv,    -- The local type environment:
                                   -- Ids and TyVars defined in this module
 
-        tcl_bndrs :: TcIdBinderStack,   -- Used for reporting relevant bindings
-
-        tcl_tidy :: TidyEnv,      -- Used for tidying types; contains all
-                                  -- in-scope type variables (but not term variables)
+        tcl_bndrs :: TcBinderStack,   -- Used for reporting relevant bindings,
+                                      -- and for tidying types
 
         tcl_tyvars :: TcRef TcTyVarSet, -- The "global tyvars"
                         -- Namely, the in-scope TyVars bound in tcl_env,
@@ -883,34 +891,44 @@ type TcId        = Id
 type TcIdSet     = IdSet
 
 ---------------------------
--- The TcIdBinderStack
+-- The TcBinderStack
 ---------------------------
 
-type TcIdBinderStack = [TcIdBinder]
-   -- This is a stack of locally-bound ids, innermost on top
-   -- Used only in error reporting (relevantBindings in TcError)
+type TcBinderStack = [TcBinder]
+   -- This is a stack of locally-bound ids and tyvars,
+   --   innermost on top
+   -- Used only in error reporting (relevantBindings in TcError),
+   --   and in tidying
    -- We can't use the tcl_env type environment, because it doesn't
    --   keep track of the nesting order
 
-data TcIdBinder
+data TcBinder
   = TcIdBndr
        TcId
        TopLevelFlag    -- Tells whether the binding is syntactically top-level
                        -- (The monomorphic Ids for a recursive group count
                        --  as not-top-level for this purpose.)
+
   | TcIdBndr_ExpType  -- Variant that allows the type to be specified as
                       -- an ExpType
        Name
        ExpType
        TopLevelFlag
 
-instance Outputable TcIdBinder where
+  | TcTvBndr          -- e.g.   case x of P (y::a) -> blah
+       Name           -- We bind the lexical name "a" to the type of y,
+       TyVar          -- which might be an utterly different (perhaps
+                      -- existential) tyvar
+
+instance Outputable TcBinder where
    ppr (TcIdBndr id top_lvl)           = ppr id <> brackets (ppr top_lvl)
    ppr (TcIdBndr_ExpType id _ top_lvl) = ppr id <> brackets (ppr top_lvl)
+   ppr (TcTvBndr name tv)              = ppr name <+> ppr tv
 
-instance HasOccName TcIdBinder where
-    occName (TcIdBndr id _) = (occName (idName id))
-    occName (TcIdBndr_ExpType name _ _) = (occName name)
+instance HasOccName TcBinder where
+    occName (TcIdBndr id _)             = occName (idName id)
+    occName (TcIdBndr_ExpType name _ _) = occName name
+    occName (TcTvBndr name _)           = occName name
 
 ---------------------------
 -- Template Haskell stages and levels
@@ -2472,6 +2490,18 @@ pprEvVarTheta ev_vars = pprTheta (map evVarPred ev_vars)
 pprEvVarWithType :: EvVar -> SDoc
 pprEvVarWithType v = ppr v <+> dcolon <+> pprType (evVarPred v)
 
+
+
+-- | Wraps the given type with the constraints (via ic_given) in the given
+-- implication, according to the variables mentioned (via ic_skols)
+-- in the implication.
+wrapType :: Type -> Implication -> Type
+wrapType ty (Implic {ic_skols = skols, ic_given=givens}) =
+    wrapWithAllSkols $ mkFunTys (map idType givens) $ ty
+    where forAllTy :: Type -> TyVar -> Type
+          forAllTy ty tv = mkForAllTy tv Specified ty
+          wrapWithAllSkols ty = foldl forAllTy ty skols
+
 {-
 ************************************************************************
 *                                                                      *
@@ -2932,7 +2962,7 @@ data CtLoc = CtLoc { ctl_origin :: CtOrigin
   -- The TcLclEnv includes particularly
   --    source location:  tcl_loc   :: RealSrcSpan
   --    context:          tcl_ctxt  :: [ErrCtxt]
-  --    binder stack:     tcl_bndrs :: TcIdBinderStack
+  --    binder stack:     tcl_bndrs :: TcBinderStack
   --    level:            tcl_tclvl :: TcLevel
 
 mkKindLoc :: TcType -> TcType   -- original *types* being compared
@@ -3075,7 +3105,7 @@ pprSkolInfo (IPSkol ips)      = text "the implicit-parameter binding" <> plural 
 pprSkolInfo (ClsSkol cls)     = text "the class declaration for" <+> quotes (ppr cls)
 pprSkolInfo (DerivSkol pred)  = text "the deriving clause for" <+> quotes (ppr pred)
 pprSkolInfo InstSkol          = text "the instance declaration"
-pprSkolInfo (InstSC n)        = text "the instance declaration" <> ifPprDebug (parens (ppr n))
+pprSkolInfo (InstSC n)        = text "the instance declaration" <> whenPprDebug (parens (ppr n))
 pprSkolInfo DataSkol          = text "a data type declaration"
 pprSkolInfo FamInstSkol       = text "a family instance declaration"
 pprSkolInfo BracketSkol       = text "a Template Haskell bracket"
@@ -3477,7 +3507,7 @@ pprCtO SectionOrigin         = text "an operator section"
 pprCtO TupleOrigin           = text "a tuple"
 pprCtO NegateOrigin          = text "a use of syntactic negation"
 pprCtO (ScOrigin n)          = text "the superclasses of an instance declaration"
-                               <> ifPprDebug (parens (ppr n))
+                               <> whenPprDebug (parens (ppr n))
 pprCtO DerivOrigin           = text "the 'deriving' clause of a data type declaration"
 pprCtO StandAloneDerivOrigin = text "a 'deriving' declaration"
 pprCtO DefaultOrigin         = text "a 'default' declaration"
@@ -3511,7 +3541,7 @@ instance Applicative TcPluginM where
   (<*>) = ap
 
 instance Monad TcPluginM where
-  fail x   = TcPluginM (const $ fail x)
+  fail = MonadFail.fail
   TcPluginM m >>= k =
     TcPluginM (\ ev -> do a <- m ev
                           runTcPluginM (k a) ev)

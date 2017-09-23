@@ -115,6 +115,8 @@ module CLabel (
 
 #include "HsVersions.h"
 
+import GhcPrelude
+
 import IdInfo
 import BasicTypes
 import Packages
@@ -1090,7 +1092,6 @@ instance Outputable CLabel where
 pprCLabel :: Platform -> CLabel -> SDoc
 
 pprCLabel platform (AsmTempLabel u)
- | cGhcWithNativeCodeGen == "YES"
   =  getPprStyle $ \ sty ->
      if asmStyle sty then
         ptext (asmTempLabelPrefix platform) <> pprUniqueAlways u

@@ -82,7 +82,10 @@ module HscMain
     , hscAddSptEntries
     ) where
 
+import GhcPrelude
+
 import Data.Data hiding (Fixity, TyCon)
+import DynFlags         (addPluginModuleName)
 import Id
 import GHCi             ( addSptEntry )
 import GHCi.RemoteTypes ( ForeignHValue )
@@ -97,6 +100,7 @@ import Panic
 import ConLike
 import Control.Concurrent
 
+import Avail            ( Avails )
 import Module
 import Packages
 import RdrName
@@ -383,28 +387,50 @@ hscParse' mod_summary
 -- can become a Nothing and decide whether this should instead throw an
 -- exception/signal an error.
 type RenamedStuff =
-        (Maybe (HsGroup GhcRn, [LImportDecl GhcRn], Maybe [LIE GhcRn],
+        (Maybe (HsGroup GhcRn, [LImportDecl GhcRn], Maybe [(LIE GhcRn, Avails)],
                 Maybe LHsDocString))
 
--- | Rename and typecheck a module, additionally returning the renamed syntax
-hscTypecheckRename :: HscEnv -> ModSummary -> HsParsedModule
-                   -> IO (TcGblEnv, RenamedStuff)
-hscTypecheckRename hsc_env mod_summary rdr_module = runHsc hsc_env $ do
-    tc_result <- hscTypecheck True mod_summary (Just rdr_module)
+-- -----------------------------------------------------------------------------
+-- | If the renamed source has been kept, extract it. Dump it if requested.
+extract_renamed_stuff :: TcGblEnv -> Hsc (TcGblEnv, RenamedStuff)
+extract_renamed_stuff tc_result = do
 
-        -- This 'do' is in the Maybe monad!
+    -- This 'do' is in the Maybe monad!
     let rn_info = do decl <- tcg_rn_decls tc_result
                      let imports = tcg_rn_imports tc_result
                          exports = tcg_rn_exports tc_result
                          doc_hdr = tcg_doc_hdr tc_result
                      return (decl,imports,exports,doc_hdr)
 
+    dflags <- getDynFlags
+    liftIO $ dumpIfSet_dyn dflags Opt_D_dump_rn_ast "Renamer" $
+                           showAstData NoBlankSrcSpan rn_info
+
     return (tc_result, rn_info)
+
+
+-- -----------------------------------------------------------------------------
+-- | Rename and typecheck a module, additionally returning the renamed syntax
+hscTypecheckRename :: HscEnv -> ModSummary -> HsParsedModule
+                   -> IO (TcGblEnv, RenamedStuff)
+hscTypecheckRename hsc_env mod_summary rdr_module = runHsc hsc_env $ do
+    tc_result <- hscTypecheck True mod_summary (Just rdr_module)
+    extract_renamed_stuff tc_result
+
 
 hscTypecheck :: Bool -- ^ Keep renamed source?
              -> ModSummary -> Maybe HsParsedModule
              -> Hsc TcGblEnv
 hscTypecheck keep_rn mod_summary mb_rdr_module = do
+    tc_result <- hscTypecheck' keep_rn mod_summary mb_rdr_module
+    _ <- extract_renamed_stuff tc_result
+    return tc_result
+
+
+hscTypecheck' :: Bool -- ^ Keep renamed source?
+              -> ModSummary -> Maybe HsParsedModule
+              -> Hsc TcGblEnv
+hscTypecheck' keep_rn mod_summary mb_rdr_module = do
     hsc_env <- getHscEnv
     let hsc_src = ms_hsc_src mod_summary
         dflags = hsc_dflags hsc_env
@@ -728,7 +754,8 @@ finish hsc_env summary tc_result mb_old_hash = do
           -- and generate a simple interface.
           then mk_simple_iface
           else do
-            desugared_guts <- hscSimplify' desugared_guts0
+            plugins <- liftIO $ readIORef (tcg_th_coreplugins tc_result)
+            desugared_guts <- hscSimplify' plugins desugared_guts0
             (iface, changed, details, cgguts) <-
               liftIO $ hscNormalIface hsc_env desugared_guts mb_old_hash
             return (iface, changed, details, HscRecomp cgguts summary)
@@ -1163,14 +1190,18 @@ hscGetSafeMode tcg_env = do
 -- Simplifiers
 --------------------------------------------------------------
 
-hscSimplify :: HscEnv -> ModGuts -> IO ModGuts
-hscSimplify hsc_env modguts = runHsc hsc_env $ hscSimplify' modguts
+hscSimplify :: HscEnv -> [String] -> ModGuts -> IO ModGuts
+hscSimplify hsc_env plugins modguts =
+    runHsc hsc_env $ hscSimplify' plugins modguts
 
-hscSimplify' :: ModGuts -> Hsc ModGuts
-hscSimplify' ds_result = do
+hscSimplify' :: [String] -> ModGuts -> Hsc ModGuts
+hscSimplify' plugins ds_result = do
     hsc_env <- getHscEnv
+    let hsc_env_with_plugins = hsc_env
+          { hsc_dflags = foldr addPluginModuleName (hsc_dflags hsc_env) plugins
+          }
     {-# SCC "Core2Core" #-}
-      liftIO $ core2core hsc_env ds_result
+      liftIO $ core2core hsc_env_with_plugins ds_result
 
 --------------------------------------------------------------
 -- Interface generators
@@ -1553,7 +1584,9 @@ hscDeclsWithLocation hsc_env0 str source linenumber =
     ds_result <- hscDesugar' iNTERACTIVELoc tc_gblenv
 
     {- Simplify -}
-    simpl_mg <- liftIO $ hscSimplify hsc_env ds_result
+    simpl_mg <- liftIO $ do
+      plugins <- readIORef (tcg_th_coreplugins tc_gblenv)
+      hscSimplify hsc_env plugins ds_result
 
     {- Tidy -}
     (tidy_cg, mod_details) <- liftIO $ tidyProgram hsc_env simpl_mg
