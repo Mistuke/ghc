@@ -169,7 +169,7 @@
 
    The Windows linker aligns memory to it's section alignment requirement by
    aligning it during the copying to the private heap. We also ensure that the
-   trampoline "region" we reserve is 4k aligned.
+   trampoline "region" we reserve is 8-bytes aligned.
 */
 
 #include "Rts.h"
@@ -248,6 +248,13 @@ static void releaseOcInfo(
 extern IMAGE_DOS_HEADER __ImageBase;
 #define __image_base (void*)((HINSTANCE)&__ImageBase)
 
+/* Some alignment information.  */
+typedef
+struct _Alignments {
+    uint32_t mask;
+    uint32_t value;
+} Alignments;
+
 static Alignments pe_alignments[] = {
   { IMAGE_SCN_ALIGN_1BYTES   , 1   },
   { IMAGE_SCN_ALIGN_2BYTES   , 2   },
@@ -265,11 +272,14 @@ static Alignments pe_alignments[] = {
   { IMAGE_SCN_ALIGN_8192BYTES, 8192},
  };
 
-static int pe_alignments_cnt = 14;
-static int default_alignment = 8;
+const int pe_alignments_cnt = sizeof(pe_alignments) / sizeof(Alignments);
+const int default_alignment = 8;
 const int initHeapSizeMB = 15;
 static HANDLE code_heap = NULL;
 
+/* LFH = Low Fragmentation Heap and HeapOptimizeResources basically tells it
+   to do some cache optimizations. Which is new since Windows 8.1.  These are
+   missing from the mingw-w64 headers so we have to copy them.  */
 #define HEAP_LFH 2
 #define HeapOptimizeResources 3
 
@@ -1151,7 +1161,7 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
 {
    COFF_HEADER_INFO *info = getHeaderInfo (oc);
 
-   uint32_t i, j, noRelocs;
+   uint32_t startReloc, noRelocs;
    COFF_section* sectab;
    COFF_symbol*  symtab;
    uint8_t*      strtab;
@@ -1190,13 +1200,13 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
       loading we can also release everything in the info structure as it won't
       be needed again further freeing up memory.
       COFF_symbol is a union type, so we have to "adjust" the array to be able
-      to adjust it using normal subscript notation. This eliminates the complex
+      to access using normal subscript notation. This eliminates the complex
       indexing later on.  */
    uint32_t s_symbols = info->numberOfSymbols * sizeof(COFF_symbol);
    uint32_t sym_size  = getSymbolSize (info);
    oc->info->symbols
      = stgMallocBytes (s_symbols, "ocVerifyImage_PEi386(oc->info->symbols)");
-   for (i = 0; i < info->numberOfSymbols; i++)
+   for (uint32_t i = 0; i < info->numberOfSymbols; i++)
      memcpy (oc->info->symbols+i, (char*)symtab + sym_size * i, sym_size);
 
    uint32_t n_strtab = (*(uint32_t*)strtab) - PEi386_STRTAB_OFFSET;
@@ -1205,7 +1215,7 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
    memcpy (oc->info->str_tab, strtab + PEi386_STRTAB_OFFSET, n_strtab);
 
    /* Initialize the Sections */
-   for (i = 0; i < info->numberOfSections; i++) {
+   for (uint32_t i = 0; i < info->numberOfSections; i++) {
       COFF_section* sectab_i
           = (COFF_section*) myindex(sizeof_COFF_section, sectab, i);
 
@@ -1233,10 +1243,10 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
         COFF_reloc* rel = (COFF_reloc*)
                            myindex ( sizeof_COFF_reloc, reltab, 0 );
         noRelocs = rel->VirtualAddress;
-        j = 1;
+        startReloc = 1;
       } else {
         noRelocs = sectab_i->NumberOfRelocations;
-        j = 0;
+        startReloc = 0;
       }
 
       section->info->noRelocs = noRelocs;
@@ -1245,7 +1255,7 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
         section->info->relocs
             = stgMallocBytes (noRelocs * sizeof (COFF_reloc),
                             "ocVerifyImage_PEi386(section->info->relocs)");
-        memcpy (section->info->relocs, reltab + j,
+        memcpy (section->info->relocs, reltab + startReloc,
                 noRelocs * sizeof (COFF_reloc));
       }
 
@@ -1274,9 +1284,9 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
       + info->numberOfSymbols * sizeof(SymbolExtra);
 
    /* No further verification after this point; only debug printing.  */
-   i = 0;
-   IF_DEBUG(linker, i=1);
-   if (i == 0) return true;
+   bool is_debug = false;
+   IF_DEBUG(linker, is_debug = true);
+   if (!is_debug) return true;
 
    debugBelch("sectab offset = %" FMT_SizeT "\n",
               ((uint8_t*)sectab) - ((uint8_t*)oc->image) );
@@ -1328,7 +1338,7 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
 
    /* Print the section table. */
    debugBelch("\n" );
-   for (i = 0; i < info->numberOfSections; i++) {
+   for (uint32_t i = 0; i < info->numberOfSections; i++) {
       COFF_section* sectab_i
          = (COFF_section*)
            myindex ( sizeof_COFF_section, sectab, i );
@@ -1363,7 +1373,7 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
               );
 
       noRelocs = section.info->noRelocs;
-      for (j = 0; j < noRelocs; j++) {
+      for (uint32_t j = 0; j < noRelocs; j++) {
          COFF_reloc rel = section.info->relocs[j];
          debugBelch(
                    "        type 0x%-4x   vaddr 0x%-8lx   name `",
@@ -1379,7 +1389,7 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
    debugBelch("\n" );
    debugBelch("string table has size 0x%x\n", n_strtab + PEi386_STRTAB_OFFSET);
    debugBelch("---START of string table---\n");
-   for (i = 4; i < n_strtab; i++) {
+   for (uint32_t i = 4; i < n_strtab; i++) {
       if (strtab[i] == 0)
          debugBelch("\n"); else
          debugBelch("%c", strtab[i] );
@@ -1388,7 +1398,7 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
 
    debugBelch("\n" );
 
-   for (i = 0; i < info->numberOfSymbols; i++) {
+   for (uint32_t i = 0; i < info->numberOfSymbols; i++) {
       COFF_symbol* symtab_i = &oc->info->symbols[i];
       debugBelch(
                 "symbol %d\n"
@@ -1423,12 +1433,11 @@ ocGetNames_PEi386 ( ObjectCode* oc )
 
    SymbolName* sname;
    SymbolAddr* addr;
-   unsigned int   i;
 
    COFF_HEADER_INFO *info = oc->info->ch_info;
 
    /* Copy section information into the ObjectCode. */
-   for (i = 0; i < info->numberOfSections; i++) {
+   for (uint32_t i = 0; i < info->numberOfSections; i++) {
       uint8_t* start;
       uint8_t* end;
       uint32_t sz;
@@ -1583,7 +1592,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
 
    /* Work out the size of the global BSS section */
    StgWord globalBssSize = 0;
-   for (i=0; i < info->numberOfSymbols; i++) {
+   for (uint32_t i = 0; i < info->numberOfSymbols; i++) {
       COFF_symbol* sym = &oc->info->symbols[i];
       if (getSymSectionNumber (info, sym) == IMAGE_SYM_UNDEFINED
            && getSymValue (info, sym) > 0
@@ -1614,7 +1623,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
    stgFree (oc->image);
    oc->image = NULL;
 
-   for (i = 0; i < (uint32_t)oc->n_symbols; i++) {
+   for (uint32_t i = 0; i < (uint32_t)oc->n_symbols; i++) {
       COFF_symbol* sym = &oc->info->symbols[i];
 
       int32_t secNumber = getSymSectionNumber (info, sym);
@@ -1803,8 +1812,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
    size_t      S;
    SymbolAddr* pP;
 
-   unsigned int i;
-   uint32_t j, noRelocs;
+   uint32_t noRelocs;
 
    /* ToDo: should be variable-sized?  But is at least safe in the
       sense of buffer-overrun-proof. */
@@ -1814,7 +1822,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
    COFF_HEADER_INFO *info = oc->info->ch_info;
    uint32_t numberOfSections = info->numberOfSections;
 
-   for (i = 0; i < numberOfSections; i++) {
+   for (uint32_t i = 0; i < numberOfSections; i++) {
       Section section = oc->sections[i];
 
       /* Ignore sections called which contain stabs debugging information. */
@@ -1822,7 +1830,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
            continue;
 
       noRelocs = section.info->noRelocs;
-      for (j = 0; j < noRelocs; j++) {
+      for (uint32_t j = 0; j < noRelocs; j++) {
          COFF_symbol* sym;
          COFF_reloc* reloc = &section.info->relocs[j];
 
@@ -1854,7 +1862,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
             S = ((size_t)(section.start))
               + ((size_t)(getSymValue (info, sym)));
          } else {
-            copyName ( getSymShortName (info, sym), oc, symbol, 1000-1 );
+            copyName ( getSymShortName (info, sym), oc, symbol, sizeof(symbol)-1 );
             S = (size_t) lookupSymbol_( (char*)symbol );
             if ((void*)S == NULL) {
                 errorBelch(" | %" PATH_FMT ": unknown symbol `%s'", oc->fileName, symbol);
@@ -1934,7 +1942,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
                    if ((v >> 32) && ((-v) >> 32)) {
                        /* Make the trampoline then */
                        copyName (getSymShortName (info, sym),
-                                 oc, symbol, 1000-1);
+                                 oc, symbol, sizeof(symbol)-1);
                        S = makeSymbolExtra_PEi386(oc, symIndex, S, (char *)symbol);
                        /* And retry */
                        v = S + (int32_t)A - ((intptr_t)pP) - 4;

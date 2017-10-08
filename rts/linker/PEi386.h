@@ -129,13 +129,6 @@ struct _IndirectAddr {
     struct _IndirectAddr* next;
 } IndirectAddr;
 
-/* Some alignment information.  */
-typedef
-struct _Alignments {
-    uint32_t mask;
-    uint32_t value;
-} Alignments;
-
 /* Util symbol handling functions.  */
 COFF_OBJ_TYPE getObjectType ( char* image, pathchar* fileName );
 COFF_HEADER_INFO* getHeaderInfo ( ObjectCode* oc );
