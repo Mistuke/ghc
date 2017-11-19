@@ -56,6 +56,7 @@ import GHC.IO.BufferedIO
 import qualified GHC.IO.Device
 import GHC.IO.Device (SeekMode(..), IODeviceType(..), IODevice())
 import GHC.IO.Unsafe
+import GHC.IO.Windows.Encoding (encodeMultiByteRawIO)
 import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
 import Foreign.Ptr
 import Foreign.C
