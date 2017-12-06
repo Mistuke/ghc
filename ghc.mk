@@ -598,15 +598,9 @@ libraries/ghci_dist-install_CONFIGURE_OPTS += --flags=ghci
 
 # We want the ghc-prim package to include the GHC.Prim module when it
 # is registered, but not when it is built, because GHC.Prim is not a
-# real source module, it is built-in to GHC.  The old build system did
-# this using Setup.hs, but we can't do that here, so we have a flag to
-# enable GHC.Prim in the .cabal file (so that the ghc-prim package
-# remains compatible with the old build system for the time being).
-# GHC.Prim module in the ghc-prim package with a flag:
-#
-libraries/ghc-prim_CONFIGURE_OPTS += --flag=include-ghc-prim
+# real source module, it is built-in to GHC.
 
-# And then we strip it out again before building the package:
+# Strip it out again before building the package:
 define libraries/ghc-prim_PACKAGE_MAGIC
 libraries/ghc-prim_dist-install_MODULES := $$(filter-out GHC.Prim,$$(libraries/ghc-prim_dist-install_MODULES))
 endef
@@ -1263,7 +1257,15 @@ $(eval $(call sdist-ghc-file,compiler,stage2,parser,Parser,y))
 $(eval $(call sdist-ghc-file,utils/hpc,dist-install,,HpcParser,y))
 $(eval $(call sdist-ghc-file,utils/genprimopcode,dist,,Lexer,x))
 $(eval $(call sdist-ghc-file,utils/genprimopcode,dist,,Parser,y))
-$(eval $(call sdist-ghc-file2,libraries/Cabal/Cabal,dist-install,Distribution/Parsec,Lexer,x))
+
+# Recent Cabal library versions have a pre-generated Lexer.hs in the source
+# repo, and have moved Lexer.x out of the way, so trying to generate it from
+# here no longer works, and is no longer necessary.
+# According to https://github.com/haskell/cabal/issues/4633 however, this is
+# only a temporary solution, so we will probably have to adjust to whatever
+# the proper solution is going to be once there is one.
+#
+# $(eval $(call sdist-ghc-file2,libraries/Cabal/Cabal,dist-install,Distribution/Parsec,Lexer,x))
 
 .PHONY: sdist-ghc-prep
 sdist-ghc-prep : sdist-ghc-prep-tree

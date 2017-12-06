@@ -120,6 +120,7 @@ data Extension
    | MultiWayIf
    | BinaryLiterals
    | NegativeLiterals
+   | HexFloatLiterals
    | DuplicateRecordFields
    | OverloadedLabels
    | EmptyCase
@@ -131,4 +132,5 @@ data Extension
    | Strict
    | StrictData
    | MonadFailDesugaring
+   | EmptyDataDeriving
    deriving (Eq, Enum, Show, Generic)

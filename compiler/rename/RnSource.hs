@@ -177,7 +177,8 @@ rnSrcDecls group@(HsGroup { hs_valds   = val_decls,
    -- Rename fixity declarations and error if we try to
    -- fix something from another module (duplicates were checked in (A))
    let { all_bndrs = tc_bndrs `unionNameSet` val_bndr_set } ;
-   rn_fix_decls <- rnSrcFixityDecls all_bndrs fix_decls ;
+   rn_fix_decls <- mapM (mapM (rnSrcFixityDecl (TopSigCtxt all_bndrs)))
+                        fix_decls ;
 
    -- Rename deprec decls;
    -- check for duplicates and ensure that deprecated things are defined locally
@@ -262,45 +263,6 @@ rnDocDecl (DocCommentNamed str doc) = do
 rnDocDecl (DocGroup lev doc) = do
   rn_doc <- rnHsDoc doc
   return (DocGroup lev rn_doc)
-
-{-
-*********************************************************
-*                                                       *
-        Source-code fixity declarations
-*                                                       *
-*********************************************************
--}
-
-rnSrcFixityDecls :: NameSet -> [LFixitySig GhcPs] -> RnM [LFixitySig GhcRn]
--- Rename the fixity decls, so we can put
--- the renamed decls in the renamed syntax tree
--- Errors if the thing being fixed is not defined locally.
---
--- The returned FixitySigs are not actually used for anything,
--- except perhaps the GHCi API
-rnSrcFixityDecls bndr_set fix_decls
-  = do fix_decls <- mapM rn_decl fix_decls
-       return (concat fix_decls)
-  where
-    sig_ctxt = TopSigCtxt bndr_set
-
-    rn_decl :: LFixitySig GhcPs -> RnM [LFixitySig GhcRn]
-        -- GHC extension: look up both the tycon and data con
-        -- for con-like things; hence returning a list
-        -- If neither are in scope, report an error; otherwise
-        -- return a fixity sig for each (slightly odd)
-    rn_decl (L loc (FixitySig fnames fixity))
-      = do names <- mapM lookup_one fnames
-           return [ L loc (FixitySig name fixity)
-                  | name <- names ]
-
-    lookup_one :: Located RdrName -> RnM [Located Name]
-    lookup_one (L name_loc rdr_name)
-      = setSrcSpan name_loc $
-                    -- this lookup will fail if the definition isn't local
-        do names <- lookupLocalTcNames sig_ctxt what rdr_name
-           return [ L name_loc name | (_, name) <- names ]
-    what = text "fixity signature"
 
 {-
 *********************************************************
@@ -1321,9 +1283,6 @@ rnTyClDecls tycl_ds
        ; instds_w_fvs <- mapM (wrapLocFstM rnSrcInstDecl) (tyClGroupInstDecls tycl_ds)
        ; role_annots  <- rnRoleAnnots tc_names (tyClGroupRoleDecls tycl_ds)
 
-       ; tycls_w_fvs <- addBootDeps tycls_w_fvs
-                      -- TBD must add_boot_deps to instds_w_fvs?
-
        -- Do SCC analysis on the type/class decls
        ; rdr_env <- getGlobalRdrEnv
        ; let tycl_sccs = depAnalTyClDecls rdr_env tycls_w_fvs
@@ -1401,123 +1360,6 @@ getParent rdr_env n
                     FldParent { par_is = p } -> p
                     _                        -> n
       Nothing -> n
-
-
-{- Note [Extra dependencies from .hs-boot files]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-This is a long story, so buckle in.
-
-**Dependencies via hs-boot files are not obvious.** Consider the following case:
-
-A.hs-boot
-  module A where
-    data A1
-
-B.hs
-  module B where
-    import {-# SOURCE #-} A
-    type B1 = A1
-
-A.hs
-  module A where
-    import B
-    data A2 = MkA2 B1
-    data A1 = MkA1 A2
-
-Here A2 is really recursive (via B1), but we won't see that easily when
-doing dependency analysis when compiling A.hs.  When we look at A2,
-we see that its free variables are simply B1, but without (recursively) digging
-into the definition of B1 will we see that it actually refers to A1 via an
-hs-boot file.
-
-**Recursive declarations, even those broken by an hs-boot file, need to
-be type-checked together.**  Whenever we refer to a declaration via
-an hs-boot file, we must be careful not to force the TyThing too early:
-ala Note [Tying the knot] if we force the TyThing before we have
-defined it ourselves in the local type environment, GHC will error.
-
-Conservatively, then, it would make sense that we to typecheck A1
-and A2 from the previous example together, because the two types are
-truly mutually recursive through B1.
-
-If we are being clever, we might observe that while kind-checking
-A2, we don't actually need to force the TyThing for A1: B1
-independently records its kind, so there is no need to go "deeper".
-But then we are in an uncomfortable situation where we have
-constructed a TyThing for A2 before we have checked A1, and we
-have to be absolutely certain we don't force it too deeply until
-we get around to kind checking A1, which could be for a very long
-time.
-
-Indeed, with datatype promotion, we may very well need to look
-at the type of MkA2 before we have kind-checked A1: consider,
-
-    data T = MkT (Proxy 'MkA2)
-
-To promote MkA2, we need to lift its type to the kind level.
-We never tested this, but it seems likely A1 would get poked
-at this point.
-
-**Here's what we do instead.**  So it is expedient for us to
-make sure A1 and A2 are kind checked together in a loop.
-To ensure that our dependency analysis can catch this,
-we add a dependency:
-
-  - from every local declaration
-  - to everything that comes from this module's .hs-boot file
-    (this is gotten from sb_tcs in the SelfBootInfo).
-
-In this case, we'll add an edges
-
-  - from A1 to A2 (but that edge is there already)
-  - from A2 to A1 (which is new)
-
-Well, not quite *every* declaration. Imagine module A
-above had another datatype declaration:
-
-  data A3 = A3 Int
-
-Even though A3 has a dependency (on Int), all its dependencies are from things
-that live on other packages. Since we don't have mutual dependencies across
-packages, it is safe not to add the dependencies on the .hs-boot stuff to A2.
-
-Hence function nameIsHomePackageImport.
-
-Note that this is fairly conservative: it essentially implies that
-EVERY type declaration in this modules hs-boot file will be kind-checked
-together in one giant loop (and furthermore makes every other type
-in the module depend on this loop).  This is perhaps less than ideal, because
-the larger a recursive group, the less polymorphism available (we
-cannot infer a type to be polymorphically instantiated while we
-are inferring its kind), but no one has hollered about this (yet!)
--}
-
-addBootDeps :: [(LTyClDecl GhcRn, FreeVars)]
-            -> RnM [(LTyClDecl GhcRn, FreeVars)]
--- See Note [Extra dependencies from .hs-boot files]
-addBootDeps ds_w_fvs
-  = do { tcg_env <- getGblEnv
-       ; let this_mod  = tcg_mod tcg_env
-             boot_info = tcg_self_boot tcg_env
-
-             add_boot_deps :: [(LTyClDecl GhcRn, FreeVars)]
-                           -> [(LTyClDecl GhcRn, FreeVars)]
-             add_boot_deps ds_w_fvs
-               = case boot_info of
-                     SelfBoot { sb_tcs = tcs } | not (isEmptyNameSet tcs)
-                        -> map (add_one tcs) ds_w_fvs
-                     _  -> ds_w_fvs
-
-             add_one :: NameSet -> (LTyClDecl GhcRn, FreeVars)
-                     -> (LTyClDecl GhcRn, FreeVars)
-             add_one tcs pr@(decl,fvs)
-                | has_local_imports fvs = (decl, fvs `plusFV` tcs)
-                | otherwise             = pr
-
-             has_local_imports fvs
-                 = nameSetAny (nameIsHomePackageImport this_mod) fvs
-       ; return (add_boot_deps ds_w_fvs) }
-
 
 
 {- ******************************************************

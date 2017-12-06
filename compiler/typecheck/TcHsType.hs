@@ -23,6 +23,7 @@ module TcHsType (
                 -- Type checking type and class decls
         kcLookupTcTyCon, kcTyClTyVars, tcTyClTyVars,
         tcDataKindSig,
+        DataKindCheck(..),
 
         -- Kind-checking types
         -- No kind generalisation, no checkValidType
@@ -1449,7 +1450,9 @@ kcHsTyVarBndrs name flav cusk all_kind_vars
              tycon = mkTcTyCon name binders res_kind
                                (scoped_kvs ++ binderVars binders) flav
 
-       ; traceTc "kcHsTyVarBndrs: not-cusk" (ppr name <+> ppr binders)
+       ; traceTc "kcHsTyVarBndrs: not-cusk" $
+         vcat [ ppr name, ppr kv_ns, ppr hs_tvs, ppr dep_names
+              , ppr binders, ppr (mkTyConKind binders res_kind) ]
        ; return (tycon, stuff) }
   where
     open_fam = tcFlavourIsOpen flav
@@ -1900,7 +1903,18 @@ tcTyClTyVars tycon_name thing_inside
 
 
 -----------------------------------
-tcDataKindSig :: Bool  -- ^ Do we require the result to be *?
+data DataKindCheck
+    -- Plain old data type; better be lifted
+    = LiftedDataKind
+    -- Data families might have a variable return kind.
+    -- See See Note [Arity of data families] in FamInstEnv for more info.
+    | LiftedOrVarDataKind
+    -- Abstract data in hsig files can have any kind at all;
+    -- even unlifted. This is because they might not actually
+    -- be implemented with a data declaration at the end of the day.
+    | AnyDataKind
+
+tcDataKindSig :: DataKindCheck  -- ^ Do we require the result to be *?
               -> Kind -> TcM ([TyConBinder], Kind)
 -- GADT decls can have a (perhaps partial) kind signature
 --      e.g.  data T :: * -> * -> * where ...
@@ -1912,10 +1926,15 @@ tcDataKindSig :: Bool  -- ^ Do we require the result to be *?
 -- Never emits constraints.
 -- Returns the new TyVars, the extracted TyBinders, and the new, reduced
 -- result kind (which should always be Type or a synonym thereof)
-tcDataKindSig check_for_type kind
-  = do  { checkTc (isLiftedTypeKind res_kind || (not check_for_type &&
-                                                 isJust (tcGetCastedTyVar_maybe res_kind)))
-                  (badKindSig check_for_type kind)
+tcDataKindSig kind_check kind
+  = do  { case kind_check of
+            LiftedDataKind ->
+                checkTc (isLiftedTypeKind res_kind)
+                        (badKindSig True kind)
+            LiftedOrVarDataKind ->
+                checkTc (isLiftedTypeKind res_kind || isJust (tcGetCastedTyVar_maybe res_kind))
+                        (badKindSig False kind)
+            AnyDataKind -> return ()
         ; span <- getSrcSpanM
         ; us   <- newUniqueSupply
         ; rdr_env <- getLocalRdrEnv
@@ -1962,7 +1981,7 @@ It isn't essential for correctness.
 
 ************************************************************************
 *                                                                      *
-             Partial signatures and pattern signatures
+             Partial signatures
 *                                                                      *
 ************************************************************************
 
@@ -1985,8 +2004,10 @@ tcHsPartialSigType ctxt sig_ty
             <- tcWildCardBindersX newWildTyVar sig_wcs        $ \ wcs ->
                tcImplicitTKBndrsX new_implicit_tv implicit_hs_tvs $
                tcExplicitTKBndrsX newSigTyVar explicit_hs_tvs $ \ explicit_tvs ->
-               do {   -- Instantiate the type-class context; but if there
-                      -- is an extra-constraints wildcard, just discard it here
+                  -- Why newSigTyVar?  See TcBinds
+                  -- Note [Quantified variables in partial type signatures]
+             do {   -- Instantiate the type-class context; but if there
+                    -- is an extra-constraints wildcard, just discard it here
                     (theta, wcx) <- tcPartialContext hs_ctxt
 
                   ; tau <- tcHsOpenType hs_tau
@@ -1998,6 +2019,9 @@ tcHsPartialSigType ctxt sig_ty
                   ; return ( (wcs, wcx, explicit_tvs, theta, tau)
                            , bound_tvs) }
 
+        -- Spit out the wildcards (including the extra-constraints one)
+        -- as "hole" constraints, so that they'll be reported if necessary
+        -- See Note [Extra-constraint holes in partial type signatures]
         ; emitWildCardHoleConstraints wcs
 
         ; explicit_tvs <- mapM zonkTyCoVarKind explicit_tvs
@@ -2011,9 +2035,12 @@ tcHsPartialSigType ctxt sig_ty
         ; traceTc "tcHsPartialSigType" (ppr all_tvs)
         ; return (wcs, wcx, all_tvs, theta, tau) }
   where
-    new_implicit_tv name = do { kind <- newMetaKindVar
-                              ; tv <- newSigTyVar name kind
-                              ; return (tv, False) }
+    new_implicit_tv name
+      = do { kind <- newMetaKindVar
+           ; tv <- newSigTyVar name kind
+             -- Why newSigTyVar?  See TcBinds
+             -- Note [Quantified variables in partial type signatures]
+           ; return (tv, False) }
 
 tcPartialContext :: HsContext GhcRn -> TcM (TcThetaType, Maybe TcTyVar)
 tcPartialContext hs_theta
@@ -2025,6 +2052,53 @@ tcPartialContext hs_theta
   | otherwise
   = do { theta <- mapM tcLHsPredType hs_theta
        ; return (theta, Nothing) }
+
+{- Note [Extra-constraint holes in partial type signatures]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider
+  f :: (_) => a -> a
+  f x = ...
+
+* The renamer makes a wildcard name for the "_", and puts it in
+  the hswc_wcs field.
+
+* Then, in tcHsPartialSigType, we make a new hole TcTyVar, in
+  tcWildCardBindersX.
+
+* TcBinds.chooseInferredQuantifiers fills in that hole TcTyVar
+  with the inferred constraints, e.g. (Eq a, Show a)
+
+* TcErrors.mkHoleError finally reports the error.
+
+An annoying difficulty happens if there are more than 62 inferred
+constraints. Then we need to fill in the TcTyVar with (say) a 70-tuple.
+Where do we find the TyCon?  For good reasons we only have constraint
+tuples up to 62 (see Note [How tuples work] in TysWiredIn).  So how
+can we make a 70-tuple?  This was the root cause of Trac #14217.
+
+It's incredibly tiresome, because we only need this type to fill
+in the hole, to communicate to the error reporting machinery.  Nothing
+more.  So I use a HACK:
+
+* I make an /ordinary/ tuple of the constraints, in
+  TcBinds.chooseInferredQuantifiers. This is ill-kinded because
+  ordinary tuples can't contain constraints, but it works fine. And for
+  ordinary tuples we don't have the same limit as for constraint
+  tuples (which need selectors and an assocated class).
+
+* Because it is ill-kinded, it trips an assert in writeMetaTyVar,
+  so now I disable the assertion if we are writing a type of
+  kind Constraint.  (That seldom/never normally happens so we aren't
+  losing much.)
+
+Result works fine, but it may eventually bite us.
+
+
+************************************************************************
+*                                                                      *
+      Pattern signatures (i.e signatures that occur in patterns)
+*                                                                      *
+********************************************************************* -}
 
 tcHsPatSigType :: UserTypeCtxt
                -> LHsSigWcType GhcRn          -- The type signature
@@ -2158,7 +2232,7 @@ Here
 
  * Finally, in 'blah' we must have the envt "b" :-> a_sk.  The pair
    ("b" :-> a_sk) is returned by tcHsPatSigType, constructed by
-   mk_tv_pair in that funcion.
+   mk_tv_pair in that function.
 
 Another example (Trac #13881):
    fl :: forall (l :: [a]). Sing l -> Sing l

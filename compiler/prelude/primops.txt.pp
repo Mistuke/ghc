@@ -38,6 +38,14 @@
 -- processors of this file to easily get hold of simple info
 -- (eg, out_of_line), whilst avoiding parsing complex expressions
 -- needed for strictness info.
+--
+-- type refers to the general category of the primop. Valid settings include,
+--
+--  * Compare:   A comparison operation of the shape a -> a -> Int#
+--  * Monadic:   A unary operation of shape a -> a
+--  * Dyadic:    A binary operation of shape a -> a -> a
+--  * GenPrimOp: Any other sort of primop
+--
 
 -- The vector attribute is rather special. It takes a list of 3-tuples, each of
 -- which is of the form <ELEM_TYPE,SCALAR_TYPE,LENGTH>. ELEM_TYPE is the type of
@@ -1390,11 +1398,29 @@ primop  WriteByteArrayOp_Word64 "writeWord64Array#" GenPrimOp
    with has_side_effects = True
         can_fail = True
 
+primop  CompareByteArraysOp "compareByteArrays#" GenPrimOp
+   ByteArray# -> Int# -> ByteArray# -> Int# -> Int# -> Int#
+   {{\tt compareByteArrays# src1 src1_ofs src2 src2_ofs n} compares
+    {\tt n} bytes starting at offset {\tt src1_ofs} in the first
+    {\tt ByteArray#} {\tt src1} to the range of {\tt n} bytes
+    (i.e. same length) starting at offset {\tt src2_ofs} of the second
+    {\tt ByteArray#} {\tt src2}.  Both arrays must fully contain the
+    specified ranges, but this is not checked.  Returns an {\tt Int#}
+    less than, equal to, or greater than zero if the range is found,
+    respectively, to be byte-wise lexicographically less than, to
+    match, or be greater than the second range.}
+   with
+   can_fail = True
+
 primop  CopyByteArrayOp "copyByteArray#" GenPrimOp
   ByteArray# -> Int# -> MutableByteArray# s -> Int# -> Int# -> State# s -> State# s
-  {Copy a range of the ByteArray# to the specified region in the MutableByteArray#.
-   Both arrays must fully contain the specified ranges, but this is not checked.
-   The two arrays must not be the same array in different states, but this is not checked either.}
+  {{\tt copyByteArray# src src_ofs dst dst_ofs n} copies the range
+   starting at offset {\tt src_ofs} of length {\tt n} from the
+   {\tt ByteArray#} {\tt src} to the {\tt MutableByteArray#} {\tt dst}
+   starting at offset {\tt dst_ofs}.  Both arrays must fully contain
+   the specified ranges, but this is not checked.  The two arrays must
+   not be the same array in different states, but this is not checked
+   either.}
   with
   has_side_effects = True
   code_size = { primOpCodeSizeForeignCall + 4}
@@ -2105,7 +2131,7 @@ primop  AtomicallyOp "atomically#" GenPrimOp
 --   retry# s1
 -- where 'e' would be unreachable anyway.  See Trac #8091.
 --
--- Note that it *does not* return botRes as the "exception" that is throw may be
+-- Note that it *does not* return botRes as the "exception" that is thrown may be
 -- "caught" by catchRetry#. This mistake caused #14171.
 primop  RetryOp "retry#" GenPrimOp
    State# RealWorld -> (# State# RealWorld, a #)
@@ -2788,7 +2814,7 @@ primop  GetCurrentCCSOp "getCurrentCCS#" GenPrimOp
    a -> State# s -> (# State# s, Addr# #)
    { Returns the current {\tt CostCentreStack} (value is {\tt NULL} if
      not profiling).  Takes a dummy argument which can be used to
-     avoid the call to {\tt getCCCS\#} being floated out by the
+     avoid the call to {\tt getCurrentCCS\#} being floated out by the
      simplifier, which would result in an uninformative stack
      ("CAF"). }
 
@@ -2861,7 +2887,7 @@ pseudoop   "unsafeCoerce#"
         {\tt unsafeCoerce\#} to cast a T to an algebraic data type D, unless T is also
         an algebraic data type.  For example, do not cast {\tt Int->Int} to {\tt Bool}, even if
         you later cast that {\tt Bool} back to {\tt Int->Int} before applying it.  The reasons
-        have to do with GHC's internal representation details (for the congnoscenti, data values
+        have to do with GHC's internal representation details (for the cognoscenti, data values
         can be entered but function closures cannot).  If you want a safe type to cast things
         to, use {\tt Any}, which is not an algebraic data type.
 

@@ -221,11 +221,8 @@ to GHC's runtime system you can enclose them in ``+RTS ... -RTS`` (see
 Options affecting the C pre-processor
 -------------------------------------
 
-.. ghc-flag:: -XCPP
-    :shortdesc: Enable the :ref:`C preprocessor <c-pre-processor>`.
-    :type: dynamic
-    :reverse: -XNoCPP
-    :category: language
+.. extension:: CPP
+    :shortdesc: Enable the C preprocessor.
 
     :since: 6.8.1
 
@@ -577,6 +574,16 @@ Options affecting code generation
     libraries). This currently works on Linux x86 and x86-64. On
     Windows, position-independent code is never used so the flag is a
     no-op on that platform.
+
+.. ghc-flag:: -fPIE
+    :shortdesc: Generate code for a position-independent executable (where available)
+    :type: dynamic
+    :category: codegen
+
+    Generate code in such a way to be linkable into a position-independent
+    executable This currently works on Linux x86 and x86-64. On Windows,
+    position-independent code is never used so the flag is a no-op on that
+    platform. To link the final executable use :ghc-flag:`-pie`.
 
 .. ghc-flag:: -dynamic
     :shortdesc: Build dynamically-linked object files and executables
@@ -1119,7 +1126,7 @@ for example).
     :type: dynamic
     :category: linking
 
-    :since: 8.2.1
+    :since: 8.2.2
 
     This instructs the linker to produce a position-independent executable.
     This flag is only valid while producing executables and all object code
@@ -1135,5 +1142,5 @@ for example).
     executables to ensure that only one ``libHSrts`` is present if
     loaded into the address space of another Haskell process.
 
-    Also, you may need to use the :ghc-flags:`-rdynamic` flag to ensure that
-    that symbols are not dropped from your PIE object.
+    Also, you may need to use the :ghc-flag:`-rdynamic` flag to ensure that
+    that symbols are not dropped from your PIE objects.

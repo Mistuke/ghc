@@ -196,6 +196,7 @@ import {-# SOURCE #-} ErrUtils ( Severity(..), MsgDoc, mkLocMessageAnn
                                , getCaretDiagnostic, dumpSDoc )
 import Json
 import SysTools.Terminal ( stderrSupportsAnsiColors )
+import SysTools.BaseDir ( expandTopDir )
 
 import System.IO.Unsafe ( unsafePerformIO )
 import Data.IORef
@@ -360,6 +361,7 @@ data DumpFlag
    | Opt_D_dump_prep
    | Opt_D_dump_stg
    | Opt_D_dump_call_arity
+   | Opt_D_dump_exitify
    | Opt_D_dump_stranal
    | Opt_D_dump_str_signatures
    | Opt_D_dump_tc
@@ -389,6 +391,7 @@ data DumpFlag
    | Opt_D_dump_hi_diffs
    | Opt_D_dump_mod_cycles
    | Opt_D_dump_mod_map
+   | Opt_D_dump_timings
    | Opt_D_dump_view_pattern_commoning
    | Opt_D_verbose_core2core
    | Opt_D_dump_debug
@@ -428,6 +431,7 @@ data GeneralFlag
 
    -- optimisation opts
    | Opt_CallArity
+   | Opt_Exitification
    | Opt_Strictness
    | Opt_LateDmdAnal
    | Opt_KillAbsence
@@ -471,6 +475,7 @@ data GeneralFlag
    | Opt_CprAnal
    | Opt_WorkerWrapper
    | Opt_SolveConstantDicts
+   | Opt_AlignmentSanitisation
    | Opt_CatchBottoms
 
    -- Interface files
@@ -541,6 +546,7 @@ data GeneralFlag
    | Opt_PprCaseAsLet
    | Opt_PprShowTicks
    | Opt_ShowHoleConstraints
+   | Opt_ShowLoadedModules
 
    -- Suppress all coercions, them replacing with '...'
    | Opt_SuppressCoercions
@@ -560,6 +566,7 @@ data GeneralFlag
    -- Except for uniques, as some simplifier phases introduce new
    -- variables that have otherwise identical names.
    | Opt_SuppressUniques
+   | Opt_SuppressStgFreeVars
    | Opt_SuppressTicks     -- Replaces Opt_PprShowTicks
 
    -- temporary flags
@@ -674,6 +681,8 @@ data WarningFlag =
    | Opt_WarnCPPUndef                     -- Since 8.2
    | Opt_WarnUnbangedStrictPatterns       -- Since 8.2
    | Opt_WarnMissingHomeModules           -- Since 8.2
+   | Opt_WarnPartialFields                -- Since 8.4
+   | Opt_WarnMissingExportList
    deriving (Eq, Show, Enum)
 
 data Language = Haskell98 | Haskell2010
@@ -908,6 +917,7 @@ data DynFlags = DynFlags {
   flushOut              :: FlushOut,
   flushErr              :: FlushErr,
 
+  ghcVersionFile        :: Maybe FilePath,
   haddockOptions        :: Maybe String,
 
   -- | GHCi scripts specified by -ghci-script, in reverse order
@@ -1672,6 +1682,7 @@ defaultDynFlags mySettings myLlvmTargets =
         filesToClean   = panic "defaultDynFlags: No filesToClean",
         dirsToClean    = panic "defaultDynFlags: No dirsToClean",
         generatedDumps = panic "defaultDynFlags: No generatedDumps",
+        ghcVersionFile = Nothing,
         haddockOptions = Nothing,
         dumpFlags = EnumSet.empty,
         generalFlags = EnumSet.fromList (defaultFlags mySettings),
@@ -2328,6 +2339,9 @@ addDepSuffix s d = d { depSuffixes = s : depSuffixes d }
 
 addCmdlineFramework f d = d { cmdlineFrameworks = f : cmdlineFrameworks d}
 
+addGhcVersionFile :: FilePath -> DynFlags -> DynFlags
+addGhcVersionFile f d = d { ghcVersionFile = Just f }
+
 addHaddockOpts f d = d { haddockOptions = Just f}
 
 addGhciScript f d = d { ghciScripts = f : ghciScripts d}
@@ -2855,6 +2869,7 @@ dynamic_flags_deps = [
   , make_ord_flag defGhcFlag "no-rtsopts-suggestions"
       (noArg (\d -> d {rtsOptsSuggestions = False}))
 
+  , make_ord_flag defGhcFlag "ghcversion-file"      (hasArg addGhcVersionFile)
   , make_ord_flag defGhcFlag "main-is"              (SepArg setMainIs)
   , make_ord_flag defGhcFlag "haddock"              (NoArg (setGeneralFlag Opt_Haddock))
   , make_ord_flag defGhcFlag "haddock-opts"         (hasArg addHaddockOpts)
@@ -2912,6 +2927,7 @@ dynamic_flags_deps = [
                   setGeneralFlag Opt_SuppressTypeApplications
                   setGeneralFlag Opt_SuppressIdInfo
                   setGeneralFlag Opt_SuppressTicks
+                  setGeneralFlag Opt_SuppressStgFreeVars
                   setGeneralFlag Opt_SuppressTypeSignatures)
 
         ------ Debugging ----------------------------------------------------
@@ -3004,6 +3020,8 @@ dynamic_flags_deps = [
         (setDumpFlag Opt_D_dump_stg)
   , make_ord_flag defGhcFlag "ddump-call-arity"
         (setDumpFlag Opt_D_dump_call_arity)
+  , make_ord_flag defGhcFlag "ddump-exitify"
+        (setDumpFlag Opt_D_dump_exitify)
   , make_ord_flag defGhcFlag "ddump-stranal"
         (setDumpFlag Opt_D_dump_stranal)
   , make_ord_flag defGhcFlag "ddump-str-signatures"
@@ -3068,6 +3086,8 @@ dynamic_flags_deps = [
         (setDumpFlag Opt_D_dump_mod_cycles)
   , make_ord_flag defGhcFlag "ddump-mod-map"
         (setDumpFlag Opt_D_dump_mod_map)
+  , make_ord_flag defGhcFlag "ddump-timings"
+        (setDumpFlag Opt_D_dump_timings)
   , make_ord_flag defGhcFlag "ddump-view-pattern-commoning"
         (setDumpFlag Opt_D_dump_view_pattern_commoning)
   , make_ord_flag defGhcFlag "ddump-to-file"
@@ -3613,6 +3633,7 @@ wWarningFlagsDeps = [
   flagSpec "identities"                  Opt_WarnIdentities,
   flagSpec "missing-fields"              Opt_WarnMissingFields,
   flagSpec "missing-import-lists"        Opt_WarnMissingImportList,
+  flagSpec "missing-export-lists"        Opt_WarnMissingExportList,
   depFlagSpec "missing-local-sigs"       Opt_WarnMissingLocalSignatures
     "it is replaced by -Wmissing-local-signatures",
   flagSpec "missing-local-signatures"    Opt_WarnMissingLocalSignatures,
@@ -3665,7 +3686,8 @@ wWarningFlagsDeps = [
                                     Opt_WarnMissingPatternSynonymSignatures,
   flagSpec "simplifiable-class-constraints" Opt_WarnSimplifiableClassConstraints,
   flagSpec "missing-home-modules"        Opt_WarnMissingHomeModules,
-  flagSpec "unrecognised-warning-flags"  Opt_WarnUnrecognisedWarningFlags ]
+  flagSpec "unrecognised-warning-flags"  Opt_WarnUnrecognisedWarningFlags,
+  flagSpec "partial-fields"              Opt_WarnPartialFields ]
 
 -- | These @-\<blah\>@ flags can all be reversed with @-no-\<blah\>@
 negatableFlagsDeps :: [(Deprecation, FlagSpec GeneralFlag)]
@@ -3682,6 +3704,7 @@ dFlagsDeps = [
   depFlagSpec' "ppr-ticks"              Opt_PprShowTicks
      (\turn_on -> useInstead "-d" "suppress-ticks" (not turn_on)),
   flagSpec "suppress-ticks"             Opt_SuppressTicks,
+  flagSpec "suppress-stg-free-vars"     Opt_SuppressStgFreeVars,
   flagSpec "suppress-coercions"         Opt_SuppressCoercions,
   flagSpec "suppress-idinfo"            Opt_SuppressIdInfo,
   flagSpec "suppress-unfoldings"        Opt_SuppressUnfoldings,
@@ -3704,6 +3727,7 @@ fFlagsDeps = [
   flagGhciSpec "break-on-exception"           Opt_BreakOnException,
   flagSpec "building-cabal-package"           Opt_BuildingCabalPackage,
   flagSpec "call-arity"                       Opt_CallArity,
+  flagSpec "exitification"                    Opt_Exitification,
   flagSpec "case-merge"                       Opt_CaseMerge,
   flagSpec "case-folding"                     Opt_CaseFolding,
   flagSpec "cmm-elim-common-blocks"           Opt_CmmElimCommonBlocks,
@@ -3746,7 +3770,7 @@ fFlagsDeps = [
   flagSpec "kill-one-shot"                    Opt_KillOneShot,
   flagSpec "late-dmd-anal"                    Opt_LateDmdAnal,
   flagSpec "liberate-case"                    Opt_LiberateCase,
-  flagHiddenSpec "llvm-pass-vectors-in-regs"  Opt_LlvmPassVectorsInRegisters,
+  flagSpec "llvm-pass-vectors-in-regs"        Opt_LlvmPassVectorsInRegisters,
   flagHiddenSpec "llvm-tbaa"                  Opt_LlvmTBAA,
   flagHiddenSpec "llvm-fill-undef-with-garbage" Opt_LlvmFillUndefWithGarbage,
   flagSpec "loopification"                    Opt_Loopification,
@@ -3794,9 +3818,11 @@ fFlagsDeps = [
   flagSpec "worker-wrapper"                   Opt_WorkerWrapper,
   flagSpec "solve-constant-dicts"             Opt_SolveConstantDicts,
   flagSpec "catch-bottoms"                    Opt_CatchBottoms,
+  flagSpec "alignment-sanitisation"           Opt_AlignmentSanitisation,
   flagSpec "show-warning-groups"              Opt_ShowWarnGroups,
   flagSpec "hide-source-paths"                Opt_HideSourcePaths,
   flagSpec "show-hole-constraints"            Opt_ShowHoleConstraints,
+  flagSpec "show-loaded-modules"              Opt_ShowLoadedModules,
   flagSpec "whole-archive-hs-libs"            Opt_WholeArchiveHsLibs
   ]
 
@@ -3919,6 +3945,7 @@ xFlagsDeps = [
   flagSpec "DuplicateRecordFields"            LangExt.DuplicateRecordFields,
   flagSpec "EmptyCase"                        LangExt.EmptyCase,
   flagSpec "EmptyDataDecls"                   LangExt.EmptyDataDecls,
+  flagSpec "EmptyDataDeriving"                LangExt.EmptyDataDeriving,
   flagSpec "ExistentialQuantification"        LangExt.ExistentialQuantification,
   flagSpec "ExplicitForAll"                   LangExt.ExplicitForAll,
   flagSpec "ExplicitNamespaces"               LangExt.ExplicitNamespaces,
@@ -3959,6 +3986,7 @@ xFlagsDeps = [
   flagSpec "NamedFieldPuns"                   LangExt.RecordPuns,
   flagSpec "NamedWildCards"                   LangExt.NamedWildCards,
   flagSpec "NegativeLiterals"                 LangExt.NegativeLiterals,
+  flagSpec "HexFloatLiterals"                 LangExt.HexFloatLiterals,
   flagSpec "NondecreasingIndentation"         LangExt.NondecreasingIndentation,
   depFlagSpec' "NullaryTypeClasses"           LangExt.NullaryTypeClasses
     (deprecatedForExtension "MultiParamTypeClasses"),
@@ -4037,7 +4065,8 @@ defaultFlags settings
       Opt_RPath,
       Opt_SharedImplib,
       Opt_SimplPreInlining,
-      Opt_VersionMacros
+      Opt_VersionMacros,
+      Opt_LlvmPassVectorsInRegisters
     ]
 
     ++ [f | (ns,f) <- optLevelFlags, 0 `elem` ns]
@@ -4157,6 +4186,7 @@ optLevelFlags -- see Note [Documenting optimisation flags]
     , ([0],     Opt_OmitInterfacePragmas)
 
     , ([1,2],   Opt_CallArity)
+    , ([1,2],   Opt_Exitification)
     , ([1,2],   Opt_CaseMerge)
     , ([1,2],   Opt_CaseFolding)
     , ([1,2],   Opt_CmmElimCommonBlocks)
@@ -5086,7 +5116,7 @@ compilerInfo dflags
       -- Next come the settings, so anything else can be overridden
       -- in the settings file (as "lookup" uses the first match for the
       -- key)
-    : rawSettings dflags
+    : map (fmap $ expandTopDir $ topDir dflags) (rawSettings dflags)
    ++ [("Project version",             projectVersion dflags),
        ("Project Git commit id",       cProjectGitCommitId),
        ("Booter version",              cBooterVersion),

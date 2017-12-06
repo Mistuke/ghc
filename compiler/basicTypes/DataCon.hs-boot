@@ -13,13 +13,12 @@ import {-# SOURCE #-} TyCoRep ( Type, ThetaType )
 data DataCon
 data DataConRep
 data EqSpec
-filterEqSpec :: [EqSpec] -> [TyVarBinder] -> [TyVarBinder]
 
 dataConName      :: DataCon -> Name
 dataConTyCon     :: DataCon -> TyCon
-dataConUnivTyVarBinders :: DataCon -> [TyVarBinder]
 dataConExTyVars  :: DataCon -> [TyVar]
-dataConExTyVarBinders :: DataCon -> [TyVarBinder]
+dataConUserTyVars :: DataCon -> [TyVar]
+dataConUserTyVarBinders :: DataCon -> [TyVarBinder]
 dataConSourceArity  :: DataCon -> Arity
 dataConFieldLabels :: DataCon -> [FieldLabel]
 dataConInstOrigArgTys  :: DataCon -> [Type] -> [Type]

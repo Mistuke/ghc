@@ -191,6 +191,19 @@ my_mmap (void *addr, W_ size, int operation)
             errno = ENOMEM;
         }
     }
+
+    if (operation & MEM_COMMIT) {
+        madvise(ret, size, MADV_WILLNEED);
+#if defined(MADV_DODUMP)
+        madvise(ret, size, MADV_DODUMP);
+#endif
+    } else {
+        madvise(ret, size, MADV_DONTNEED);
+#if defined(MADV_DONTDUMP)
+        madvise(ret, size, MADV_DONTDUMP);
+#endif
+    }
+
 #else
     ret = mmap(addr, size, prot, flags | MAP_ANON | MAP_PRIVATE, -1, 0);
 #endif
@@ -521,7 +534,10 @@ void *osReserveHeapMemory(void *startAddressPtr, W_ *len)
 
 void osCommitMemory(void *at, W_ size)
 {
-    my_mmap(at, size, MEM_COMMIT);
+    void *r = my_mmap(at, size, MEM_COMMIT);
+    if (r == NULL) {
+        barf("Unable to commit %d bytes of memory", size);
+    }
 }
 
 void osDecommitMemory(void *at, W_ size)

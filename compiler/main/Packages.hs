@@ -124,7 +124,7 @@ import Data.Version
 --     Let @depExposedPackages@ be the transitive closure from @exposedPackages@ of
 --     their dependencies.
 --
---   * When searching for a module from an preload import declaration,
+--   * When searching for a module from a preload import declaration,
 --     only the exposed modules in @exposedPackages@ are valid.
 --
 --   * When searching for a module from an implicit import, all modules
@@ -1729,7 +1729,19 @@ packageHsLibs dflags p = map (mkDynName . addSuffix) (hsLibraries p)
          | otherwise
             = panic ("Don't understand library name " ++ x)
 
+        -- Add _thr and other rts suffixes to packages named
+        -- `rts` or `rts-1.0`. Why both?  Traditionally the rts
+        -- package is called `rts` only.  However the tooling
+        -- usually expects a package name to have a version.
+        -- As such we will gradually move towards the `rts-1.0`
+        -- package name, at which point the `rts` package name
+        -- will eventually be unused.
+        --
+        -- This change elevates the need to add custom hooks
+        -- and handling specifically for the `rts` package for
+        -- example in ghc-cabal.
         addSuffix rts@"HSrts"    = rts       ++ (expandTag rts_tag)
+        addSuffix rts@"HSrts-1.0"= rts       ++ (expandTag rts_tag)
         addSuffix other_lib      = other_lib ++ (expandTag tag)
 
         expandTag t | null t = ""
@@ -1878,8 +1890,16 @@ listVisibleModuleNames dflags =
 -- | Find all the 'PackageConfig' in both the preload packages from 'DynFlags' and corresponding to the list of
 -- 'PackageConfig's
 getPreloadPackagesAnd :: DynFlags -> [PreloadUnitId] -> IO [PackageConfig]
-getPreloadPackagesAnd dflags pkgids =
+getPreloadPackagesAnd dflags pkgids0 =
   let
+      pkgids  = pkgids0 ++
+                  -- An indefinite package will have insts to HOLE,
+                  -- which is not a real package. Don't look it up.
+                  -- Fixes #14525
+                  if isIndefinite dflags
+                    then []
+                    else map (toInstalledUnitId . moduleUnitId . snd)
+                             (thisUnitIdInsts dflags)
       state   = pkgState dflags
       pkg_map = pkgIdMap state
       preload = preloadPackages state

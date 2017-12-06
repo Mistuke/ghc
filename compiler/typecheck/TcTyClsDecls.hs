@@ -162,10 +162,6 @@ tcTyClGroup (TyClGroup { group_tyclds = tyclds
        ; checkSynCycles this_uid tyclss tyclds
        ; traceTc "Done synonym cycle check" (ppr tyclss)
 
-       ; traceTc "Starting family consistency check" (ppr tyclss)
-       ; forM_ tyclss checkRecFamInstConsistency
-       ; traceTc "Done family consistency" (ppr tyclss)
-
            -- Step 2: Perform the validity check on those types/classes
            -- We can do this now because we are done with the recursive knot
            -- Do it before Step 3 (adding implicit things) because the latter
@@ -831,7 +827,7 @@ tcFamDecl1 parent (FamilyDecl { fdInfo = fam_info, fdLName = tc_lname@(L _ tc_na
   = tcTyClTyVars tc_name $ \ binders res_kind -> do
   { traceTc "data family:" (ppr tc_name)
   ; checkFamFlag tc_name
-  ; (extra_binders, real_res_kind) <- tcDataKindSig False res_kind
+  ; (extra_binders, real_res_kind) <- tcDataKindSig LiftedOrVarDataKind res_kind
   ; tc_rep_name <- newTyConRepName tc_name
   ; let tycon = mkFamilyTyCon tc_name (binders `chkAppend` extra_binders)
                               real_res_kind
@@ -976,7 +972,12 @@ tcDataDefn roles_info
          (HsDataDefn { dd_ND = new_or_data, dd_cType = cType
                      , dd_ctxt = ctxt, dd_kindSig = mb_ksig
                      , dd_cons = cons })
- =  do { (extra_bndrs, real_res_kind) <- tcDataKindSig True res_kind
+ =  do { tcg_env         <- getGblEnv
+       ; let hsc_src = tcg_src tcg_env
+             check_kind = if mk_permissive_kind hsc_src cons
+                            then AnyDataKind
+                            else LiftedDataKind
+       ; (extra_bndrs, real_res_kind) <- tcDataKindSig check_kind res_kind
        ; let final_bndrs  = tycon_binders `chkAppend` extra_bndrs
              roles        = roles_info tc_name
 
@@ -984,8 +985,6 @@ tcDataDefn roles_info
        ; stupid_theta    <- zonkTcTypeToTypes emptyZonkEnv
                                               stupid_tc_theta
        ; kind_signatures <- xoptM LangExt.KindSignatures
-       ; tcg_env         <- getGblEnv
-       ; let hsc_src = tcg_src tcg_env
 
              -- Check that we don't use kind signatures without Glasgow extensions
        ; when (isJust mb_ksig) $
@@ -1009,8 +1008,14 @@ tcDataDefn roles_info
        ; traceTc "tcDataDefn" (ppr tc_name $$ ppr tycon_binders $$ ppr extra_bndrs)
        ; return tycon }
   where
+    -- Abstract data types in hsig files can have arbitrary kinds,
+    -- because they may be implemented by type synonyms
+    -- (which themselves can have arbitrary kinds, not just *)
+    mk_permissive_kind HsigFile [] = True
+    mk_permissive_kind _ _ = False
+
     -- In hs-boot, a 'data' declaration with no constructors
-    -- indicates an nominally distinct abstract data type.
+    -- indicates a nominally distinct abstract data type.
     mk_tc_rhs HsBootFile _ []
       = return AbstractTyCon
 
@@ -1692,16 +1697,22 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
        -- Can't print univ_tvs, arg_tys etc, because we are inside the knot here
        ; traceTc "tcConDecl 2" (ppr name $$ ppr field_lbls)
        ; let
-           ex_tvs = mkTyVarBinders Inferred qkvs ++
-                    mkTyVarBinders Specified user_qtvs
+           univ_tvbs = tyConTyVarBinders tmpl_bndrs
+           univ_tvs  = binderVars univ_tvbs
+           ex_tvbs   = mkTyVarBinders Inferred qkvs ++
+                       mkTyVarBinders Specified user_qtvs
+           ex_tvs    = qkvs ++ user_qtvs
+           -- For H98 datatypes, the user-written tyvar binders are precisely
+           -- the universals followed by the existentials.
+           -- See Note [DataCon user type variable binders] in DataCon.
+           user_tvbs = univ_tvbs ++ ex_tvbs
            buildOneDataCon (L _ name) = do
              { is_infix <- tcConIsInfixH98 name hs_details
              ; rep_nm   <- newTyConRepName name
 
              ; buildDataCon fam_envs name is_infix rep_nm
                             stricts Nothing field_lbls
-                            (tyConTyVarBinders tmpl_bndrs)
-                            ex_tvs
+                            univ_tvs ex_tvs user_tvbs
                             [{- no eq_preds -}] ctxt arg_tys
                             res_tmpl rep_tycon
                   -- NB:  we put data_tc, the type constructor gotten from the
@@ -1726,23 +1737,29 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
        ; tkvs <- quantifyTyVars emptyVarSet vars
 
              -- Zonk to Types
-       ; (ze, qtkvs) <- zonkTyBndrsX emptyZonkEnv (tkvs ++ user_tvs)
+       ; (ze, tkvs)     <- zonkTyBndrsX emptyZonkEnv tkvs
+       ; (ze, user_tvs) <- zonkTyBndrsX ze user_tvs
        ; arg_tys <- zonkTcTypeToTypes ze arg_tys
        ; ctxt    <- zonkTcTypeToTypes ze ctxt
        ; res_ty  <- zonkTcTypeToType ze res_ty
 
-       ; let (univ_tvs, ex_tvs, eq_preds, arg_subst)
-               = rejigConRes tmpl_bndrs res_tmpl qtkvs res_ty
-             -- NB: this is a /lazy/ binding, so we pass four thunks to
+       ; let (univ_tvs, ex_tvs, tkvs', user_tvs', eq_preds, arg_subst)
+               = rejigConRes tmpl_bndrs res_tmpl tkvs user_tvs res_ty
+             -- NB: this is a /lazy/ binding, so we pass six thunks to
              --     buildDataCon without yet forcing the guards in rejigConRes
              -- See Note [Checking GADT return types]
 
-             -- See Note [Wrong visibility for GADTs]
-             univ_bndrs = mkTyVarBinders Specified univ_tvs
-             ex_bndrs   = mkTyVarBinders Specified ex_tvs
+             -- Compute the user-written tyvar binders. These have the same
+             -- tyvars as univ_tvs/ex_tvs, but perhaps in a different order.
+             -- See Note [DataCon user type variable binders] in DataCon.
+             tkv_bndrs      = mkTyVarBinders Inferred  tkvs'
+             user_tv_bndrs  = mkTyVarBinders Specified user_tvs'
+             all_user_bndrs = tkv_bndrs ++ user_tv_bndrs
+
              ctxt'      = substTys arg_subst ctxt
              arg_tys'   = substTys arg_subst arg_tys
              res_ty'    = substTy  arg_subst res_ty
+
 
        ; fam_envs <- tcGetFamInstEnvs
 
@@ -1756,7 +1773,7 @@ tcConDecl rep_tycon tmpl_bndrs res_tmpl
              ; buildDataCon fam_envs name is_infix
                             rep_nm
                             stricts Nothing field_lbls
-                            univ_bndrs ex_bndrs eq_preds
+                            univ_tvs ex_tvs all_user_bndrs eq_preds
                             ctxt' arg_tys' res_ty' rep_tycon
                   -- NB:  we put data_tc, the type constructor gotten from the
                   --      constructor type signature into the data constructor;
@@ -1842,58 +1859,6 @@ tcConArg bty
         ; return (arg_ty, getBangStrictness bty) }
 
 {-
-Note [Wrong visibility for GADTs]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-GADT tyvars shouldn't all be specified, but it's hard to do much better, as
-described in #11721, which is duplicated here for convenience:
-
-Consider
-
-  data X a where
-    MkX :: b -> Proxy a -> X a
-
-According to the rules around specified vs. generalized variables around
-TypeApplications, the type of MkX should be
-
-  MkX :: forall {k} (b :: *) (a :: k). b -> Proxy a -> X a
-
-A few things to note:
-
-  * The k isn't available for TypeApplications (that's why it's in braces),
-    because it is not user-written.
-
-  * The b is quantified before the a, because b comes before a in the
-    user-written type signature for MkX.
-
-Both of these bullets are currently violated. GHCi reports MkX's type as
-
-  MkX :: forall k (a :: k) b. b -> Proxy a -> X a
-
-It turns out that this is hard to fix. The problem is that GHC expects data
-constructors to have their universal variables followed by their existential
-variables, always. And yet that's violated in the desired type for MkX.
-Furthermore, given the way that GHC deals with GADT return types ("rejigging",
-in technical parlance), it's inconvenient to get the specified/generalized
-distinction correct.
-
-Given time constraints, I'm afraid fixing this all won't make it for 8.0.
-
-Happily, there is are easy-to-articulate rules governing GHC's current (wrong)
-behavior. In a GADT-syntax data constructor:
-
-  * All kind and type variables are considered specified and available for
-    visible type application.
-
-  * Universal variables always come first, in precisely the order they appear
-    in the tycon. Note that universals that are constrained by a GADT return
-    type are missing from the datacon.
-
-  * Existential variables come next. Their order is determined by a
-    user-written forall; or, if there is none, by taking the left-to-right
-    order in the datacon's type and doing a stable topological sort. (This
-    stable topological sort step is the same as for other user-written type
-    signatures.)
-
 Note [Infix GADT constructors]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 We do not currently have syntax to declare an infix constructor in GADT syntax,
@@ -1927,7 +1892,7 @@ defined yet.
 
 So, we want to make rejigConRes lazy and then check the validity of
 the return type in checkValidDataCon.  To do this we /always/ return a
-4-tuple from rejigConRes (so that we can compute the return type from it, which
+6-tuple from rejigConRes (so that we can compute the return type from it, which
 checkValidDataCon needs), but the first three fields may be bogus if
 the return type isn't valid (the last equation for rejigConRes).
 
@@ -1945,19 +1910,26 @@ errors reported in one pass.  See Trac #7175, and #10836.
 -- In this case orig_res_ty = T (e,e)
 
 rejigConRes :: [TyConBinder] -> Type    -- Template for result type; e.g.
-                                  -- data instance T [a] b c = ...
+                                  -- data instance T [a] b c ...
                                   --      gives template ([a,b,c], T [a] b c)
                                   -- Type must be of kind *!
-            -> [TyVar]            -- where MkT :: forall x y z. ...
+            -> [TyVar]            -- The constructor's user-written, inferred
+                                  -- type variables
+            -> [TyVar]            -- The constructor's user-written, specified
+                                  -- type variables
             -> Type               -- res_ty type must be of kind *
             -> ([TyVar],          -- Universal
                 [TyVar],          -- Existential (distinct OccNames from univs)
+                [TyVar],          -- The constructor's rejigged, user-written,
+                                  -- inferred type variables
+                [TyVar],          -- The constructor's rejigged, user-written,
+                                  -- specified type variables
                 [EqSpec],      -- Equality predicates
                 TCvSubst)      -- Substitution to apply to argument types
         -- We don't check that the TyCon given in the ResTy is
         -- the same as the parent tycon, because checkValidDataCon will do it
 
-rejigConRes tmpl_bndrs res_tmpl dc_tvs res_ty
+rejigConRes tmpl_bndrs res_tmpl dc_inferred_tvs dc_specified_tvs res_ty
         -- E.g.  data T [a] b c where
         --         MkT :: forall x y z. T [(x,y)] z z
         -- The {a,b,c} are the tmpl_tvs, and the {x,y,z} are the dc_tvs
@@ -1968,7 +1940,12 @@ rejigConRes tmpl_bndrs res_tmpl dc_tvs res_ty
         --          b              b~z
         --          z
         -- Existentials are the leftover type vars: [x,y]
-        -- So we return ([a,b,z], [x,y], [a~(x,y),b~z], <arg-subst>)
+        -- The user-written type variables are what is listed in the forall:
+        --   [x, y, z] (all specified). We must rejig these as well.
+        --   See Note [DataCon user type variable binders] in DataCon.
+        -- So we return ( [a,b,z], [x,y]
+        --              , [], [x,y,z]
+        --              , [a~(x,y),b~z], <arg-subst> )
   | Just subst <- ASSERT( isLiftedTypeKind (typeKind res_ty) )
                   ASSERT( isLiftedTypeKind (typeKind res_tmpl) )
                   tcMatchTy res_tmpl res_ty
@@ -1977,9 +1954,19 @@ rejigConRes tmpl_bndrs res_tmpl dc_tvs res_ty
         (arg_subst, substed_ex_tvs)
           = mapAccumL substTyVarBndr kind_subst raw_ex_tvs
 
+        -- After rejigging the existential tyvars, the resulting substitution
+        -- gives us exactly what we need to rejig the user-written tyvars,
+        -- since the dcUserTyVarBinders invariant guarantees that the
+        -- substitution has *all* the tyvars in its domain.
+        -- See Note [DataCon user type variable binders] in DataCon.
+        subst_user_tvs = map (getTyVar "rejigConRes" . substTyVar arg_subst)
+        substed_inferred_tvs  = subst_user_tvs dc_inferred_tvs
+        substed_specified_tvs = subst_user_tvs dc_specified_tvs
+
         substed_eqs = map (substEqSpec arg_subst) raw_eqs
     in
-    (univ_tvs, substed_ex_tvs, substed_eqs, arg_subst)
+    (univ_tvs, substed_ex_tvs, substed_inferred_tvs, substed_specified_tvs,
+     substed_eqs, arg_subst)
 
   | otherwise
         -- If the return type of the data constructor doesn't match the parent
@@ -1992,8 +1979,10 @@ rejigConRes tmpl_bndrs res_tmpl dc_tvs res_ty
         -- albeit bogus, relying on checkValidDataCon to check the
         --  bad-result-type error before seeing that the other fields look odd
         -- See Note [Checking GADT return types]
-  = (tmpl_tvs, dc_tvs `minusList` tmpl_tvs, [], emptyTCvSubst)
+  = (tmpl_tvs, dc_tvs `minusList` tmpl_tvs, dc_inferred_tvs, dc_specified_tvs,
+     [], emptyTCvSubst)
   where
+    dc_tvs   = dc_inferred_tvs ++ dc_specified_tvs
     tmpl_tvs = binderVars tmpl_bndrs
 
 {- Note [mkGADTVars]
@@ -2362,6 +2351,7 @@ checkValidTyCon tc
                ; let ex_ok = existential_ok || gadt_ok
                      -- Data cons can have existential context
                ; mapM_ (checkValidDataCon dflags ex_ok tc) data_cons
+               ; mapM_ (checkPartialRecordField data_cons) (tyConFieldLabels tc)
 
                 -- Check that fields with the same name share a type
                ; mapM_ check_fields groups }}
@@ -2401,12 +2391,35 @@ checkValidTyCon tc
         fty1 = dataConFieldType con1 lbl
         lbl = flLabel label
 
-        checkOne (_, con2)    -- Do it bothways to ensure they are structurally identical
+        checkOne (_, con2)    -- Do it both ways to ensure they are structurally identical
             = do { checkFieldCompat lbl con1 con2 res1 res2 fty1 fty2
                  ; checkFieldCompat lbl con2 con1 res2 res1 fty2 fty1 }
             where
                 (_, _, _, res2) = dataConSig con2
                 fty2 = dataConFieldType con2 lbl
+
+checkPartialRecordField :: [DataCon] -> FieldLabel -> TcM ()
+-- Checks the partial record field selector, and warns.
+-- See Note [Checking partial record field]
+checkPartialRecordField all_cons fld
+  = setSrcSpan loc $
+      warnIfFlag Opt_WarnPartialFields
+        (not is_exhaustive && not (startsWithUnderscore occ_name))
+        (sep [text "Use of partial record field selector" <> colon,
+              nest 2 $ quotes (ppr occ_name)])
+  where
+    sel_name = flSelector fld
+    loc    = getSrcSpan sel_name
+    occ_name = getOccName sel_name
+
+    (cons_with_field, cons_without_field) = partition has_field all_cons
+    has_field con = fld `elem` (dataConFieldLabels con)
+    is_exhaustive = all (dataConCannotMatch inst_tys) cons_without_field
+
+    con1 = ASSERT( not (null cons_with_field) ) head cons_with_field
+    (univ_tvs, _, eq_spec, _, _, _) = dataConFullSig con1
+    eq_subst = mkTvSubstPrs (map eqSpecPair eq_spec)
+    inst_tys = substTyVars eq_subst univ_tvs
 
 checkFieldCompat :: FieldLabelString -> DataCon -> DataCon
                  -> Type -> Type -> Type -> Type -> TcM ()
@@ -2513,6 +2526,32 @@ checkValidDataCon dflags existential_ok tc con
         ; checkTc (existential_ok || isVanillaDataCon con)
                   (badExistential con)
 
+        ; typeintype <- xoptM LangExt.TypeInType
+        ; let (_, _, eq_specs, _, _, _) = dataConFullSig con
+                -- dataConEqSpec retrieves both the real GADT equalities
+                -- plus any user-written GADT-like equalities. But we don't
+                -- want anything user-written. If we don't exclude user-written
+                -- ones, test case polykinds/T13391a fails.
+
+              invisible_gadt_eq_specs = filter is_invisible_eq_spec eq_specs
+              univ_tvs = dataConUnivTyVars con
+              tc_bndrs = tyConBinders tc
+
+              vis_map :: VarEnv ArgFlag
+              vis_map = zipVarEnv univ_tvs (map tyConBinderArgFlag tc_bndrs)
+
+                -- See Note [Wrong visibility for GADTs] for why we have to build the map
+                -- above instead of just looking at the datacon tyvar binder
+              is_invisible_eq_spec eq_spec
+                = isInvisibleArgFlag arg_flag
+                where
+                  eq_tv    = eqSpecTyVar eq_spec
+                  arg_flag = expectJust "checkValidDataCon" $
+                             lookupVarEnv vis_map eq_tv
+
+        ; checkTc (typeintype || null invisible_gadt_eq_specs)
+                  (badGADT con invisible_gadt_eq_specs)
+
           -- Check that UNPACK pragmas and bangs work out
           -- E.g.  reject   data T = MkT {-# UNPACK #-} Int     -- No "!"
           --                data T = MkT {-# UNPACK #-} !a      -- Can't unpack
@@ -2540,9 +2579,17 @@ checkValidDataCon dflags existential_ok tc con
       = addWarnTc NoReason (bad_bang n (text "UNPACK pragma lacks '!'"))
       | isSrcUnpacked want_unpack
       , case rep_bang of { HsUnpack {} -> False; _ -> True }
+      -- If not optimising, we don't unpack (rep_bang is never
+      -- HsUnpack), so don't complain!  This happens, e.g., in Haddock.
+      -- See dataConSrcToImplBang.
       , not (gopt Opt_OmitInterfacePragmas dflags)
-           -- If not optimising, se don't unpack, so don't complain!
-           -- See MkId.dataConArgRep, the (HsBang True) case
+      -- When typechecking an indefinite package in Backpack, we
+      -- may attempt to UNPACK an abstract type.  The test here will
+      -- conclude that this is unusable, but it might become usable
+      -- when we actually fill in the abstract type.  As such, don't
+      -- warn in this case (it gives users the wrong idea about whether
+      -- or not UNPACK on abstract types is supported; it is!)
+      , unitIdIsDefinite (thisPackage dflags)
       = addWarnTc NoReason (bad_bang n (text "Ignoring unusable UNPACK pragma"))
       where
         is_strict = case strict_mark of
@@ -2777,7 +2824,7 @@ checkFamFlag tc_name
        ; checkTc idx_tys err_msg }
   where
     err_msg = hang (text "Illegal family declaration for" <+> quotes (ppr tc_name))
-                 2 (text "Use TypeFamilies to allow indexed type families")
+                 2 (text "Enable TypeFamilies to allow indexed type families")
 
 {- Note [Class method constraints]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2939,6 +2986,24 @@ tcSplitSigmaTy. tcSplitNestedSigmaTys will always split any foralls that it
 sees until it can't go any further, so if you called it on the default type
 signature for `each`, it would return (a -> f b) -> s -> f t like we desired.
 
+Note [Checking partial record field]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+This check checks the partial record field selector, and warns (Trac #7169).
+
+For example:
+
+  data T a = A { m1 :: a, m2 :: a } | B { m1 :: a }
+
+The function 'm2' is partial record field, and will fail when it is applied to
+'B'. The warning identifies such partial fields. The check is performed at the
+declaration of T, not at the call-sites of m2.
+
+The warning can be suppressed by prefixing the field-name with an underscore.
+For example:
+
+  data T a = A { m1 :: a, _m2 :: a } | B { m1 :: a }
+
+
 ************************************************************************
 *                                                                      *
                 Checking role validity
@@ -2976,7 +3041,7 @@ checkValidRoleAnnots role_annots tc
           ; _ <- zipWith3M checkRoleAnnot vis_vars the_role_annots vis_roles
           -- Representational or phantom roles for class parameters
           -- quickly lead to incoherence. So, we require
-          -- IncoherentInstances to have them. See #8773.
+          -- IncoherentInstances to have them. See #8773, #14292
           ; incoherent_roles_ok <- xoptM LangExt.IncoherentInstances
           ; checkTc (  incoherent_roles_ok
                     || (not $ isClassTyCon tc)
@@ -3144,20 +3209,20 @@ classArityErr n cls
   where
     mkErr howMany allowWhat =
         vcat [text (howMany ++ " parameters for class") <+> quotes (ppr cls),
-              parens (text ("Use MultiParamTypeClasses to allow "
+              parens (text ("Enable MultiParamTypeClasses to allow "
                                     ++ allowWhat ++ " classes"))]
 
 classFunDepsErr :: Class -> SDoc
 classFunDepsErr cls
   = vcat [text "Fundeps in class" <+> quotes (ppr cls),
-          parens (text "Use FunctionalDependencies to allow fundeps")]
+          parens (text "Enable FunctionalDependencies to allow fundeps")]
 
 badMethPred :: Id -> TcPredType -> SDoc
 badMethPred sel_id pred
   = vcat [ hang (text "Constraint" <+> quotes (ppr pred)
                  <+> text "in the type of" <+> quotes (ppr sel_id))
               2 (text "constrains only the class type variables")
-         , text "Use ConstrainedClassMethods to allow it" ]
+         , text "Enable ConstrainedClassMethods to allow it" ]
 
 noClassTyVarErr :: Class -> TyCon -> SDoc
 noClassTyVarErr clas fam_tc
@@ -3205,26 +3270,34 @@ badDataConTyCon data_con res_ty_tmpl actual_res_ty
     --    underneath the nested foralls and contexts.
     -- 3) Smash together the type variables and class predicates from 1) and
     --    2), and prepend them to the rho type from 2).
-    actual_ex_tvs = dataConExTyVarBinders data_con
+    actual_ex_tvs = dataConExTyVars data_con
     actual_theta  = dataConTheta data_con
     (actual_res_tvs, actual_res_theta, actual_res_rho)
       = tcSplitNestedSigmaTys actual_res_ty
-    actual_res_tvbs = mkTyVarBinders Specified actual_res_tvs
-    suggested_ty = mkForAllTys (actual_ex_tvs ++ actual_res_tvbs) $
+    suggested_ty = mkSpecForAllTys (actual_ex_tvs ++ actual_res_tvs) $
                    mkFunTys (actual_theta ++ actual_res_theta)
                    actual_res_rho
 
 badGadtDecl :: Name -> SDoc
 badGadtDecl tc_name
   = vcat [ text "Illegal generalised algebraic data declaration for" <+> quotes (ppr tc_name)
-         , nest 2 (parens $ text "Use GADTs to allow GADTs") ]
+         , nest 2 (parens $ text "Enable the GADTs extension to allow this") ]
 
 badExistential :: DataCon -> SDoc
 badExistential con
   = hang (text "Data constructor" <+> quotes (ppr con) <+>
                 text "has existential type variables, a context, or a specialised result type")
        2 (vcat [ ppr con <+> dcolon <+> ppr (dataConUserType con)
-               , parens $ text "Use ExistentialQuantification or GADTs to allow this" ])
+               , parens $ text "Enable ExistentialQuantification or GADTs to allow this" ])
+
+badGADT :: DataCon -> [EqSpec] -> SDoc
+badGADT con eq_specs
+  = hang (text "Data constructor" <+> quotes (ppr con) <+>
+               text "constrains the choice of kind parameter" <> plural eq_specs <> colon)
+       2 (vcat (map ppr_eq_spec eq_specs)) $$
+    text "Use TypeInType to allow this"
+  where
+    ppr_eq_spec eq_spec = ppr (eqSpecTyVar eq_spec) <+> char '~' <+> ppr (eqSpecType eq_spec)
 
 badStupidTheta :: Name -> SDoc
 badStupidTheta tc_name

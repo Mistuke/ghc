@@ -65,6 +65,8 @@ typedef struct _GC_FLAGS {
     Time    idleGCDelayTime;    /* units: TIME_RESOLUTION */
     bool doIdleGC;
 
+    Time    longGCSync;         /* units: TIME_RESOLUTION */
+
     StgWord heapBase;           /* address to ask the OS for memory */
 
     StgWord allocLimitGrace;    /* units: *blocks*
@@ -189,6 +191,9 @@ typedef struct _CONCURRENT_FLAGS {
 typedef struct _MISC_FLAGS {
     Time    tickInterval;        /* units: TIME_RESOLUTION */
     bool install_signal_handlers;
+    bool install_seh_handlers;
+    bool generate_dump_file;
+    bool generate_stack_trace;
     bool machineReadable;
     StgWord linkerMemBase;       /* address to ask the OS for memory
                                   * for the linker, NULL ==> off */

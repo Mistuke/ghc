@@ -650,7 +650,7 @@ There are several points to note here:
 
 -  Just as compiling ``A.hs`` produces an interface file ``A.hi``, and
    an object file ``A.o``, so compiling ``A.hs-boot`` produces an
-   interface file ``A.hi-boot``, and an pseudo-object file ``A.o-boot``:
+   interface file ``A.hi-boot``, and a pseudo-object file ``A.o-boot``:
 
    -  The pseudo-object file ``A.o-boot`` is empty (don't link it!), but
       it is very useful when using a Makefile, to record when the
@@ -998,7 +998,18 @@ to ``hs-boot`` files, but with some slight changes:
 
   If you do not write out the constructors, you may need to give a kind to tell
   GHC what the kinds of the type variables are, if they are not the default
-  ``*``.
+  ``*``.  Unlike regular data type declarations, the return kind of an
+  abstract data declaration can be anything (in which case it probably
+  will be implemented using a type synonym.)  This can be used
+  to allow compile-time representation polymorphism (as opposed to
+  `run-time representation polymorphism <#runtime-rep>`__),
+  as in this example::
+
+        signature Number where
+            import GHC.Types
+            data Rep :: RuntimeRep
+            data Number :: TYPE Rep
+            plus :: Number -> Number -> Number
 
   Roles of type parameters are subject to the subtyping
   relation ``phantom < representational < nominal``: for example,

@@ -424,11 +424,13 @@ rnIfaceDecl d@IfaceData{} = do
             binders <- mapM rnIfaceTyConBinder (ifBinders d)
             ctxt <- mapM rnIfaceType (ifCtxt d)
             cons <- rnIfaceConDecls (ifCons d)
+            res_kind <- rnIfaceType (ifResKind d)
             parent <- rnIfaceTyConParent (ifParent d)
             return d { ifName = name
                      , ifBinders = binders
                      , ifCtxt = ctxt
                      , ifCons = cons
+                     , ifResKind = res_kind
                      , ifParent = parent
                      }
 rnIfaceDecl d@IfaceSynonym{} = do
@@ -523,7 +525,8 @@ rnIfaceConDecls IfAbstractTyCon = pure IfAbstractTyCon
 rnIfaceConDecl :: Rename IfaceConDecl
 rnIfaceConDecl d = do
     con_name <- rnIfaceGlobal (ifConName d)
-    con_ex_tvs <- mapM rnIfaceForAllBndr (ifConExTvs d)
+    con_ex_tvs <- mapM rnIfaceTvBndr (ifConExTvs d)
+    con_user_tvbs <- mapM rnIfaceForAllBndr (ifConUserTvBinders d)
     let rnIfConEqSpec (n,t) = (,) n <$> rnIfaceType t
     con_eq_spec <- mapM rnIfConEqSpec (ifConEqSpec d)
     con_ctxt <- mapM rnIfaceType (ifConCtxt d)
@@ -534,6 +537,7 @@ rnIfaceConDecl d = do
     con_stricts <- mapM rnIfaceBang (ifConStricts d)
     return d { ifConName = con_name
              , ifConExTvs = con_ex_tvs
+             , ifConUserTvBinders = con_user_tvbs
              , ifConEqSpec = con_eq_spec
              , ifConCtxt = con_ctxt
              , ifConArgTys = con_arg_tys

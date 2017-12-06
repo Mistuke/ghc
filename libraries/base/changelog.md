@@ -1,7 +1,14 @@
 # Changelog for [`base` package](http://hackage.haskell.org/package/base)
 
 ## 4.11.0.0 *TBA*
-  * Bundled with GHC *TBA*
+  * Bundled with GHC 8.4.1
+
+  * Deprecated `GHC.Stats.GCStats` interface has been removed.
+
+  * Add `showHFloat` to `Numeric`
+
+  * Add `Div`, `Mod`, and `Log2` functions on type-level naturals
+    in `GHC.TypeLits`.
 
   * Add `Alternative` instance for `ZipList` (#13520)
 
@@ -52,8 +59,22 @@
   * `Type.Reflection.withTypeable` is now polymorphic in the `RuntimeRep` of
     its result.
 
-## 4.10.0.0 *April 2017*
-  * Bundled with GHC *TBA*
+  * Add `installSEHHandlers` to `MiscFlags` in `GHC.RTS.Flags` to determine if
+    exception handling is enabled.
+
+  * The deprecated functions `isEmptyChan` and `unGetChan` in
+    `Control.Concurrent.Chan` have been removed (#13561).
+
+  * Add `generateCrashDumpFile` to `MiscFlags` in `GHC.RTS.Flags` to determine
+    if a core dump will be generated on crashes.
+
+  * Add `generateStackTrace` to `MiscFlags` in `GHC.RTS.Flags` to determine if
+    stack traces will be generated on unhandled exceptions by the RTS.
+
+  * `getExecutablePath` now resolves symlinks on Windows (#14483)
+
+## 4.10.0.0 *July 2017*
+  * Bundled with GHC 8.2.1
 
   * `Data.Type.Bool.Not` given a type family dependency (#12057).
 

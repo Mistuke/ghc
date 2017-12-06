@@ -867,7 +867,7 @@ kind parameters. Consider this code (also from Trac #11732):
 
     newtype Fun a b = Fun (a -> b) deriving (Cat k)
 
-Even though we requested an derived instance of the form (Cat k Fun), the
+Even though we requested a derived instance of the form (Cat k Fun), the
 kind unification will actually generate (Cat * Fun) (i.e., the same thing as if
 the user wrote deriving (Cat *)).
 
@@ -956,6 +956,10 @@ mkEqnHelp overlap_mode tvs cls cls_tys tycon tc_args mtheta deriv_strat
               -- If it's still a data family, the lookup failed; i.e no instance exists
        ; when (isDataFamilyTyCon rep_tc)
               (bale_out (text "No family instance for" <+> quotes (pprTypeApp tycon tc_args)))
+       ; is_boot <- tcIsHsBootOrSig
+       ; when is_boot $
+              bale_out (text "Cannot derive instances in hs-boot files"
+                    $+$ text "Write an instance declaration instead")
 
        ; let deriv_env = DerivEnv
                          { denv_overlap_mode = overlap_mode

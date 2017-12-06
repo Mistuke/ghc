@@ -163,7 +163,7 @@ stmtToInstrs stmt = do
 
 
 {-
-Now, given a tree (the argument to an CmmLoad) that references memory,
+Now, given a tree (the argument to a CmmLoad) that references memory,
 produce a suitable addressing mode.
 
 A Rule of the Game (tm) for Amodes: use of the addr bit must
@@ -650,6 +650,7 @@ outOfLineMachOp_table mop
         MO_Memcpy _  -> fsLit "memcpy"
         MO_Memset _  -> fsLit "memset"
         MO_Memmove _ -> fsLit "memmove"
+        MO_Memcmp _  -> fsLit "memcmp"
 
         MO_BSwap w   -> fsLit $ bSwapLabel w
         MO_PopCnt w  -> fsLit $ popCntLabel w

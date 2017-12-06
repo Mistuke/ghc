@@ -40,7 +40,8 @@ newBlockId :: MonadUnique m => m BlockId
 newBlockId = mkBlockId <$> getUniqueM
 
 blockLbl :: BlockId -> CLabel
-blockLbl label = mkAsmTempLabel (getUnique label)
+blockLbl label = mkLocalBlockLabel (getUnique label)
 
 infoTblLbl :: BlockId -> CLabel
-infoTblLbl label = mkInfoTableLabel (mkFCallName (getUnique label) "block") NoCafRefs
+infoTblLbl label
+  = mkBlockInfoTableLabel (mkFCallName (getUnique label) "block") NoCafRefs

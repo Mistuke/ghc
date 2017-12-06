@@ -35,12 +35,12 @@ test('derefnull',
       when(platform('i386-apple-darwin'), [ignore_stderr, exit_code(139)]),
       when(platform('x86_64-apple-darwin'), [ignore_stderr, exit_code(139)]),
       when(platform('powerpc-apple-darwin'), [ignore_stderr, exit_code(139)]),
-      when(opsys('mingw32'), [exit_code(1), normalise_fun(normalise_address)]),
+      when(opsys('mingw32'), [ignore_stderr, exit_code(127)]),
       # since these test are supposed to crash the
       # profile report will be empty always.
       # so disable the check for profiling
       when(opsys('mingw32'), omit_ways(prof_ways))],
-     compile_and_run, [''])
+     compile_and_run, ['-with-rtsopts="--generate-stack-traces=no"'])
 test('divbyzero',
      [# SIGFPE on Linux
       exit_code(136),
@@ -54,7 +54,7 @@ test('divbyzero',
       # C programs compiled with gcc exit normally, so do we.
       when(platform('powerpc64-unknown-linux'), [ignore_stdout, exit_code(0)]),
       when(platform('powerpc64le-unknown-linux'), [ignore_stdout, exit_code(0)]),
-      when(opsys('mingw32'), exit_code(1)),
+      when(opsys('mingw32'), [ignore_stderr, exit_code(127)]),
       # The output under OS X is too unstable to readily compare
       when(platform('i386-apple-darwin'), [ignore_stderr, exit_code(136)]),
       when(platform('x86_64-apple-darwin'), [ignore_stderr, exit_code(136)]),
@@ -63,7 +63,7 @@ test('divbyzero',
       # profile report will be empty always.
       # so disable the check for profiling
       when(opsys('mingw32'), omit_ways(prof_ways))],
-     compile_and_run, [''])
+     compile_and_run, ['-with-rtsopts="--generate-stack-traces=no"'])
 
 test('outofmem', when(opsys('darwin'), skip),
                  run_command, ['$MAKE -s --no-print-directory outofmem'])
@@ -96,6 +96,9 @@ test('stack002', [extra_files(['stack001.hs']),
 test('stack003', [ omit_ways('ghci'), # uses unboxed tuples
                    extra_run_opts('500000 +RTS -kc1k -kb100 -K96m -RTS') ],
                  compile_and_run, [''])
+
+# Test that +RTS -K0 (e.g. no stack limit) parses correctly
+test('stack004', [extra_run_opts('+RTS -K0 -RTS') ], compile_and_run, [''])
 
 test('atomicinc', [ c_src, only_ways(['normal','threaded1', 'threaded2']) ], compile_and_run, [''])
 test('atomicxchg', [ c_src, only_ways(['threaded1', 'threaded2']) ],

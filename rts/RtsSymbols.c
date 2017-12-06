@@ -869,6 +869,7 @@
       SymI_HasProto(stg_waitWritezh)                                    \
       SymI_HasProto(stg_writeTVarzh)                                    \
       SymI_HasProto(stg_yieldzh)                                        \
+      SymI_NeedsProto(stg_badAlignment_entry)                           \
       SymI_NeedsProto(stg_interp_constr1_entry)                         \
       SymI_NeedsProto(stg_interp_constr2_entry)                         \
       SymI_NeedsProto(stg_interp_constr3_entry)                         \
@@ -912,6 +913,7 @@
       SymI_HasProto(store_load_barrier)                                 \
       SymI_HasProto(load_load_barrier)                                  \
       SymI_HasProto(cas)                                                \
+      SymI_HasProto(_assertFail)                                        \
       RTS_USER_SIGNALS_SYMBOLS                                          \
       RTS_INTCHAR_SYMBOLS
 

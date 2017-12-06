@@ -229,7 +229,7 @@ AC_DEFUN([FPTOOLS_SET_HASKELL_PLATFORM_VARS],
 
     checkVendor() {
         case [$]1 in
-        dec|none|unknown|hp|apple|next|sun|sgi|ibm|montavista|portbld)
+        dec|none|unknown|hp|apple|next|sun|sgi|ibm|montavista|portbld|alpine)
             ;;
         *)
             AC_MSG_WARN([Unknown vendor [$]1])
@@ -858,8 +858,12 @@ char **argv;
 esac]);
 AC_SUBST([LeadingUnderscore], [`echo $fptools_cv_leading_underscore | sed 'y/yesno/YESNO/'`])
 if test x"$fptools_cv_leading_underscore" = xyes; then
+   AC_SUBST([CabalLeadingUnderscore],[True])
    AC_DEFINE([LEADING_UNDERSCORE], [1], [Define to 1 if C symbols have a leading underscore added by the compiler.])
-fi])# FP_LEADING_UNDERSCORE
+else
+   AC_SUBST([CabalLeadingUnderscore],[False])
+fi
+])# FP_LEADING_UNDERSCORE
 
 
 # FP_COMPARE_VERSIONS(VERSION1, TEST, VERSION2, [ACTION-IF-TRUE], [ACTION-IF-FALSE])
@@ -1071,9 +1075,20 @@ AC_SUBST([LdHasFilelist])
 # FP_PROG_AR
 # ----------
 # Sets fp_prog_ar to a path to ar. Exits if no ar can be found
+# The host normalization on Windows breaks autoconf, it no longer
+# thinks that target == host so it never checks the unqualified
+# tools for Windows. See #14274.
 AC_DEFUN([FP_PROG_AR],
 [if test -z "$fp_prog_ar"; then
-  AC_PATH_PROG([fp_prog_ar], [ar])
+  if test "$HostOS" = "mingw32"
+  then
+    AC_PATH_PROG([fp_prog_ar], [ar])
+    if test -n "$fp_prog_ar"; then
+      fp_prog_ar=$(cygpath -m $fp_prog_ar)
+    fi
+  else
+    AC_CHECK_TARGET_TOOL([fp_prog_ar], [ar])
+  fi
 fi
 if test -z "$fp_prog_ar"; then
   AC_MSG_ERROR([cannot find ar in your PATH, no idea how to make a library])
@@ -1138,11 +1153,15 @@ if test $fp_prog_ar_is_gnu = yes; then
   fp_cv_prog_ar_args="q"
 else
   touch conftest.dummy
-  for fp_var in clqsZ clqs cqs clq cq ; do
+  for fp_var in qclsZ qcls qcs qcl qc ; do
      rm -f conftest.a
-     if "$fp_prog_ar" $fp_var conftest.a conftest.dummy > /dev/null 2> /dev/null; then
-        fp_cv_prog_ar_args=$fp_var
-        break
+     if "$fp_prog_ar" $fp_var conftest.a conftest.dummy > /dev/null 2> /dev/null ; then
+       # Also check that a result was created; it seems some llvm-ar versions
+       # exit with code zero even if they fail to parse the command line.
+       if test -f conftest.a ; then
+         fp_cv_prog_ar_args=$fp_var
+         break
+       fi
      fi
   done
   rm -f conftest*
@@ -1151,9 +1170,6 @@ else
   fi
 fi])
 fp_prog_ar_args=$fp_cv_prog_ar_args
-if test "$HostOS" = "mingw32"; then
-    ArCmd=$(cygpath -m $ArCmd)
-fi
 AC_SUBST([ArCmd], ["$fp_prog_ar"])
 AC_SUBST([ArArgs], ["$fp_prog_ar_args"])
 
@@ -1221,25 +1237,15 @@ if test -z "$CC"
 then
   AC_MSG_ERROR([gcc is required])
 fi
-GccLT34=NO
-GccLT44=NO
-GccLT46=NO
 AC_CACHE_CHECK([version of gcc], [fp_cv_gcc_version],
 [
-    fp_cv_gcc_version="`$CC -v 2>&1 | grep 'version ' | sed -e 's/.*version [[^0-9]]*\([[0-9.]]*\).*/\1/g'`"
-    FP_COMPARE_VERSIONS([$fp_cv_gcc_version], [-lt], [3.0],
-                        [AC_MSG_ERROR([Need at least gcc version 3.0 (3.4+ recommended)])])
-    # See #2770: gcc 2.95 doesn't work any more, apparently.  There probably
-    # isn't a very good reason for that, but for now just make configure
-    # fail.
-    FP_COMPARE_VERSIONS([$fp_cv_gcc_version], [-lt], [3.4], GccLT34=YES)
-    FP_COMPARE_VERSIONS([$fp_cv_gcc_version], [-lt], [4.4], GccLT44=YES)
-    FP_COMPARE_VERSIONS([$fp_cv_gcc_version], [-lt], [4.6], GccLT46=YES)
+    # Be sure only to look at the first occurrence of the "version " string;
+    # Some Apple compilers emit multiple messages containing this string.
+    fp_cv_gcc_version="`$CC -v 2>&1 | sed -n -e '1,/version /s/.*version [[^0-9]]*\([[0-9.]]*\).*/\1/p'`"
+    FP_COMPARE_VERSIONS([$fp_cv_gcc_version], [-lt], [4.7],
+                        [AC_MSG_ERROR([Need at least gcc version 4.7])])
 ])
 AC_SUBST([GccVersion], [$fp_cv_gcc_version])
-AC_SUBST(GccLT34)
-AC_SUBST(GccLT44)
-AC_SUBST(GccLT46)
 ])# FP_GCC_VERSION
 
 dnl Check to see if the C compiler is clang or llvm-gcc
@@ -1891,6 +1897,18 @@ AC_DEFUN([GHC_LLVM_TARGET], [
       llvm_target_vendor="unknown"
       llvm_target_os="$3""hf"
       ;;
+    *-mingw32|*-mingw64|*-msys)
+      llvm_target_vendor="unknown"
+      llvm_target_os="windows"
+      ;;
+    # retain any android and gnueabi linux flavours
+    # for the LLVM Target. Otherwise these would be
+    # turned into just `-linux` and fail to be found
+    # in the `llvm-targets` file.
+    *-android*|*-gnueabi*)
+      GHC_CONVERT_VENDOR([$2],[llvm_target_vendor])
+      llvm_target_os="$3"
+      ;;
     *)
       GHC_CONVERT_VENDOR([$2],[llvm_target_vendor])
       GHC_CONVERT_OS([$3],[$1],[llvm_target_os])
@@ -2023,7 +2041,7 @@ AC_DEFUN([XCODE_VERSION],[
 #
 AC_DEFUN([FIND_LLVM_PROG],[
     # Test for program with and without version name.
-    AC_CHECK_TOOLS([$1], [$2-$3 $2])
+    AC_CHECK_TOOLS([$1], [$2-$3 $2], [:])
     if test "$$1" != ":"; then
         AC_MSG_CHECKING([$$1 is version $3])
         if test `$$1 --version | grep -c "version $3"` -gt 0 ; then
@@ -2032,6 +2050,8 @@ AC_DEFUN([FIND_LLVM_PROG],[
             AC_MSG_RESULT(no)
             $1=""
         fi
+    else
+        $1=""
     fi
 ])
 
@@ -2227,6 +2247,7 @@ $2=$HS_CPP_ARGS
 # ----------------------
 # whether to use libbfd for debugging RTS
 AC_DEFUN([FP_BFD_SUPPORT], [
+    AC_SUBST([CabalHaveLibbfd], [False])
     AC_ARG_ENABLE(bfd-debug,
         [AC_HELP_STRING([--enable-bfd-debug],
               [Enable symbol resolution for -debug rts ('+RTS -Di') via binutils' libbfd [default=no]])],
@@ -2264,7 +2285,7 @@ AC_DEFUN([FP_BFD_SUPPORT], [
                                     bfd_get_symbol_info(abfd,symbol_table[0],&info);
                                 }
                         ],
-                        [],dnl bfd seems to work
+                        [AC_SUBST([CabalHaveLibbfd], [True])],dnl bfd seems to work
                         [AC_MSG_ERROR([can't use 'bfd' library])])
             LIBS="$save_LIBS"
         ]
@@ -2309,28 +2330,51 @@ AC_DEFUN([FIND_LD],[
       [],
       [enable_ld_override=yes])
 
-    if test "x$enable_ld_override" = "xyes"; then
-        TmpLd="$LD" # In case the user set LD
-        AC_CHECK_TARGET_TOOLS([TmpLd], [ld.lld ld.gold ld])
-
-        out=`$TmpLd --version`
-        case $out in
-          "GNU ld"*)   FP_CC_LINKER_FLAG_TRY(bfd, $2) ;;
-          "GNU gold"*) FP_CC_LINKER_FLAG_TRY(gold, $2) ;;
-          "LLD"*)      FP_CC_LINKER_FLAG_TRY(lld, $2) ;;
-          *) AC_MSG_NOTICE([unknown linker version $out]) ;;
-        esac
-        if test "z$$2" = "z"; then
-            AC_MSG_NOTICE([unable to convince '$CC' to use linker '$TmpLd'])
+    find_ld() {
+        # Make sure the user didn't specify LD manually.
+        if test "z$LD" != "z"; then
             AC_CHECK_TARGET_TOOL([LD], [ld])
-        else
-            LD="$TmpLd"
+            return
         fi
-   else
-        AC_CHECK_TARGET_TOOL([LD], [ld])
-   fi
 
-   CHECK_LD_COPY_BUG([$1])
+        # Manually iterate over possible names since we want to ensure that, e.g.,
+        # if ld.lld is installed but gcc doesn't support -fuse-ld=lld, that we
+        # then still try ld.gold and -fuse-ld=gold.
+        for possible_ld in ld.lld ld.gold ld; do
+            TmpLd="" # In case the user set LD
+            AC_CHECK_TARGET_TOOL([TmpLd], [$possible_ld])
+            if test "x$TmpLd" = "x"; then continue; fi
+
+            out=`$TmpLd --version`
+            case $out in
+              "GNU ld"*)   FP_CC_LINKER_FLAG_TRY(bfd, $2) ;;
+              "GNU gold"*) FP_CC_LINKER_FLAG_TRY(gold, $2) ;;
+              "LLD"*)      FP_CC_LINKER_FLAG_TRY(lld, $2) ;;
+              *) AC_MSG_NOTICE([unknown linker version $out]) ;;
+            esac
+            if test "z$$2" = "z"; then
+                AC_MSG_NOTICE([unable to convince '$CC' to use linker '$TmpLd'])
+                # a terrible hack to prevent autoconf from caching the previous
+                # AC_CHECK_TARGET_TOOL result since next time we'll be looking
+                # for another ld variant.
+                $as_unset ac_cv_prog_ac_ct_TmpLd
+            else
+                LD="$TmpLd"
+                return
+            fi
+        done
+
+        # Fallback
+        AC_CHECK_TARGET_TOOL([LD], [ld])
+    }
+
+    if test "x$enable_ld_override" = "xyes"; then
+        find_ld
+    else
+        AC_CHECK_TARGET_TOOL([LD], [ld])
+    fi
+
+    CHECK_LD_COPY_BUG([$1])
 ])
 
 # LocalWords:  fi

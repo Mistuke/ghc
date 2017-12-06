@@ -51,6 +51,7 @@ import Util
 import ErrUtils
 import Module          ( moduleName, pprModuleName )
 
+
 {-
 The guts of the simplifier is in this module, but the driver loop for
 the simplifier is in SimplCore.hs.
@@ -204,7 +205,7 @@ simplRecOrTopPair env top_lvl is_rec mb_cont old_bndr new_bndr rhs
   | Just cont <- mb_cont
   = ASSERT( isNotTopLevel top_lvl && isJoinId new_bndr )
     trace_bind "join" $
-    simplJoinBind env cont old_bndr new_bndr rhs
+    simplJoinBind env cont old_bndr new_bndr rhs env
 
   | otherwise
   = trace_bind "normal" $
@@ -300,10 +301,11 @@ simplJoinBind :: SimplEnv
               -> InId -> OutId          -- Binder, both pre-and post simpl
                                         -- The OutId has IdInfo, except arity,
                                         --   unfolding
-              -> InExpr
+              -> InExpr -> SimplEnv     -- The right hand side and its env
               -> SimplM (SimplFloats, SimplEnv)
-simplJoinBind env cont old_bndr new_bndr rhs
-  = do  { rhs' <- simplJoinRhs env old_bndr rhs cont
+simplJoinBind env cont old_bndr new_bndr rhs rhs_se
+  = do  { let rhs_env = rhs_se `setInScopeFromE` env
+        ; rhs' <- simplJoinRhs rhs_env old_bndr rhs cont
         ; completeBind env NotTopLevel (Just cont) old_bndr new_bndr rhs' }
 
 --------------------------
@@ -1465,13 +1467,13 @@ simplNonRecJoinPoint env bndr rhs body cont
        ; simplExprF (extendIdSubst env bndr (mkContEx env rhs)) body cont }
 
    | otherwise
-   = wrapJoinCont env cont $ \ cont ->
+   = wrapJoinCont env cont $ \ env cont ->
      do { -- We push join_cont into the join RHS and the body;
           -- and wrap wrap_cont around the whole thing
         ; let res_ty = contResultType cont
         ; (env1, bndr1)    <- simplNonRecJoinBndr env res_ty bndr
         ; (env2, bndr2)    <- addBndrRules env1 bndr bndr1
-        ; (floats1, env3)  <- simplJoinBind env2 cont bndr bndr2 rhs
+        ; (floats1, env3)  <- simplJoinBind env2 cont bndr bndr2 rhs env
         ; (floats2, body') <- simplExprF env3 body cont
         ; return (floats1 `addFloats` floats2, body') }
 
@@ -1481,7 +1483,7 @@ simplRecJoinPoint :: SimplEnv -> [(InId, InExpr)]
                   -> InExpr -> SimplCont
                   -> SimplM (SimplFloats, OutExpr)
 simplRecJoinPoint env pairs body cont
-  = wrapJoinCont env cont $ \ cont ->
+  = wrapJoinCont env cont $ \ env cont ->
     do { let bndrs = map fst pairs
              res_ty = contResultType cont
        ; env1 <- simplRecJoinBndrs env res_ty bndrs
@@ -1493,17 +1495,17 @@ simplRecJoinPoint env pairs body cont
 
 --------------------
 wrapJoinCont :: SimplEnv -> SimplCont
-             -> (SimplCont -> SimplM (SimplFloats, OutExpr))
+             -> (SimplEnv -> SimplCont -> SimplM (SimplFloats, OutExpr))
              -> SimplM (SimplFloats, OutExpr)
 -- Deal with making the continuation duplicable if necessary,
 -- and with the no-case-of-case situation.
 wrapJoinCont env cont thing_inside
   | contIsStop cont        -- Common case; no need for fancy footwork
-  = thing_inside cont
+  = thing_inside env cont
 
   | not (sm_case_case (getMode env))
     -- See Note [Join points wih -fno-case-of-case]
-  = do { (floats1, expr1) <- thing_inside (mkBoringStop (contHoleType cont))
+  = do { (floats1, expr1) <- thing_inside env (mkBoringStop (contHoleType cont))
        ; let (floats2, expr2) = wrapJoinFloatsX floats1 expr1
        ; (floats3, expr3) <- rebuild (env `setInScopeFromF` floats2) expr2 cont
        ; return (floats2 `addFloats` floats3, expr3) }
@@ -1511,7 +1513,7 @@ wrapJoinCont env cont thing_inside
   | otherwise
     -- Normal case; see Note [Join points and case-of-case]
   = do { (floats1, cont')  <- mkDupableCont env cont
-       ; (floats2, result) <- thing_inside cont'
+       ; (floats2, result) <- thing_inside (env `setInScopeFromF` floats1) cont'
        ; return (floats1 `addFloats` floats2, result) }
 
 
@@ -2136,41 +2138,49 @@ to just
 This particular example shows up in default methods for
 comparison operations (e.g. in (>=) for Int.Int32)
 
-Note [Case elimination: lifted case]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-If a case over a lifted type has a single alternative, and is being used
-as a strict 'let' (all isDeadBinder bndrs), we may want to do this
-transformation:
+Note [Case to let transformation]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+If a case over a lifted type has a single alternative, and is being
+used as a strict 'let' (all isDeadBinder bndrs), we may want to do
+this transformation:
 
     case e of r       ===>   let r = e in ...r...
       _ -> ...r...
 
-        (a) 'e' is already evaluated (it may so if e is a variable)
-            Specifically we check (exprIsHNF e).  In this case
-            we can just allocate the WHNF directly with a let.
-or
-        (b) 'x' is not used at all and e is ok-for-speculation
-             The ok-for-spec bit checks that we don't lose any
-             exceptions or divergence.
+We treat the unlifted and lifted cases separately:
 
-             NB: it'd be *sound* to switch from case to let if the
-             scrutinee was not yet WHNF but was guaranteed to
-             converge; but sticking with case means we won't build a
-             thunk
+* Unlifted case: 'e' satisfies exprOkForSpeculation
+  (ok-for-spec is needed to satisfy the let/app invariant).
+  This turns     case a +# b of r -> ...r...
+  into           let r = a +# b in ...r...
+  and thence     .....(a +# b)....
 
-or
-        (c) 'x' is used strictly in the body, and 'e' is a variable
-            Then we can just substitute 'e' for 'x' in the body.
-            See Note [Eliminating redundant seqs]
+  However, if we have
+      case indexArray# a i of r -> ...r...
+  we might like to do the same, and inline the (indexArray# a i).
+  But indexArray# is not okForSpeculation, so we don't build a let
+  in rebuildCase (lest it get floated *out*), so the inlining doesn't
+  happen either.  Annoying.
 
-For (b), the "not used at all" test is important.  Consider
-   case (case a ># b of { True -> (p,q); False -> (q,p) }) of
-     r -> blah
-The scrutinee is ok-for-speculation (it looks inside cases), but we do
-not want to transform to
-   let r = case a ># b of { True -> (p,q); False -> (q,p) }
-   in blah
-because that builds an unnecessary thunk.
+* Lifted case: we need to be sure that the expression is already
+  evaluated (exprIsHNF).  If it's not already evaluated
+      - we risk losing exceptions, divergence or
+        user-specified thunk-forcing
+      - even if 'e' is guaranteed to converge, we don't want to
+        create a thunk (call by need) instead of evaluating it
+        right away (call by value)
+
+  However, we can turn the case into a /strict/ let if the 'r' is
+  used strictly in the body.  Then we won't lose divergence; and
+  we won't build a thunk because the let is strict.
+  See also Note [Eliminating redundant seqs]
+
+  NB: absentError satisfies exprIsHNF: see Note [aBSENT_ERROR_ID] in MkCore.
+  We want to turn
+     case (absentError "foo") of r -> ...MkT r...
+  into
+     let r = absentError "foo" in ...MkT r...
+
 
 Note [Eliminating redundant seqs]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2207,23 +2217,6 @@ Just for reference, the original code (added Jan 13) looked like this:
 
 (This came up when fixing Trac #7542. See also Note [Eta reduction of
 an eval'd function] in CoreUtils.)
-
-
-Note [Case elimination: unlifted case]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Consider
-   case a +# b of r -> ...r...
-Then we do case-elimination (to make a let) followed by inlining,
-to get
-        .....(a +# b)....
-If we have
-   case indexArray# a i of r -> ...r...
-we might like to do the same, and inline the (indexArray# a i).
-But indexArray# is not okForSpeculation, so we don't build a let
-in rebuildCase (lest it get floated *out*), so the inlining doesn't
-happen either.
-
-This really isn't a big deal I think. The let can be
 
 
 Further notes about case elimination
@@ -2334,11 +2327,11 @@ rebuildCase env scrut case_bndr alts@[(_, bndrs, rhs)] cont
   --      a) it binds only the case-binder
   --      b) unlifted case: the scrutinee is ok-for-speculation
   --           lifted case: the scrutinee is in HNF (or will later be demanded)
+  -- See Note [Case to let transformation]
   | all_dead_bndrs
-  , if is_unlifted
-    then exprOkForSpeculation scrut  -- See Note [Case elimination: unlifted case]
-    else exprIsHNF scrut             -- See Note [Case elimination: lifted case]
-      || scrut_is_demanded_var scrut
+  , if isUnliftedType (idType case_bndr)
+    then exprOkForSpeculation scrut
+    else exprIsHNF scrut || scrut_is_demanded_var scrut
   = do { tick (CaseElim case_bndr)
        ; (floats1, env') <- simplNonRecX env case_bndr scrut
        ; (floats2, expr') <- simplExprF env' rhs cont
@@ -2354,9 +2347,8 @@ rebuildCase env scrut case_bndr alts@[(_, bndrs, rhs)] cont
            Just (env', rule_rhs, cont') -> simplExprF env' rule_rhs cont'
            Nothing                      -> reallyRebuildCase env scrut case_bndr alts cont }
   where
-    is_unlifted        = isUnliftedType (idType case_bndr)
-    all_dead_bndrs     = all isDeadBinder bndrs       -- bndrs are [InId]
-    is_plain_seq       = all_dead_bndrs && isDeadBinder case_bndr -- Evaluation *only* for effect
+    all_dead_bndrs = all isDeadBinder bndrs       -- bndrs are [InId]
+    is_plain_seq   = all_dead_bndrs && isDeadBinder case_bndr -- Evaluation *only* for effect
 
     scrut_is_demanded_var :: CoreExpr -> Bool
             -- See Note [Eliminating redundant seqs]
@@ -2471,7 +2463,10 @@ simplAlts :: SimplEnv
           -> SimplM OutExpr  -- Returns the complete simplified case expression
 
 simplAlts env0 scrut case_bndr alts cont'
-  = do  { (env1, case_bndr1) <- simplBinder env0 case_bndr
+  = do  { traceSmpl "simplAlts" (vcat [ ppr case_bndr
+                                      , text "cont':" <+> ppr cont'
+                                      , text "in_scope" <+> ppr (seInScope env0) ])
+        ; (env1, case_bndr1) <- simplBinder env0 case_bndr
         ; let case_bndr2 = case_bndr1 `setIdUnfolding` evaldUnfolding
               env2       = modifyInScope env1 case_bndr2
               -- See Note [Case binder evaluated-ness]
@@ -2863,7 +2858,8 @@ mkDupableCont env (StrictBind { sc_bndr = bndr, sc_bndrs = bndrs
        ; return ( floats2
                 , StrictBind { sc_bndr = bndr', sc_bndrs = []
                              , sc_body = body2
-                             , sc_env  = zapSubstEnv se
+                             , sc_env  = zapSubstEnv se `setInScopeFromF` floats2
+                                         -- See Note [StaticEnv invariant] in SimplUtils
                              , sc_dup  = OkToDup
                              , sc_cont = mkBoringStop res_ty } ) }
 
@@ -2896,12 +2892,18 @@ mkDupableCont env (ApplyToVal { sc_arg = arg, sc_dup = dup
         ; let env' = env `setInScopeFromF` floats1
         ; (_, se', arg') <- simplArg env' dup se arg
         ; (let_floats2, arg'') <- makeTrivial (getMode env) NotTopLevel (fsLit "karg") arg'
-        ; return ( floats1 `addLetFloats` let_floats2
-                 , ApplyToVal { sc_arg = arg'', sc_env = se'
+        ; let all_floats = floats1 `addLetFloats` let_floats2
+        ; return ( all_floats
+                 , ApplyToVal { sc_arg = arg''
+                              , sc_env = se' `setInScopeFromF` all_floats
+                                         -- Ensure that sc_env includes the free vars of
+                                         -- arg'' in its in-scope set, even if makeTrivial
+                                         -- has turned arg'' into a fresh variable
+                                         -- See Note [StaticEnv invariant] in SimplUtils
                               , sc_dup = OkToDup, sc_cont = cont' }) }
 
 mkDupableCont env (Select { sc_bndr = case_bndr, sc_alts = alts
-                            , sc_env = se, sc_cont = cont })
+                          , sc_env = se, sc_cont = cont })
   =     -- e.g.         (case [...hole...] of { pi -> ei })
         --      ===>
         --              let ji = \xij -> ei
@@ -2931,12 +2933,15 @@ mkDupableCont env (Select { sc_bndr = case_bndr, sc_alts = alts
         ; (join_floats, alts'') <- mapAccumLM (mkDupableAlt (seDynFlags env) case_bndr')
                                               emptyJoinFloats alts'
 
-        ; return (floats `addJoinFloats` join_floats,  -- Note [Duplicated env]
-                  Select { sc_dup  = OkToDup
-                         , sc_bndr = case_bndr'
-                         , sc_alts = alts''
-                         , sc_env  = zapSubstEnv env
-                         , sc_cont = mkBoringStop (contResultType cont) } ) }
+        ; let all_floats = floats `addJoinFloats` join_floats
+                           -- Note [Duplicated env]
+        ; return (all_floats
+                 , Select { sc_dup  = OkToDup
+                          , sc_bndr = case_bndr'
+                          , sc_alts = alts''
+                          , sc_env  = zapSubstEnv se `setInScopeFromF` all_floats
+                                      -- See Note [StaticEnv invariant] in SimplUtils
+                          , sc_cont = mkBoringStop (contResultType cont) } ) }
 
 mkDupableAlt :: DynFlags -> OutId
              -> JoinFloats -> OutAlt
@@ -3068,7 +3073,7 @@ and c is unused.
 Note [Duplicated env]
 ~~~~~~~~~~~~~~~~~~~~~
 Some of the alternatives are simplified, but have not been turned into a join point
-So they *must* have an zapped subst-env.  So we can't use completeNonRecX to
+So they *must* have a zapped subst-env.  So we can't use completeNonRecX to
 bind the join point, because it might to do PostInlineUnconditionally, and
 we'd lose that when zapping the subst-env.  We could have a per-alt subst-env,
 but zapping it (as we do in mkDupableCont, the Select case) is safe, and
@@ -3244,6 +3249,8 @@ simplLetUnfolding :: SimplEnv-> TopLevelFlag
 simplLetUnfolding env top_lvl cont_mb id new_rhs unf
   | isStableUnfolding unf
   = simplStableUnfolding env top_lvl cont_mb id unf
+  | isExitJoinId id
+  = return noUnfolding -- see Note [Do not inline exit join points]
   | otherwise
   = mkLetUnfolding (seDynFlags env) top_lvl InlineRhs id new_rhs
 
@@ -3329,7 +3336,7 @@ Note [Setting the new unfolding]
   important: if exprIsConApp says 'yes' for a recursive thing, then we
   can get into an infinite loop
 
-If there's an stable unfolding on a loop breaker (which happens for
+If there's a stable unfolding on a loop breaker (which happens for
 INLINABLE), we hang on to the inlining.  It's pretty dodgy, but the
 user did say 'INLINE'.  May need to revisit this choice.
 

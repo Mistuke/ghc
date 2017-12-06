@@ -239,6 +239,7 @@ test('T12007', normal, ghci_script, ['T12007.script'])
 test('T11975', normal, ghci_script, ['T11975.script'])
 test('T10963', normal, ghci_script, ['T10963.script'])
 test('T11547', normal, ghci_script, ['T11547.script'])
+test('T11721', normal, ghci_script, ['T11721.script'])
 test('T12520', normal, ghci_script, ['T12520.script'])
 test('T12091', [extra_run_opts('-fobject-code')], ghci_script,
      ['T12091.script'])
@@ -259,3 +260,5 @@ test('T13699', normal, ghci_script, ['T13699.script'])
 test('T13988', normal, ghci_script, ['T13988.script'])
 test('T13407', normal, ghci_script, ['T13407.script'])
 test('T13963', normal, ghci_script, ['T13963.script'])
+test('T14342', [extra_hc_opts("-XOverloadedStrings -XRebindableSyntax")],
+               ghci_script, ['T14342.script'])
