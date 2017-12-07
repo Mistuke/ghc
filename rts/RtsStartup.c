@@ -495,6 +495,13 @@ hs_exit_(bool wait_foreign)
 
     // Free threading resources
     freeThreadingResources();
+
+#if defined(mingw32_HOST_OS)
+    // Free any lingering memory
+    /* See Note [Memory allocation].  */
+    /* See Note [Pooled Memory Manager].  */
+    winmem_deinit ();
+#endif
 }
 
 // Flush stdout and stderr.  We do this during shutdown so that it

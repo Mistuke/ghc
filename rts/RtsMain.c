@@ -48,6 +48,10 @@ int hs_main ( int argc, char *argv[],       // program args
               RtsConfig rts_config)         // RTS configuration
 
 {
+#if defined(mingw32_HOST_OS)
+    winmem_init ();
+#endif
+
     int exit_status;
     SchedulerStatus status;
 
