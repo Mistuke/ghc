@@ -1,111 +1,116 @@
-/* Copyright (c) 2016 National Cheng Kung University, Taiwan.
- * Copyright (c) 2006-2008, 2011, 2014 Matthew Conte.
- * All rights reserved.
- *
- * Use of this source code is governed by a BSD-style license that can be
- * found in the LICENSE file.
- */
-
-#include <limits.h>
+#include <assert.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include <stdbool.h>
+#include <stdint.h>
 #include "tlsf.h"
 
-#include "tlsf_utils.h"
+/*
+ * log2 of number of linear subdivisions of block sizes. Larger
+ * values require more memory in the control structure. Values of
+ * 4 or 5 are typical.
+ */
+#define SL_INDEX_COUNT_SHIFT 5
 
-#if __GNUC__ || __INTEL_COMPILER
-#define likely(x) __builtin_expect(!!(x), 1)
-#define unlikely(x) __builtin_expect(!!(x), 0)
+// All allocation sizes and addresses are aligned.
+#define ALIGN_SIZE (1ULL << ALIGN_SIZE_SHIFT)
+
+#if __WORDSIZE == 64
+#  define ALIGN_SIZE_SHIFT 3
 #else
-#define likely(x) (x)
-#define unlikely(x) (x)
+#  define ALIGN_SIZE_SHIFT 2
 #endif
-
-#ifdef TLSF_CONFIG_ASSERT
-#include <assert.h>
-#define tlsf_assert(expr) assert(expr)
-#else
-#define tlsf_assert(expr) (void)(0)
-#endif
-
-/* Public constants: may be modified. */
-enum tlsf_public {
-    /* log2 of number of linear subdivisions of block sizes. Larger
-     * values require more memory in the control structure. Values of
-     * 4 or 5 are typical.
-    */
-    SL_INDEX_COUNT_LOG2 = 5,
-};
-
-/* Private constants: do not modify. */
-enum tlsf_private {
-#if defined(TLSF_64BIT)
-    /* All allocation sizes and addresses are aligned to 8 bytes. */
-    ALIGN_SIZE_LOG2 = 3,
-#else
-    /* All allocation sizes and addresses are aligned to 4 bytes. */
-    ALIGN_SIZE_LOG2 = 2,
-#endif
-    ALIGN_SIZE = (1 << ALIGN_SIZE_LOG2),
 
 /*
  * We support allocations of sizes up to (1 << FL_INDEX_MAX) bits.
  * However, because we linearly subdivide the second-level lists, and
  * our minimum size granularity is 4 bytes, it doesn't make sense to
  * create first-level lists for sizes smaller than SL_INDEX_COUNT * 4,
- * or (1 << (SL_INDEX_COUNT_LOG2 + 2)) bytes, as there we will be
+ * or (1 << (SL_INDEX_COUNT_SHIFT + 2)) bytes, as there we will be
  * trying to split size ranges into more slots than we have available.
  * Instead, we calculate the minimum threshold size, and place all
  * blocks below that size into the 0th first-level list.
- */
+ *
+ * We can increase this to support larger sizes, at the expense
+ * of more overhead in the TLSF structure.
+ *
+*/
+#define FL_INDEX_MAX (TLSF_MAX_SHIFT + 1)
 
-#if defined(TLSF_64BIT)
-    /*
-     * TODO: We can increase this to support larger sizes, at the expense
-     * of more overhead in the TLSF structure.
-     */
-    FL_INDEX_MAX = 32,
+#define SL_INDEX_COUNT (1U << SL_INDEX_COUNT_SHIFT)
+#define FL_INDEX_SHIFT (SL_INDEX_COUNT_SHIFT + ALIGN_SIZE_SHIFT)
+#define FL_INDEX_COUNT (FL_INDEX_MAX - FL_INDEX_SHIFT + 1)
+
+#define SMALL_BLOCK_SIZE (1U << FL_INDEX_SHIFT)
+
+/*
+ * Since block sizes are always at least a multiple of 4, the two least
+ * significant bits of the size field are used to store the block status:
+ * - bit 0: whether block is busy or free
+ * - bit 1: whether previous block is busy or free
+*/
+#define BLOCK_FREE_BIT      (1ULL << (__WORDSIZE - 1))
+#define BLOCK_PREV_FREE_BIT (1ULL << (__WORDSIZE - 2))
+#define BLOCK_POOL_BIT      (1ULL << (__WORDSIZE - 3))
+#define BLOCK_BITMASK       (BLOCK_POOL_BIT | BLOCK_FREE_BIT | \
+                             BLOCK_PREV_FREE_BIT)
+
+/*
+ * The size of the block header exposed to used blocks is the size field.
+ * The prev_phys_block field is stored *inside* the previous free block.
+*/
+#define BLOCK_OVERHEAD (sizeof (size_t))
+#define POOL_OVERHEAD  (2 * BLOCK_OVERHEAD)
+
+// User data starts directly after the size field in a used block.
+#define BLOCK_START_OFFSET (offsetof(struct block_s, header) + sizeof (size_t))
+
+/*
+ * A free block must be large enough to store its header minus the size of
+ * the prev_phys_block field, and no larger than the number of addressable
+ * bits for FL_INDEX.
+*/
+#define BLOCK_SIZE_MIN (sizeof (struct block_s) - sizeof (block_t))
+#define BLOCK_SIZE_MAX (1ULL << (FL_INDEX_MAX - 1))
+
+/*
+ * Size of the TLSF structures in a given memory block passed to
+ * tlsf_create, equal to the size of a tlsf_s
+ */
+#define TLSF_SIZE  (sizeof (struct tlsf_s))
+
+// Return location of next block after block of given size.
+#define OFFSET_TO_BLOCK(p, s) ((block_t)((char*)(p) + (s)))
+
+#ifdef TLSF_ASSERT
+#define XASSERT(cond, msg) assert((cond) && msg)
 #else
-    FL_INDEX_MAX = 30,
+#define XASSERT(cond, msg)
 #endif
-    SL_INDEX_COUNT = (1 << SL_INDEX_COUNT_LOG2),
-    FL_INDEX_SHIFT = (SL_INDEX_COUNT_LOG2 + ALIGN_SIZE_LOG2),
-    FL_INDEX_COUNT = (FL_INDEX_MAX - FL_INDEX_SHIFT + 1),
 
-    SMALL_BLOCK_SIZE = (1 << FL_INDEX_SHIFT),
-};
+// This code has been tested on 32- and 64-bit (LP/LLP) architectures.
+static_assert(sizeof(int) == 4, "Integer must be 32 bit");
+static_assert(sizeof(size_t) * 8 == __WORDSIZE,
+              "size_t must have __WORDSIZE bits");
+static_assert(sizeof(size_t) == 4 || sizeof (size_t) == 8,
+              "size_t must be 32 or 64 bit");
+static_assert(sizeof(unsigned int) * 8 >= SL_INDEX_COUNT,
+              "SL_INDEX_COUNT must be <= number of bits in sl_bitmap's "
+              "storage type.");
+static_assert(ALIGN_SIZE == SMALL_BLOCK_SIZE / SL_INDEX_COUNT,
+              "Sizes are not properly set");
+static_assert(BLOCK_SIZE_MAX == TLSF_MAX_SIZE + BLOCK_OVERHEAD,
+              "Max allocation size is wrong");
 
-/*
- * Cast and min/max macros.
- */
-#define tlsf_cast(t, exp) ((t)(exp))
-#define tlsf_min(a, b) ((a) < (b) ? (a) : (b))
-#define tlsf_max(a, b) ((a) > (b) ? (a) : (b))
-
-/*
- * Static assertion mechanism.
- */
-#define _tlsf_glue2(x, y) x##y
-#define _tlsf_glue(x, y) _tlsf_glue2(x, y)
-#define tlsf_static_assert(exp) \
-    typedef char _tlsf_glue(static_assert, __LINE__)[(exp) ? 1 : -1]
-
-/* This code has been tested on 32- and 64-bit (LP/LLP) architectures. */
-tlsf_static_assert(sizeof(int) * CHAR_BIT == 32);
-tlsf_static_assert(sizeof(size_t) * CHAR_BIT >= 32);
-tlsf_static_assert(sizeof(size_t) * CHAR_BIT <= 64);
-
-/* SL_INDEX_COUNT must be <= number of bits in sl_bitmap's storage type. */
-tlsf_static_assert(sizeof(unsigned int) * CHAR_BIT >= SL_INDEX_COUNT);
-
-/* Ensure we've properly tuned our sizes. */
-tlsf_static_assert(ALIGN_SIZE == SMALL_BLOCK_SIZE / SL_INDEX_COUNT);
+// We have to use size_t bitmaps if we want to support larger blocks.
+static_assert(FL_INDEX_COUNT <= 32, "Index too large");
+static_assert(SL_INDEX_COUNT <= 32, "Index too large");
 
 /*
  * Data structures and associated constants.
- */
+*/
 
 /*
  * Block header structure.
@@ -116,207 +121,163 @@ tlsf_static_assert(ALIGN_SIZE == SMALL_BLOCK_SIZE / SL_INDEX_COUNT);
  *   previous block. It appears at the beginning of this structure only to
  *   simplify the implementation.
  * - The next_free / prev_free fields are only valid if the block is free.
- */
-typedef struct block_header_t {
-    /* Points to the previous physical block. */
-    struct block_header_t *prev_phys_block;
+*/
+typedef struct block_s {
+  // Points to the previous physical block.
+  struct block_s* prev_phys_block;
 
-    /* The size of this block, excluding the block header. */
-    size_t size;
+  // The size of this block excluding the block header and bits.
+  size_t header;
 
-    /* Next and previous free blocks. */
-    struct block_header_t *next_free;
-    struct block_header_t *prev_free;
-} block_header_t;
+  // Next and previous free blocks.
+  struct block_s* next_free;
+  struct block_s* prev_free;
+} *block_t;
 
-/*
- * Since block sizes are always at least a multiple of 4, the two least
- * significant bits of the size field are used to store the block status:
- * - bit 0: whether block is busy or free
- * - bit 1: whether previous block is busy or free
- */
-static const size_t block_header_free_bit = 1 << 0;
-static const size_t block_header_prev_free_bit = 1 << 1;
+// The TLSF control structure.
+struct tlsf_s {
+  // Bitmaps for free lists.
+  size_t fl_bitmap;
+  size_t sl_bitmap[FL_INDEX_COUNT];
 
-/*
- * The size of the block header exposed to used blocks is the size field.
- * The prev_phys_block field is stored *inside* the previous free block.
- */
-static const size_t block_header_overhead = sizeof(size_t);
+  // Empty lists point at this block to indicate they are free.
+  struct block_s block_null;
 
-/* User data starts directly after the size field in a used block. */
-static const size_t block_start_offset =
-    offsetof(block_header_t, size) + sizeof(size_t);
+  // Head of free lists.
+  block_t blocks[FL_INDEX_COUNT][SL_INDEX_COUNT];
 
-/*
- * A free block must be large enough to store its header minus the size of
- * the prev_phys_block field, and no larger than the number of addressable
- * bits for FL_INDEX.
- */
-static const size_t block_size_min =
-    sizeof(block_header_t) - sizeof(block_header_t *);
-static const size_t block_size_max = tlsf_cast(size_t, 1) << FL_INDEX_MAX;
+#ifdef TLSF_STATS
+  tlsf_stats_t stats;
+#endif
 
-/* The TLSF control structure. */
-typedef struct control_t {
-    /* Empty lists point at this block to indicate they are free. */
-    block_header_t block_null;
-
-    /* Bitmaps for free lists. */
-    unsigned int fl_bitmap;
-    unsigned int sl_bitmap[FL_INDEX_COUNT];
-
-    /* Head of free lists. */
-    block_header_t *blocks[FL_INDEX_COUNT][SL_INDEX_COUNT];
-} control_t;
-
-/* A type used for casting when doing pointer arithmetic. */
-typedef ptrdiff_t tlsfptr_t;
+  tlsf_map_t   map;
+  tlsf_unmap_t unmap;
+  void*        user;
+};
 
 /*
- * block_header_t member functions.
+ * TLSF achieves O(1) cost for malloc and free operations by limiting
+ * the search for a free block to a free list of guaranteed size
+ * adequate to fulfill the request, combined with efficient free list
+ * queries using bitmasks and bit-manipulation routines.
+ *
+ * NOTE: TLSF spec relies on ffs/fls returning value 0..31.
+ * ffs/fls return 1-32 by default, returning 0 for error.
  */
 
-static size_t block_size(const block_header_t *block)
-{
-    return block->size & ~(block_header_free_bit | block_header_prev_free_bit);
+static inline unsigned int tlsf_ffs(size_t x) {
+  unsigned int i = (unsigned int)__builtin_ffs((int)x);
+  XASSERT(i, "No set bit found");
+  return i - 1U;
 }
 
-static void block_set_size(block_header_t *block, size_t size)
-{
-    const size_t oldsize = block->size;
-    block->size =
-        size | (oldsize & (block_header_free_bit | block_header_prev_free_bit));
+static inline unsigned int tlsf_fls(size_t x) {
+  return (uint32_t)
+    (x ? 8 * sizeof (size_t) - (uint32_t)__builtin_clzll(x) - 1 : 0);
 }
 
-static int block_is_last(const block_header_t *block)
-{
-    return block_size(block) == 0;
+/*
+ * block_t member functions.
+*/
+
+static inline size_t block_size(const block_t block) {
+  return block->header & ~BLOCK_BITMASK;
 }
 
-static int block_is_free(const block_header_t *block)
-{
-    return tlsf_cast(int, block->size &block_header_free_bit);
+static inline void block_set_size(block_t block, size_t size) {
+  const size_t oldsize = block->header;
+  block->header = size | (oldsize & BLOCK_BITMASK);
 }
 
-static void block_set_free(block_header_t *block)
-{
-    block->size |= block_header_free_bit;
+static inline bool block_is_last(const block_t block) {
+  return block_size(block) == 0;
 }
 
-static void block_set_used(block_header_t *block)
-{
-    block->size &= ~block_header_free_bit;
+static inline bool block_is_free(const block_t block) {
+  return !!(block->header & BLOCK_FREE_BIT);
 }
 
-static int block_is_prev_free(const block_header_t *block)
-{
-    return tlsf_cast(int, block->size &block_header_prev_free_bit);
+static inline bool block_is_prev_free(const block_t block) {
+  return !!(block->header & BLOCK_PREV_FREE_BIT);
 }
 
-static void block_set_prev_free(block_header_t *block)
-{
-    block->size |= block_header_prev_free_bit;
+static inline void block_set_prev_free(block_t block, bool free) {
+  if (free)
+    block->header |= BLOCK_PREV_FREE_BIT;
+  else
+    block->header &= ~BLOCK_PREV_FREE_BIT;
 }
 
-static void block_set_prev_used(block_header_t *block)
-{
-    block->size &= ~block_header_prev_free_bit;
+static inline block_t block_from_ptr(void* ptr) {
+  return OFFSET_TO_BLOCK(ptr, -BLOCK_START_OFFSET);
 }
 
-static block_header_t *block_from_ptr(const void *ptr)
-{
-    return tlsf_cast(block_header_t *,
-                     tlsf_cast(unsigned char *, ptr) - block_start_offset);
+static inline void* block_to_ptr(const block_t block) {
+  return (void*)((char*)block + BLOCK_START_OFFSET);
 }
 
-static void *block_to_ptr(const block_header_t *block)
-{
-    return tlsf_cast(void *,
-                     tlsf_cast(unsigned char *, block) + block_start_offset);
+// Return location of previous block.
+static inline block_t block_prev(const block_t block) {
+  XASSERT(block_is_prev_free(block), "previous block must be free");
+  return block->prev_phys_block;
 }
 
-/* Return location of next block after block of given size. */
-static block_header_t *offset_to_block(const void *ptr, tlsfptr_t size)
-{
-    return tlsf_cast(block_header_t *, tlsf_cast(tlsfptr_t, ptr) + size);
+// Return location of next existing block.
+static inline block_t block_next(const block_t block) {
+  block_t next
+    = OFFSET_TO_BLOCK(block_to_ptr(block), block_size(block) - BLOCK_OVERHEAD);
+  XASSERT(!block_is_last(block), "Block is last");
+  return next;
 }
 
-/* Return location of previous block. */
-static block_header_t *block_prev(const block_header_t *block)
-{
-    tlsf_assert(block_is_prev_free(block) && "previous block must be free");
-    return block->prev_phys_block;
+// Link a new block with its physical neighbor, return the neighbor.
+static inline block_t block_link_next(block_t block) {
+  block_t next = block_next(block);
+  next->prev_phys_block = block;
+  return next;
 }
 
-/* Return location of next existing block. */
-static block_header_t *block_next(const block_header_t *block)
-{
-    block_header_t *next = offset_to_block(
-        block_to_ptr(block), block_size(block) - block_header_overhead);
-    tlsf_assert(!block_is_last(block));
-    return next;
+static inline bool block_can_split(block_t block, size_t size) {
+  return block_size(block) >= sizeof (struct block_s) + size;
 }
 
-/* Link a new block with its physical neighbor, return the neighbor. */
-static block_header_t *block_link_next(block_header_t *block)
-{
-    block_header_t *next = block_next(block);
-    next->prev_phys_block = block;
-    return next;
+static inline void block_set_free(block_t block, bool free) {
+  if (free) {
+    XASSERT(!block_is_free(block), "Block is already free");
+    block->header |= BLOCK_FREE_BIT;
+  } else {
+    XASSERT(block_is_free(block), "Block is already used");
+    block->header &= ~BLOCK_FREE_BIT;
+  }
+  block_set_prev_free(block_link_next(block), free);
 }
 
-static void block_mark_as_free(block_header_t *block)
-{
-    /* Link the block to the next block, first. */
-    block_header_t *next = block_link_next(block);
-    block_set_prev_free(next);
-    block_set_free(block);
+static inline size_t align_up(size_t x) {
+  return (x + (ALIGN_SIZE - 1UL)) & ~(ALIGN_SIZE - 1UL);
 }
 
-static void block_mark_as_used(block_header_t *block)
-{
-    block_header_t *next = block_next(block);
-    block_set_prev_used(next);
-    block_set_used(block);
+#if defined TLSF_ASSERT && !defined NDEBUG
+static inline void* align_ptr(const void* ptr) {
+  return (void*)align_up((size_t)ptr);
 }
-
-static size_t align_up(size_t x, size_t align)
-{
-    tlsf_assert(0 == (align & (align - 1)) && "must align to a power of two");
-    return (x + (align - 1)) & ~(align - 1);
-}
-
-static size_t align_down(size_t x, size_t align)
-{
-    tlsf_assert(0 == (align & (align - 1)) && "must align to a power of two");
-    return x - (x & (align - 1));
-}
-
-static void *align_ptr(const void *ptr, size_t align)
-{
-    const tlsfptr_t aligned =
-        (tlsf_cast(tlsfptr_t, ptr) + (align - 1)) & ~(align - 1);
-    tlsf_assert(0 == (align & (align - 1)) && "must align to a power of two");
-    return tlsf_cast(void *, aligned);
-}
+#endif
 
 /*
  * Adjust an allocation size to be aligned to word size, and no smaller
  * than internal minimum.
 */
-static size_t adjust_request_size(size_t size, size_t align)
-{
-    size_t adjust = 0;
-    if (size) {
-        const size_t aligned = align_up(size, align);
+static inline size_t adjust_size(size_t size) {
+  size = align_up(size);
+  if (size < BLOCK_SIZE_MIN)
+    return BLOCK_SIZE_MIN;
+  XASSERT(size <= TLSF_MAX_SIZE, "size is too large");
+  return size;
+}
 
-        /* aligned sized must not exceed block_size_max */
-        if (aligned < block_size_max) {
-            adjust = tlsf_max(aligned, block_size_min);
-        }
-    }
-    return adjust;
+// Rounds up to the next block size
+static inline size_t round_block_size(size_t size) {
+  return size >= SMALL_BLOCK_SIZE
+    ? size + (1ULL << (tlsf_fls(size) - SL_INDEX_COUNT_SHIFT)) - 1 : size;
 }
 
 /*
@@ -324,652 +285,389 @@ static size_t adjust_request_size(size_t size, size_t align)
  * the documentation found in the white paper.
 */
 
-static void mapping_insert(size_t size, int *fli, int *sli)
-{
-    int fl, sl;
-    if (size < SMALL_BLOCK_SIZE) {
-        /* Store small blocks in first list. */
-        fl = 0;
-        sl = tlsf_cast(int, size) / (SMALL_BLOCK_SIZE / SL_INDEX_COUNT);
-    } else {
-        fl = tlsf_fls_sizet(size);
-        sl = tlsf_cast(int, size >> (fl - SL_INDEX_COUNT_LOG2)) ^
-             (1 << SL_INDEX_COUNT_LOG2);
-        fl -= (FL_INDEX_SHIFT - 1);
+static inline void mapping_insert(size_t size, unsigned int *fli,
+                                  unsigned int *sli) {
+  unsigned int fl, sl;
+  if (size < SMALL_BLOCK_SIZE) {
+    // Store small blocks in first list.
+    fl = 0;
+    sl = (unsigned int)size / (SMALL_BLOCK_SIZE / SL_INDEX_COUNT);
+  } else {
+    fl = tlsf_fls(size);
+    sl = (unsigned int)((size >> (fl - SL_INDEX_COUNT_SHIFT)) ^
+      (1ULL << SL_INDEX_COUNT_SHIFT));
+    fl -= (FL_INDEX_SHIFT - 1);
+  }
+  XASSERT(fl < FL_INDEX_COUNT, "Wrong fl index count");
+  XASSERT(sl < SL_INDEX_COUNT, "Wrong sl index count");
+  *fli = fl;
+  *sli = sl;
+}
+
+static block_t search_suitable_block(tlsf_t t, unsigned int *fli,
+                                     unsigned int *sli) {
+  unsigned int fl = *fli, sl = *sli;
+  XASSERT(fl < FL_INDEX_COUNT, "Wrong fl index count");
+  XASSERT(sl < SL_INDEX_COUNT, "Wrong sl index count");
+
+  /*
+   * First, search for a block in the list associated with the given
+   * fl/sl index.
+   */
+  size_t sl_map = t->sl_bitmap[fl] & (~0ULL << sl);
+  if (!sl_map) {
+    // No block exists. Search in the next largest first-level list.
+    const size_t fl_map = t->fl_bitmap & (~0ULL << (fl + 1));
+    // No free blocks available, memory has been exhausted.
+    if (!fl_map)
+      return NULL;
+
+    *fli = fl = tlsf_ffs(fl_map);
+    XASSERT(fl < FL_INDEX_COUNT, "Wrong fl index count");
+
+    sl_map = t->sl_bitmap[fl];
+  }
+  XASSERT(sl_map, "Second level bitmap is null");
+
+  *sli = sl = tlsf_ffs(sl_map);
+  XASSERT(sl < SL_INDEX_COUNT, "Wrong sl index count");
+
+  // Return the first block in the free list.
+  return t->blocks[fl][sl];
+}
+
+// Remove a free block from the free list.
+static void remove_free_block(tlsf_t t, block_t block, unsigned int fl,
+                              unsigned int sl) {
+  XASSERT(fl < FL_INDEX_COUNT, "Wrong fl index count");
+  XASSERT(sl < SL_INDEX_COUNT, "Wrong sl index count");
+
+  const block_t prev = block->prev_free;
+  const block_t next = block->next_free;
+  XASSERT(prev, "prev_free field can not be null");
+  XASSERT(next, "next_free field can not be null");
+  next->prev_free = prev;
+  prev->next_free = next;
+
+  // If this block is the head of the free list, set new head.
+  if (t->blocks[fl][sl] == block) {
+    t->blocks[fl][sl] = next;
+
+    // If the new head is null, clear the bitmap.
+    if (next == &t->block_null) {
+      t->sl_bitmap[fl] &= ~(1U << sl);
+
+      // If the second bitmap is now empty, clear the fl bitmap.
+      if (!t->sl_bitmap[fl])
+        t->fl_bitmap &= ~(1U << fl);
     }
-    *fli = fl;
-    *sli = sl;
+  }
+
+#ifdef TLSF_STATS
+  XASSERT(t->stats.free_size >= block_size(block), "wrong free");
+  t->stats.free_size -= block_size(block);
+  t->stats.used_size += block_size(block);
+#endif
 }
 
-/* This version rounds up to the next block size (for allocations) */
-static void mapping_search(size_t size, int *fli, int *sli)
-{
-    if (size >= SMALL_BLOCK_SIZE) {
-        const size_t round =
-            (1 << (tlsf_fls_sizet(size) - SL_INDEX_COUNT_LOG2)) - 1;
-        size += round;
-    }
-    mapping_insert(size, fli, sli);
+// Insert a free block into the free block list.
+static void insert_free_block(tlsf_t t, block_t block, unsigned int fl,
+                              unsigned int sl) {
+  const block_t current = t->blocks[fl][sl];
+  XASSERT(current, "free list cannot have a null entry");
+  XASSERT(block, "cannot insert a null entry into the free list");
+  block->next_free = current;
+  block->prev_free = &t->block_null;
+  current->prev_free = block;
+
+  XASSERT(block_to_ptr(block) == align_ptr(block_to_ptr(block)),
+         "block not aligned properly");
+  /*
+   * Insert the new block at the head of the list, and mark the first-
+   * and second-level bitmaps appropriately.
+  */
+  t->blocks[fl][sl] = block;
+  t->fl_bitmap |= (1U << fl);
+  t->sl_bitmap[fl] |= (1U << sl);
+
+#ifdef TLSF_STATS
+  XASSERT(t->stats.used_size >= block_size(block), "wrong used");
+  t->stats.free_size += block_size(block);
+  t->stats.used_size -= block_size(block);
+#endif
 }
 
-static block_header_t *search_suitable_block(control_t *control,
-                                             int *fli, int *sli)
-{
-    int fl = *fli;
-    int sl = *sli;
-
-    /*
-     * First, search for a block in the list associated with the given
-     * fl/sl index.
-     */
-    unsigned int sl_map = control->sl_bitmap[fl] & (((unsigned int)~0) << sl);
-    if (!sl_map) {
-        /* No block exists. Search in the next largest first-level list. */
-        const unsigned int fl_map = control->fl_bitmap & (((unsigned int)~0) << (fl + 1));
-        if (!fl_map) {
-            /* No free blocks available, memory has been exhausted. */
-            return NULL;
-        }
-
-        fl = tlsf_ffs(fl_map);
-        *fli = fl;
-        sl_map = control->sl_bitmap[fl];
-    }
-    tlsf_assert(sl_map && "internal error - second level bitmap is null");
-    sl = tlsf_ffs(sl_map);
-    *sli = sl;
-
-    /* Return the first block in the free list. */
-    return control->blocks[fl][sl];
+// Remove a given block from the free list.
+static void block_remove(tlsf_t t, block_t block) {
+  unsigned int fl, sl;
+  mapping_insert(block_size(block), &fl, &sl);
+  remove_free_block(t, block, fl, sl);
 }
 
-/* Remove a free block from the free list.*/
-static void remove_free_block(control_t *control,
-                              block_header_t *block,
-                              int fl, int sl)
-{
-    block_header_t *prev = block->prev_free;
-    block_header_t *next = block->next_free;
-    tlsf_assert(prev && "prev_free field can not be null");
-    tlsf_assert(next && "next_free field can not be null");
-    next->prev_free = prev;
-    prev->next_free = next;
-
-    /* If this block is the head of the free list, set new head. */
-    if (control->blocks[fl][sl] == block) {
-        control->blocks[fl][sl] = next;
-
-        /* If the new head is null, clear the bitmap. */
-        if (next == &control->block_null) {
-            control->sl_bitmap[fl] &= ~(1 << sl);
-
-            /* If the second bitmap is now empty, clear the fl bitmap. */
-            if (!control->sl_bitmap[fl]) {
-                control->fl_bitmap &= ~(1 << fl);
-            }
-        }
-    }
+// Insert a given block into the free list.
+static void block_insert(tlsf_t t, block_t block) {
+  unsigned int fl, sl;
+  mapping_insert(block_size(block), &fl, &sl);
+  insert_free_block(t, block, fl, sl);
 }
 
-/* Insert a free block into the free block list. */
-static void insert_free_block(control_t *control,
-                              block_header_t *block,
-                              int fl, int sl)
-{
-    block_header_t *current = control->blocks[fl][sl];
-    tlsf_assert(current && "free list cannot have a null entry");
-    tlsf_assert(block && "cannot insert a null entry into the free list");
-    block->next_free = current;
-    block->prev_free = &control->block_null;
-    current->prev_free = block;
+// Split a block into two, the second of which is free.
+static block_t block_split(block_t block, size_t size) {
+  // Calculate the amount of space left in the remaining block.
+  const block_t remaining
+    = OFFSET_TO_BLOCK(block_to_ptr(block), size - BLOCK_OVERHEAD);
 
-    tlsf_assert(block_to_ptr(block) ==
-                    align_ptr(block_to_ptr(block), ALIGN_SIZE) &&
-                "block not aligned properly");
-    /*
-     * Insert the new block at the head of the list, and mark the first-
-     * and second-level bitmaps appropriately.
-     */
-    control->blocks[fl][sl] = block;
-    control->fl_bitmap |= (1 << fl);
-    control->sl_bitmap[fl] |= (1 << sl);
+  const size_t remain_size = block_size(block) - (size + BLOCK_OVERHEAD);
+
+  XASSERT(block_to_ptr(remaining) == align_ptr(block_to_ptr(remaining)),
+         "remaining block not aligned properly");
+  XASSERT(block_size(block) == remain_size + size + BLOCK_OVERHEAD,
+         "remaining block size is wrong");
+  XASSERT(remain_size >= BLOCK_SIZE_MIN, "block split with invalid size");
+
+  remaining->header = remain_size;
+
+  block_set_free(remaining, true);
+  block_set_size(block, size);
+
+  return remaining;
 }
 
-/* Remove a given block from the free list. */
-static void block_remove(control_t *control, block_header_t *block)
-{
-    int fl, sl;
-    mapping_insert(block_size(block), &fl, &sl);
-    remove_free_block(control, block, fl, sl);
+// Absorb a free block's storage into an adjacent previous free block.
+static block_t block_absorb(block_t prev, block_t block) {
+  XASSERT(!block_is_last(prev), "previous block can't be last");
+  // Note: Leaves flags untouched.
+  prev->header += block_size(block) + BLOCK_OVERHEAD;
+  block_link_next(prev);
+  return prev;
 }
 
-/* Insert a given block into the free list. */
-static void block_insert(control_t *control, block_header_t *block)
-{
-    int fl, sl;
-    mapping_insert(block_size(block), &fl, &sl);
-    insert_free_block(control, block, fl, sl);
+// Merge a just-freed block with an adjacent previous free block.
+static block_t block_merge_prev(tlsf_t t, block_t block) {
+  if (block_is_prev_free(block)) {
+    block_t prev = block_prev(block);
+    XASSERT(prev, "prev physical block can't be null");
+    XASSERT(block_is_free(prev), "prev block is not free though marked as such");
+    block_remove(t, prev);
+    block = block_absorb(prev, block);
+  }
+
+  return block;
 }
 
-static int block_can_split(block_header_t *block, size_t size)
-{
-    return block_size(block) >= sizeof(block_header_t) + size;
+// Merge a just-freed block with an adjacent free block.
+static block_t block_merge_next(tlsf_t t, block_t block) {
+  block_t next = block_next(block);
+  XASSERT(next, "next physical block can't be null");
+
+  if (block_is_free(next)) {
+    XASSERT(!block_is_last(block), "previous block can't be last");
+    block_remove(t, next);
+    block = block_absorb(block, next);
+  }
+
+  return block;
 }
 
-/* Split a block into two, the second of which is free. */
-static block_header_t *block_split(block_header_t *block, size_t size)
-{
-    /* Calculate the amount of space left in the remaining block. */
-    block_header_t *remaining = offset_to_block(block_to_ptr(block),
-                                                size - block_header_overhead);
-
-    const size_t remain_size = block_size(block) -
-                               (size + block_header_overhead);
-
-    tlsf_assert(block_to_ptr(remaining) == align_ptr(block_to_ptr(remaining),
-                                                     ALIGN_SIZE) &&
-                "remaining block not aligned properly");
-
-    tlsf_assert(block_size(block) ==
-                remain_size + size + block_header_overhead);
-    block_set_size(remaining, remain_size);
-    tlsf_assert(block_size(remaining) >= block_size_min &&
-                "block split with invalid size");
-
-    block_set_size(block, size);
-    block_mark_as_free(remaining);
-
-    return remaining;
+// Trim any trailing block space off the end of a block, return to pool.
+static void block_trim_free(tlsf_t t, block_t block, size_t size) {
+  XASSERT(block_is_free(block), "block must be free");
+  if (block_can_split(block, size)) {
+    block_t remaining = block_split(block, size);
+    block_link_next(block);
+    block_set_prev_free(remaining, true);
+    block_insert(t, remaining);
+  }
 }
 
-/* Absorb a free block's storage into an adjacent previous free block. */
-static block_header_t *block_absorb(block_header_t *prev, block_header_t *block)
-{
-    tlsf_assert(!block_is_last(prev) && "previous block can't be last");
-    /* Note: Leaves flags untouched. */
-    prev->size += block_size(block) + block_header_overhead;
-    block_link_next(prev);
-    return prev;
+// Trim any trailing block space off the end of a used block, return to pool.
+static void block_trim_used(tlsf_t t, block_t block, size_t size) {
+  XASSERT(!block_is_free(block), "block must be used");
+  if (block_can_split(block, size)) {
+    // If the next block is free, we must coalesce.
+    block_t remaining = block_split(block, size);
+    block_set_prev_free(remaining, false);
+
+    remaining = block_merge_next(t, remaining);
+    block_insert(t, remaining);
+  }
 }
 
-/* Merge a just-freed block with an adjacent previous free block. */
-static block_header_t *block_merge_prev(control_t *control,
-                                        block_header_t *block)
-{
-    if (block_is_prev_free(block)) {
-        block_header_t *prev = block_prev(block);
-        tlsf_assert(prev && "prev physical block can't be null");
-        tlsf_assert(block_is_free(prev) &&
-                    "prev block is not free though marked as such");
-        block_remove(control, prev);
-        block = block_absorb(prev, block);
-    }
+// Locate a free block with an appropriate size.
+static block_t block_locate_free(tlsf_t t, size_t size) {
+  unsigned int fl = 0, sl = 0;
+  mapping_insert(round_block_size(size), &fl, &sl);
 
+  block_t block = search_suitable_block(t, &fl, &sl);
+  if (block) {
+    XASSERT(block_size(block) >= size, "insufficient block size");
+    remove_free_block(t, block, fl, sl);
     return block;
-}
-
-/* Merge a just-freed block with an adjacent free block. */
-static block_header_t *block_merge_next(control_t *control,
-                                        block_header_t *block)
-{
-    block_header_t *next = block_next(block);
-    tlsf_assert(next && "next physical block can't be null");
-
-    if (block_is_free(next)) {
-        tlsf_assert(!block_is_last(block) && "previous block can't be last");
-        block_remove(control, next);
-        block = block_absorb(block, next);
-    }
-
-    return block;
-}
-
-/* Trim any trailing block space off the end of a block, return to pool. */
-static void block_trim_free(control_t *control,
-                            block_header_t *block,
-                            size_t size)
-{
-    tlsf_assert(block_is_free(block) && "block must be free");
-    if (block_can_split(block, size)) {
-        block_header_t *remaining_block = block_split(block, size);
-        block_link_next(block);
-        block_set_prev_free(remaining_block);
-        block_insert(control, remaining_block);
-    }
-}
-
-/* Trim any trailing block space off the end of a used block, return to pool. */
-static void block_trim_used(control_t *control,
-                            block_header_t *block,
-                            size_t size)
-{
-    tlsf_assert(!block_is_free(block) && "block must be used");
-    if (block_can_split(block, size)) {
-        /* If the next block is free, we must coalesce. */
-        block_header_t *remaining_block = block_split(block, size);
-        block_set_prev_used(remaining_block);
-
-        remaining_block = block_merge_next(control, remaining_block);
-        block_insert(control, remaining_block);
-    }
-}
-
-static block_header_t *block_trim_free_leading(control_t *control,
-                                               block_header_t *block,
-                                               size_t size)
-{
-    block_header_t *remaining_block = block;
-    if (block_can_split(block, size)) {
-        /* We want the 2nd block. */
-        remaining_block = block_split(block, size - block_header_overhead);
-        block_set_prev_free(remaining_block);
-
-        block_link_next(block);
-        block_insert(control, block);
-    }
-
-    return remaining_block;
-}
-
-static block_header_t *block_locate_free(control_t *control, size_t size)
-{
-    int fl = 0, sl = 0;
-    block_header_t *block = NULL;
-
-    if (size) {
-        mapping_search(size, &fl, &sl);
-        block = search_suitable_block(control, &fl, &sl);
-    }
-
-    if (block) {
-        tlsf_assert(block_size(block) >= size);
-        remove_free_block(control, block, fl, sl);
-    }
-
-    if (unlikely(block && !block->size))
-        block = NULL;
-
-    return block;
-}
-
-static void *block_prepare_used(control_t *control,
-                                block_header_t *block,
-                                size_t size)
-{
-    void *p = NULL;
-    if (block) {
-        tlsf_assert(size && "size must be non-zero");
-        block_trim_free(control, block, size);
-        block_mark_as_used(block);
-        p = block_to_ptr(block);
-    }
-    return p;
-}
-
-/* Clear structure and point all empty lists at the null block. */
-static void control_construct(control_t *control)
-{
-    int i, j;
-
-    control->block_null.next_free = &control->block_null;
-    control->block_null.prev_free = &control->block_null;
-
-    control->fl_bitmap = 0;
-    for (i = 0; i < FL_INDEX_COUNT; ++i) {
-        control->sl_bitmap[i] = 0;
-        for (j = 0; j < SL_INDEX_COUNT; ++j) {
-            control->blocks[i][j] = &control->block_null;
-        }
-    }
-}
-
-/*
- * Debugging utilities.
- */
-#ifdef TSLF_CONFIG_DEBUG
-
-typedef struct integrity_t {
-    int prev_status;
-    int status;
-} integrity_t;
-
-#define tlsf_insist(x)  \
-    do {                \
-        tlsf_assert(x); \
-        if (!(x))       \
-            status--;   \
-    } while (0)
-
-static void integrity_walker(void *ptr, size_t size, int used, void *user)
-{
-    block_header_t *block = block_from_ptr(ptr);
-    integrity_t *integ = tlsf_cast(integrity_t *, user);
-    const int this_prev_status = block_is_prev_free(block) ? 1 : 0;
-    const int this_status = block_is_free(block) ? 1 : 0;
-    const size_t this_block_size = block_size(block);
-
-    int status = 0;
-    (void)used;
-    tlsf_insist(integ->prev_status == this_prev_status &&
-                "prev status incorrect");
-    tlsf_insist(size == this_block_size && "block size incorrect");
-
-    integ->prev_status = this_status;
-    integ->status += status;
-}
-
-int tlsf_check(tlsf_t tlsf)
-{
-    int i, j;
-
-    control_t *control = tlsf_cast(control_t *, tlsf);
-    int status = 0;
-
-    /* Check that the free lists and bitmaps are accurate. */
-    for (i = 0; i < FL_INDEX_COUNT; ++i) {
-        for (j = 0; j < SL_INDEX_COUNT; ++j) {
-            const int fl_map = control->fl_bitmap & (1 << i);
-            const int sl_list = control->sl_bitmap[i];
-            const int sl_map = sl_list & (1 << j);
-            const block_header_t *block = control->blocks[i][j];
-
-            /* Check that first- and second-level lists agree. */
-            if (!fl_map) {
-                tlsf_insist(!sl_map && "second-level map must be null");
-            }
-
-            if (!sl_map) {
-                tlsf_insist(block == &control->block_null &&
-                            "block list must be null");
-                continue;
-            }
-
-            /* Check that there is at least one free block. */
-            tlsf_insist(sl_list && "no free blocks in second-level map");
-            tlsf_insist(block != &control->block_null &&
-                        "block should not be null");
-
-            while (block != &control->block_null) {
-                int fli, sli;
-                tlsf_insist(block_is_free(block) && "block should be free");
-                tlsf_insist(!block_is_prev_free(block) &&
-                            "blocks should have coalesced");
-                tlsf_insist(!block_is_free(block_next(block)) &&
-                            "blocks should have coalesced");
-                tlsf_insist(block_is_prev_free(block_next(block)) &&
-                            "block should be free");
-                tlsf_insist(block_size(block) >= block_size_min &&
-                            "block not minimum size");
-
-                mapping_insert(block_size(block), &fli, &sli);
-                tlsf_insist(fli == i && sli == j &&
-                            "block size indexed in wrong list");
-                block = block->next_free;
-            }
-        }
-    }
-
-    return status;
-}
-
-#undef tlsf_insist
-
-static void default_walker(void *ptr, size_t size, int used, void *user)
-{
-    (void)user;
-    printf("\t%p %s size: %x (%p)\n", ptr, used ? "used" : "free",
-           (unsigned int)size, block_from_ptr(ptr));
-}
-
-void tlsf_walk_pool(pool_t pool, tlsf_walker walker, void *user)
-{
-    tlsf_walker pool_walker = walker ? walker : default_walker;
-    block_header_t *block = offset_to_block(pool, -(int)block_header_overhead);
-
-    while (block && !block_is_last(block)) {
-        pool_walker(block_to_ptr(block), block_size(block),
-                    !block_is_free(block), user);
-        block = block_next(block);
-    }
-}
-
-size_t tlsf_block_size(void *ptr)
-{
-    size_t size = 0;
-    if (ptr) {
-        const block_header_t *block = block_from_ptr(ptr);
-        size = block_size(block);
-    }
-    return size;
-}
-
-int tlsf_check_pool(pool_t pool)
-{
-    /* Check that the blocks are physically correct. */
-    integrity_t integ = {0, 0};
-    tlsf_walk_pool(pool, integrity_walker, &integ);
-
-    return integ.status;
-}
-
-#endif /* TLSF_CONFIG_DEBUG */
-
-/*
- * Size of the TLSF structures in a given memory block passed to
- * tlsf_create, equal to the size of a control_t
- */
-size_t tlsf_size(void)
-{
-    return sizeof(control_t);
-}
-
-size_t tlsf_align_size(void)
-{
-    return ALIGN_SIZE;
-}
-
-size_t tlsf_block_size_min(void)
-{
-    return block_size_min;
-}
-
-size_t tlsf_block_size_max(void)
-{
-    return block_size_max;
+  }
+  return NULL;
 }
 
 /*
  * Overhead of the TLSF structures in a given memory block passed to
- * tlsf_add_pool, equal to the overhead of a free block and the
+ * add_pool, equal to the overhead of a free block and the
  * sentinel block.
- */
-size_t tlsf_pool_overhead(void)
-{
-    return 2 * block_header_overhead;
-}
+*/
 
-size_t tlsf_alloc_overhead(void)
-{
-    return block_header_overhead;
-}
+static block_t add_pool(tlsf_t t, void* mem, size_t size) {
+  size_t pool_size = size - POOL_OVERHEAD;
+  if (pool_size > BLOCK_SIZE_MAX)
+    pool_size = BLOCK_SIZE_MAX; // Allow larger pool sizes returned by tlsf_map
 
-pool_t tlsf_add_pool(tlsf_t tlsf, void *mem, size_t bytes)
-{
-    block_header_t *block;
-    block_header_t *next;
+  XASSERT((size_t)mem % ALIGN_SIZE == 0, "wrong alignment");
+  XASSERT(pool_size >= BLOCK_SIZE_MIN, "pool is too small");
 
-    const size_t pool_overhead = tlsf_pool_overhead();
-    const size_t pool_bytes = align_down(bytes - pool_overhead, ALIGN_SIZE);
-
-    if (((ptrdiff_t)mem % ALIGN_SIZE) != 0) {
-        printf("tlsf_add_pool: Memory must be aligned by %u bytes.\n",
-               (unsigned int)ALIGN_SIZE);
-        return 0;
-    }
-
-    if (pool_bytes < block_size_min || pool_bytes > block_size_max) {
-#if defined(TLSF_64BIT)
-        printf(
-            "tlsf_add_pool: Memory size must be between 0x%x and 0x%x00 "
-            "bytes.\n",
-            (unsigned int)(pool_overhead + block_size_min),
-            (unsigned int)((pool_overhead + block_size_max) / 256));
-#else
-        printf("tlsf_add_pool: Memory size must be between %u and %u bytes.\n",
-               (unsigned int)(pool_overhead + block_size_min),
-               (unsigned int)(pool_overhead + block_size_max));
+#ifdef TLSF_STATS
+  ++t->stats.pool_count;
+  t->stats.total_size += pool_size;
+  t->stats.used_size += pool_size;
 #endif
-        return 0;
-    }
 
-    /*
-     * Create the main free block. Offset the start of the block slightly
-     * so that the prev_phys_block field falls outside of the pool -
-     * it will never be used.
-    */
-    block = offset_to_block(mem, -(tlsfptr_t)block_header_overhead);
-    block_set_size(block, pool_bytes);
-    block_set_free(block);
-    block_set_prev_used(block);
-    block_insert(tlsf_cast(control_t *, tlsf), block);
+  /*
+   * Create the main free block. Offset the start of the block slightly
+   * so that the prev_phys_block field falls outside of the pool -
+   * it will never be used.
+   */
+  block_t block = OFFSET_TO_BLOCK(mem, -BLOCK_OVERHEAD);
+  block->header = pool_size | BLOCK_FREE_BIT;
+  block_insert(t, block);
 
-    /* Split the block to create a zero-size sentinel block. */
-    next = block_link_next(block);
-    block_set_size(next, 0);
-    block_set_used(next);
-    block_set_prev_free(next);
+  // Split the block to create a zero-size sentinel block.
+  block_link_next(block)->header = BLOCK_PREV_FREE_BIT;
 
-    return mem;
+  return block;
 }
 
-void tlsf_remove_pool(tlsf_t tlsf, pool_t pool)
-{
-    control_t *control = tlsf_cast(control_t *, tlsf);
-    block_header_t *block = offset_to_block(pool, -(int)block_header_overhead);
+static void remove_pool(tlsf_t t, block_t block) {
+  size_t size = block_size(block);
 
-    int fl = 0, sl = 0;
+#ifdef TLSF_STATS
+  XASSERT(t->stats.used_size >= size, "wrong used");
+  XASSERT(t->stats.total_size >= size, "wrong total");
+  XASSERT(t->stats.pool_count > 0, "wrong pool count");
+  t->stats.total_size -= size;
+  t->stats.used_size -= size;
+  --t->stats.pool_count;
+#endif
 
-    tlsf_assert(block_is_free(block) && "block should be free");
-    tlsf_assert(!block_is_free(block_next(block)) &&
-                "next block should not be free");
-    tlsf_assert(block_size(block_next(block)) == 0 &&
-                "next block size should be zero");
-
-    mapping_insert(block_size(block), &fl, &sl);
-    remove_free_block(control, block, fl, sl);
+  XASSERT(block_is_last(block_next(block)), "sentinel should be last");
+  XASSERT(!block_is_free(block_next(block)),
+         "sentinel block should not be free");
+  t->unmap((char*)block + BLOCK_OVERHEAD, size + POOL_OVERHEAD, t->user);
 }
 
 /*
  * TLSF main interface.
- */
+*/
 
-tlsf_t tlsf_create(void *mem)
-{
-    if (((tlsfptr_t)mem % ALIGN_SIZE) != 0) {
-        printf("tlsf_create: Memory must be aligned to %u bytes.\n",
-               (unsigned int)ALIGN_SIZE);
-        return NULL;
-    }
+tlsf_t tlsf_create(tlsf_map_t map, tlsf_unmap_t unmap, void* user) {
+  XASSERT(map, "map must not be null");
+  const size_t minsize = TLSF_SIZE + POOL_OVERHEAD + BLOCK_SIZE_MIN;
+  size_t size = minsize;
+  void* mem = map(&size, user);
+  XASSERT(mem, "no memory available");
+  XASSERT(size >= minsize, "not enough memory allocated");
+  XASSERT((size_t)mem % ALIGN_SIZE == 0, "wrong alignment");
 
-    control_construct(tlsf_cast(control_t *, mem));
+  tlsf_t t = (tlsf_t)mem;
+  t->map = map;
+  t->unmap = unmap;
+  t->user = user;
 
-    return tlsf_cast(tlsf_t, mem);
+#ifdef TLSF_STATS
+  memset(&t->stats, 0, sizeof (t->stats));
+#endif
+
+  t->block_null.next_free = &t->block_null;
+  t->block_null.prev_free = &t->block_null;
+
+  t->fl_bitmap = 0;
+  for (unsigned int i = 0; i < FL_INDEX_COUNT; ++i) {
+    t->sl_bitmap[i] = 0;
+    for (unsigned int j = 0; j < SL_INDEX_COUNT; ++j)
+      t->blocks[i][j] = &t->block_null;
+  }
+
+  add_pool(t, (char*)mem + TLSF_SIZE, size - TLSF_SIZE);
+
+  return t;
 }
 
-tlsf_t tlsf_create_with_pool(void *mem, size_t bytes)
-{
-    tlsf_t tlsf = tlsf_create(mem);
-    tlsf_add_pool(tlsf, (char *)mem + tlsf_size(), bytes - tlsf_size());
-    return tlsf;
+void tlsf_destroy(tlsf_t t) {
+#ifdef TLSF_STATS
+  XASSERT(t->stats.free_size == t->stats.total_size, "Memory leak detected.");
+  XASSERT((t->unmap && t->stats.pool_count == 1) ||
+         (!t->unmap && t->stats.pool_count >= 1),
+        "Memory leak detected. Some pools were not released.");
+#endif
+
+  if (t->unmap) {
+    block_t first_block = OFFSET_TO_BLOCK(t, TLSF_SIZE  - BLOCK_OVERHEAD);
+    XASSERT(block_is_last(block_next(first_block)), "sentinel should be last");
+    XASSERT(!block_is_free(block_next(first_block)),
+           "sentinel block should not be free");
+    t->unmap(t, TLSF_SIZE + block_size(first_block) + POOL_OVERHEAD, t->user);
+  }
 }
 
-void tlsf_destroy(tlsf_t tlsf)
-{
-    /* Nothing to do. */
-    (void)tlsf;
+void* tlsf_mallocx(tlsf_t t, size_t size, int flags) {
+  XASSERT((flags & ~(TLSF_ZERO | TLSF_NOMAP)) == 0, "Invalid flags");
+
+  size = adjust_size(size);
+
+  block_t block = block_locate_free(t, size);
+  if (!block) {
+    if (flags & TLSF_NOMAP)
+      return 0;
+    size_t minsize = POOL_OVERHEAD + BLOCK_OVERHEAD + round_block_size(size);
+    size_t memsize = minsize;
+    void* mem = t->map(&memsize, t->user);
+    if (!mem)
+      return 0;
+    XASSERT(memsize >= minsize, "not enough memory allocated");
+    add_pool(t, (char*)mem, memsize)->header |= BLOCK_POOL_BIT;
+    block = block_locate_free(t, size);
+  }
+  XASSERT(block, "No block found");
+
+#ifdef TLSF_STATS
+  ++t->stats.malloc_count;
+#endif
+
+  block_trim_free(t, block, size);
+  block_set_free(block, false);
+
+  void* p = block_to_ptr(block);
+  if (flags & TLSF_ZERO)
+    memset(p, 0, size);
+  return p;
 }
 
-pool_t tlsf_get_pool(tlsf_t tlsf)
-{
-    return tlsf_cast(pool_t, (char *)tlsf + tlsf_size());
-}
+void tlsf_free(tlsf_t t, void* mem) {
+  if (!mem) // to support free after zero size realloc
+    return;
 
-void *tlsf_malloc(tlsf_t tlsf, size_t size)
-{
-    control_t *control = tlsf_cast(control_t *, tlsf);
-    const size_t adjust = adjust_request_size(size, ALIGN_SIZE);
-    block_header_t *block = block_locate_free(control, adjust);
-    return block_prepare_used(control, block, adjust);
-}
+  block_t block = block_from_ptr(mem);
+  XASSERT(!block_is_free(block), "block already marked as free");
 
-void *tlsf_memalign(tlsf_t tlsf, size_t align, size_t size)
-{
-    control_t *control = tlsf_cast(control_t *, tlsf);
-    const size_t adjust = adjust_request_size(size, ALIGN_SIZE);
+#ifdef TLSF_STATS
+  ++t->stats.free_count;
+#endif
 
-    /*
-     * We must allocate an additional minimum block size bytes so that if
-     * our free block will leave an alignment gap which is smaller, we can
-     * trim a leading free block and release it back to the pool. We must
-     * do this because the previous physical block is in use, therefore
-     * the prev_phys_block field is not valid, and we can't simply adjust
-     * the size of that block.
-     */
-    const size_t gap_minimum = sizeof(block_header_t);
-    const size_t size_with_gap =
-        adjust_request_size(adjust + align + gap_minimum, align);
+  block_set_free(block, true);
+  block = block_merge_prev(t, block);
+  block = block_merge_next(t, block);
 
-    /*
-     * If alignment is less than or equals base alignment, we're done.
-     * If we requested 0 bytes, return null, as tlsf_malloc(0) does.
-     */
-    const size_t aligned_size =
-        (adjust && align > ALIGN_SIZE) ? size_with_gap : adjust;
-
-    block_header_t *block = block_locate_free(control, aligned_size);
-
-    /* This can't be a static assert. */
-    tlsf_assert(sizeof(block_header_t) ==
-                block_size_min + block_header_overhead);
-
-    if (block) {
-        void *ptr = block_to_ptr(block);
-        void *aligned = align_ptr(ptr, align);
-        size_t gap = tlsf_cast(
-            size_t, tlsf_cast(tlsfptr_t, aligned) - tlsf_cast(tlsfptr_t, ptr));
-
-        /* If gap size is too small, offset to next aligned boundary. */
-        if (gap && gap < gap_minimum) {
-            const size_t gap_remain = gap_minimum - gap;
-            const size_t offset = tlsf_max(gap_remain, align);
-            const void *next_aligned =
-                tlsf_cast(void *, tlsf_cast(tlsfptr_t, aligned) + offset);
-
-            aligned = align_ptr(next_aligned, align);
-            gap = tlsf_cast(size_t, tlsf_cast(tlsfptr_t, aligned) -
-                                        tlsf_cast(tlsfptr_t, ptr));
-        }
-
-        if (gap) {
-            tlsf_assert(gap >= gap_minimum && "gap size too small");
-            block = block_trim_free_leading(control, block, gap);
-        }
-    }
-
-    return block_prepare_used(control, block, adjust);
-}
-
-void tlsf_free(tlsf_t tlsf, void *ptr)
-{
-    if (unlikely(!ptr)) return;
-
-    control_t *control = tlsf_cast(control_t *, tlsf);
-    block_header_t *block = block_from_ptr(ptr);
-    tlsf_assert(!block_is_free(block) && "block already marked as free");
-    block_mark_as_free(block);
-    block = block_merge_prev(control, block);
-    block = block_merge_next(control, block);
-    block_insert(control, block);
+  if ((block->header & BLOCK_POOL_BIT) &&
+      block_is_last(block_next(block)) &&
+      t->unmap)
+    remove_pool(t, block);
+  else
+    block_insert(t, block);
 }
 
 /*
@@ -985,52 +683,125 @@ void tlsf_free(tlsf_t tlsf, void *ptr)
  * - an extended buffer size will leave the newly-allocated area with
  *   contents undefined
  */
-void *tlsf_realloc(tlsf_t tlsf, void *ptr, size_t size)
-{
-    control_t *control = tlsf_cast(control_t *, tlsf);
-    void *p = NULL;
+void* tlsf_reallocx(tlsf_t t, void* mem, size_t size, int flags) {
+  XASSERT((flags & ~(TLSF_ZERO | TLSF_NOMAP | TLSF_INPLACE)) == 0,
+         "Invalid flags");
 
-    /* Zero-size requests are treated as free. */
-    if (ptr && size == 0) {
-        tlsf_free(tlsf, ptr);
+  // Zero-size requests are treated as free.
+  if (mem && size == 0) {
+    tlsf_free(t, mem);
+    return 0;
+  }
+
+  // Requests with NULL pointers are treated as malloc.
+  if (!mem)
+    return tlsf_mallocx(t, size, flags & (TLSF_ZERO | TLSF_NOMAP));
+
+  block_t block = block_from_ptr(mem);
+  block_t next = block_next(block);
+
+  const size_t cursize = block_size(block);
+  const size_t combined = cursize + block_size(next) + BLOCK_OVERHEAD;
+  size = adjust_size(size);
+
+  XASSERT(!block_is_free(block), "block already marked as free");
+
+  /*
+   * If the next block is used, or when combined with the current
+   * block, does not offer enough space, we must reallocate and copy.
+   */
+  if (size > cursize && (!block_is_free(next) || size > combined)) {
+    if (flags & TLSF_INPLACE)
+      return 0;
+    char* p = (char*)tlsf_mallocx(t, size, flags & (TLSF_NOMAP | TLSF_NOMAP));
+    if (p) {
+      memcpy(p, mem, cursize);
+      if (flags & TLSF_ZERO)
+        memset(p + cursize, 0, size - cursize);
+      tlsf_free(t, mem);
     }
-    /* Requests with NULL pointers are treated as malloc. */
-    else if (!ptr) {
-        p = tlsf_malloc(tlsf, size);
-    } else {
-        block_header_t *block = block_from_ptr(ptr);
-        block_header_t *next = block_next(block);
-
-        const size_t cursize = block_size(block);
-        const size_t combined =
-            cursize + block_size(next) + block_header_overhead;
-        const size_t adjust = adjust_request_size(size, ALIGN_SIZE);
-
-        tlsf_assert(!block_is_free(block) && "block already marked as free");
-
-        /*
-         * If the next block is used, or when combined with the current
-         * block, does not offer enough space, we must reallocate and copy.
-        */
-        if (adjust > cursize && (!block_is_free(next) || adjust > combined)) {
-            p = tlsf_malloc(tlsf, size);
-            if (p) {
-                const size_t minsize = tlsf_min(cursize, size);
-                memcpy(p, ptr, minsize);
-                tlsf_free(tlsf, ptr);
-            }
-        } else {
-            /* Do we need to expand to the next block? */
-            if (adjust > cursize) {
-                block_merge_next(control, block);
-                block_mark_as_used(block);
-            }
-
-            /* Trim the resulting block and return the original pointer. */
-            block_trim_used(control, block, adjust);
-            p = ptr;
-        }
-    }
-
     return p;
+  }
+
+  // Do we need to expand to the next block?
+  if (size > cursize) {
+    block_merge_next(t, block);
+    block_set_prev_free(block_next(block), false);
+    if (flags & TLSF_ZERO)
+      memset((char*)mem + cursize, 0, size - cursize);
+  }
+
+  // Trim the resulting block and return the original pointer.
+  block_trim_used(t, block, size);
+  return mem;
 }
+
+#ifdef TLSF_STATS
+const tlsf_stats_t* tlsf_stats(tlsf_t t) {
+  return &t->stats;
+}
+
+void tlsf_printstats(tlsf_t t) {
+  tlsf_stats_t* s = &t->stats;
+  fprintf(stderr, "TSLF free_size=%llu used_size=%llu total_size=%llu "
+                  "pool_count=%llu malloc_count=%llu free_count=%llu\n",
+          s->free_size, s->used_size, s->total_size, s->pool_count,
+          s->malloc_count, s->free_count);
+}
+#endif
+
+/*
+ * Debugging utilities.
+ */
+#ifdef TLSF_DEBUG
+#define INSIST(cond, msg)                                     \
+  do {                                                        \
+    if (!(cond)) {                                            \
+      fprintf(stderr, "TLSF FAILURE: %s - %s\n", msg, #cond); \
+      abort();                                                \
+    }                                                         \
+  } while (0)
+
+void tlsf_check(tlsf_t t) {
+  // Check that the free lists and bitmaps are accurate.
+  for (unsigned int i = 0; i < FL_INDEX_COUNT; ++i) {
+    for (unsigned int j = 0; j < SL_INDEX_COUNT; ++j) {
+      const size_t fl_map = t->fl_bitmap & (1ULL << i);
+      const size_t sl_list = t->sl_bitmap[i];
+      const size_t sl_map = sl_list & (1ULL << j);
+      block_t block = t->blocks[i][j];
+
+      // Check that first- and second-level lists agree.
+      if (!fl_map)
+        INSIST(!sl_map, "second-level map must be null");
+
+      if (!sl_map) {
+        INSIST(block == &t->block_null, "block list must be null");
+        continue;
+      }
+
+      // Check that there is at least one free block.
+      INSIST(sl_list, "no free blocks in second-level map");
+      INSIST(block != &t->block_null, "block should not be null");
+
+      while (block != &t->block_null) {
+        unsigned int fli, sli;
+        INSIST(block_is_free(block), "block should be free");
+        INSIST(!block_is_prev_free(block), "blocks should have coalesced");
+        INSIST(!block_is_free(block_next(block)),
+               "blocks should have coalesced");
+        INSIST(block_is_prev_free(block_next(block)), "block should be free");
+        INSIST(block_size(block) >= BLOCK_SIZE_MIN, "block not minimum size");
+
+        mapping_insert(block_size(block), &fli, &sli);
+        INSIST(fli == i && sli == j, "block size indexed in wrong list");
+        block = block->next_free;
+      }
+    }
+  }
+  INSIST(t->stats.free_size + t->stats.used_size == t->stats.total_size,
+         "wrong total memory");
+  INSIST(t->stats.free_count <= t->stats.malloc_count,
+         "wrong free and malloc count");
+}
+#endif // TLSF_DEBUG

@@ -63,6 +63,21 @@ SymbolAddr *lookupSymbolInDLLs ( const SymbolName* lbl );
 pathchar* resolveSymbolAddr_PEi386 ( pathchar* buffer, int size,
                                      SymbolAddr* symbol, uintptr_t* top );
 
+/* We use myindex to calculate array addresses, rather than
+   simply doing the normal subscript thing.  That's because
+   some of the above structs have sizes which are not
+   a whole number of words.  GCC rounds their sizes up to a
+   whole number of words, which means that the address calcs
+   arising from using normal C indexing or pointer arithmetic
+   are just plain wrong.  Sigh.
+*/
+INLINE_HEADER unsigned char *
+myindex ( int scale, void* base, int index )
+{
+    return
+        ((unsigned char*)base) + scale * index;
+}
+
 char *get_name_string(
     unsigned char* name,
     ObjectCode* oc);

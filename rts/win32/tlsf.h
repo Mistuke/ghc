@@ -1,10 +1,21 @@
-#ifndef INCLUDED_tlsf
-#define INCLUDED_tlsf
+#ifndef _TLSF_H
+#define _TLSF_H
 
 /*
  * Two Level Segregated Fit memory allocator.
+ * Written by Matthew Conte.
+ * Maintained by Daniel Mendler.
  *
- * Copyright (c) 2006-2008, 2011, 2014 Matthew Conte. All rights reserved.
+ * Based on the original documentation by Miguel Masmano:
+ *  http://www.gii.upv.es/tlsf/main/docs
+ *
+ * This implementation was written to the specification
+ * of the document, therefore no GPL restrictions apply.
+ *
+ * Copyright (c) 2006-2016, Matthew Conte
+ * Copyright (c) 2017, Daniel Mendler
+ * Copyright (c) 2017, Tamar Christina
+ * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -20,64 +31,102 @@
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL MATTHEW CONTE BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * ARE DISCLAIMED. IN NO EVENT SHALL MATTHEW CONTE BE LIABLE FOR ANY
+ * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
  * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
  * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
  * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <stddef.h>
+#include "Rts.h"
 
-#if defined(__cplusplus)
+// Ensure that __WORDSIZE is defined
+#ifndef __WORDSIZE
+#  if defined(mingw32_HOST_OS)
+#    if defined(x86_64_HOST_ARCH)
+#       define __WORDSIZE 64
+#    else
+#       define __WORDSIZE 32
+#    endif
+#  else
+#    include <sys/reg.h> // needed by musl
+#    ifndef __WORDSIZE
+#      error __WORDSIZE is not defined
+#    endif
+#  endif
+#endif
+
+#if __WORDSIZE == 64
+#  define TLSF_MAX_SHIFT 36 // 64G
+#elif __WORDSIZE == 32
+#  define TLSF_MAX_SHIFT 29 // 512M
+#else
+#  error __WORDSIZE must be 32 or 64
+#endif
+
+// Maximum allocation size
+#define TLSF_MAX_SIZE  ((1ULL << TLSF_MAX_SHIFT) - sizeof (size_t))
+
+// Flags
+#define TLSF_DEFAULT 0
+#define TLSF_NOMAP   1
+#define TLSF_ZERO    2
+#define TLSF_INPLACE 4
+
+#if defined(DEBUG)
+#  define TLSF_ASSERT
+#endif
+
+#ifdef __cplusplus
 extern "C" {
 #endif
 
-/* tlsf_t: a TLSF structure. Can contain 1 to N pools. */
-/* pool_t: a block of memory that TLSF can manage. */
-typedef void *tlsf_t;
-typedef void *pool_t;
+typedef struct tlsf_s* tlsf_t;
 
-/* Create/destroy a memory pool. */
-tlsf_t tlsf_create(void *mem);
-tlsf_t tlsf_create_with_pool(void *mem, size_t bytes);
-void tlsf_destroy(tlsf_t tlsf);
-pool_t tlsf_get_pool(tlsf_t tlsf);
+typedef void* (*tlsf_map_t)(size_t* size, void* user);
+typedef void  (*tlsf_unmap_t)(void* mem, size_t size, void* user);
 
-/* Add/remove memory pools. */
-pool_t tlsf_add_pool(tlsf_t tlsf, void *mem, size_t bytes);
-void tlsf_remove_pool(tlsf_t tlsf, pool_t pool);
+tlsf_t tlsf_create(tlsf_map_t map, tlsf_unmap_t unmap, void* user);
+void   tlsf_destroy(tlsf_t t);
+void   tlsf_free(tlsf_t t, void* mem);
+void*  tlsf_mallocx(tlsf_t t, size_t size, int flags);
+void*  tlsf_reallocx(tlsf_t t, void* mem, size_t size, int flags);
 
-/* malloc/memalign/realloc/free replacements. */
-void *tlsf_malloc(tlsf_t tlsf, size_t bytes);
-void *tlsf_memalign(tlsf_t tlsf, size_t align, size_t bytes);
-void *tlsf_realloc(tlsf_t tlsf, void *ptr, size_t size);
-void tlsf_free(tlsf_t tlsf, void *ptr);
+static inline void* tlsf_malloc(tlsf_t t, size_t size) {
+  return tlsf_mallocx(t, size, TLSF_DEFAULT);
+}
 
-/* Returns internal block size, not original request size */
-size_t tlsf_block_size(void *ptr);
+static inline void* tlsf_calloc(tlsf_t t, size_t size) {
+  return tlsf_mallocx(t, size, TLSF_ZERO);
+}
 
-/* Overheads/limits of internal structures. */
-size_t tlsf_size(void);
-size_t tlsf_align_size(void);
-size_t tlsf_block_size_min(void);
-size_t tlsf_block_size_max(void);
-size_t tlsf_pool_overhead(void);
-size_t tlsf_alloc_overhead(void);
+static inline void* tlsf_realloc(tlsf_t t, void* mem, size_t size) {
+  return tlsf_reallocx(t, mem, size, TLSF_DEFAULT);
+}
 
-/* Debugging. */
-#ifdef TSLF_CONFIG_DEBUG
-typedef void (*tlsf_walker)(void *ptr, size_t size, int used, void *user);
-void tlsf_walk_pool(pool_t pool, tlsf_walker walker, void *user);
-/* Returns nonzero if any internal consistency check fails. */
-int tlsf_check(tlsf_t tlsf);
-int tlsf_check_pool(pool_t pool);
-#endif /* TSLF_CONFIG_DEBUG */
+#ifdef TLSF_STATS
+typedef struct {
+  size_t free_size;
+  size_t used_size;
+  size_t total_size;
+  size_t pool_count;
+  size_t malloc_count;
+  size_t free_count;
+} tlsf_stats_t;
 
-#if defined(__cplusplus)
-};
+const tlsf_stats_t* tlsf_stats(tlsf_t t);
+void tlsf_printstats(tlsf_t t);
+#endif
+
+#ifdef TLSF_DEBUG
+void tlsf_check(tlsf_t t);
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif
