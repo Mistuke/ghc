@@ -22,6 +22,10 @@
 # include "Printer.h"   /* for printing        */
 #endif
 
+#if defined(mingw32_HOST_OS)
+#  include "win32/WinMem.h"
+#endif
+
 // Hack: we assume that we're building a batch-mode system unless
 // INTERPRETER is set
 

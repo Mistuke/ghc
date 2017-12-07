@@ -188,6 +188,7 @@
 #include "linker/PEi386.h"
 #include "linker/PEi386Types.h"
 #include "LinkerInternals.h"
+#include "win32/WinMem.h"
 
 #include <windows.h>
 #include <shfolder.h> /* SHGetFolderPathW */

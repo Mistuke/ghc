@@ -49,6 +49,7 @@
 
 #if defined(mingw32_HOST_OS)
 #include <fenv.h>
+#include "win32/WinMem.h"
 #else
 #include "posix/TTY.h"
 #endif
