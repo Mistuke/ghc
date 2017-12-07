@@ -50,6 +50,16 @@ extern char *ctime_r(const time_t *, char *);
 
 #if defined(_WIN32)
 #include <windows.h>
+//#include "win32/WinMem.h"
+//#define MALLOC(N) winmem_malloc(WriteAccess, N)
+//#define REALLOC(P, N) winmem_realloc(WriteAccess, P, N)
+//#define CALLOC(N, M) winmem_calloc(WriteAccess, N, M)
+//#define FREE(P) winmem_free(WriteAccess, P)
+//#else
+#define MALLOC(N) malloc(N)
+#define REALLOC(P, N) realloc(P, N)
+#define CALLOC(N, M) calloc(N, M)
+#define FREE(P) free(P)
 #endif
 
 /* -----------------------------------------------------------------------------
@@ -61,7 +71,7 @@ stgMallocBytes (size_t n, char *msg)
 {
     void *space;
 
-    if ((space = malloc(n)) == NULL) {
+    if ((space = MALLOC(n)) == NULL) {
       /* Quoting POSIX.1-2008 (which says more or less the same as ISO C99):
        *
        *   "Upon successful completion with size not equal to 0, malloc() shall
@@ -88,7 +98,7 @@ stgReallocBytes (void *p, size_t n, char *msg)
 {
     void *space;
 
-    if ((space = realloc(p, n)) == NULL) {
+    if ((space = REALLOC(p, n)) == NULL) {
       /* don't fflush(stdout); WORKAROUND bug in Linux glibc */
       rtsConfig.mallocFailHook((W_) n, msg);
       stg_exit(EXIT_INTERNAL_ERROR);
@@ -101,7 +111,7 @@ stgCallocBytes (size_t n, size_t m, char *msg)
 {
     void *space;
 
-    if ((space = calloc(n, m)) == NULL) {
+    if ((space = CALLOC(n, m)) == NULL) {
       /* don't fflush(stdout); WORKAROUND bug in Linux glibc */
       rtsConfig.mallocFailHook((W_) n*m, msg);
       stg_exit(EXIT_INTERNAL_ERROR);
@@ -127,7 +137,7 @@ char *stgStrndup(const char *s, size_t n)
 void
 stgFree(void* p)
 {
-  free(p);
+    FREE(p);
 }
 
 /* -----------------------------------------------------------------------------
