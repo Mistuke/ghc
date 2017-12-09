@@ -78,6 +78,8 @@
 
 #if defined(DEBUG)
 #  define TLSF_ASSERT
+#  define TLSF_DEBUG
+#  define TLSF_STATS
 #endif
 
 #ifdef __cplusplus

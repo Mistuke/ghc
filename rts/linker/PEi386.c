@@ -280,14 +280,6 @@ static Alignments pe_alignments[] = {
 
 const int pe_alignments_cnt = sizeof(pe_alignments) / sizeof(Alignments);
 const int default_alignment = 8;
-const int initHeapSizeMB = 15;
-static HANDLE code_heap = NULL;
-
-/* LFH = Low Fragmentation Heap and HeapOptimizeResources basically tells it
-   to do some cache optimizations. Which is new since Windows 8.1.  These are
-   missing from the mingw-w64 headers so we have to copy them.  */
-#define HEAP_LFH 2
-#define HeapOptimizeResources 3
 
 void initLinker_PEi386()
 {
@@ -311,31 +303,10 @@ void initLinker_PEi386()
   addDLL(WSTR("shell32"));
   addDLL(WSTR("user32"));
 #endif
-
-  /* See Note [Memory allocation].  */
-  /* Create a private heap which we will use to store all code and data.  */
-  SYSTEM_INFO sSysInfo;
-  GetSystemInfo(&sSysInfo);
-  code_heap = HeapCreate (HEAP_CREATE_ENABLE_EXECUTE,
-                          initHeapSizeMB * sSysInfo.dwPageSize , 0);
-  if (!code_heap)
-    barf ("Could not create private heap during initialization. Aborting.");
-
-  /* Set some flags for the new code heap.  */
-  HeapSetInformation(code_heap, HeapEnableTerminationOnCorruption, NULL, 0);
-  unsigned long HeapInformation = HEAP_LFH;
-  HeapSetInformation(code_heap, HeapEnableTerminationOnCorruption,
-                     &HeapInformation, sizeof(HeapInformation));
-  HeapSetInformation(code_heap, HeapOptimizeResources, NULL, 0);
 }
 
 void exitLinker_PEi386()
 {
-  /* See Note [Memory allocation].  */
-  if (code_heap) {
-    HeapDestroy (code_heap);
-    code_heap = NULL;
-  }
 }
 
 /* A list thereof. */
@@ -423,7 +394,7 @@ void freePreloadObjectFile_PEi386(ObjectCode *oc)
     }
 
     if (oc->info->image) {
-        HeapFree(code_heap, 0, oc->info->image);
+        winmem_free (WriteAccess | ExecuteAccess, oc->info->image);
         oc->info->image = NULL;
     }
 
@@ -1368,7 +1339,7 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
                 "  off rel %lu\n"
                 "  ptr raw 0x%lx\n"
                 "    align %u\n"
-                " data adj %zu\n",
+                " size adj %zu\n",
                 sectab_i->Misc.VirtualSize,
                 sectab_i->VirtualAddress,
                 sectab_i->SizeOfRawData,
@@ -1572,11 +1543,11 @@ ocGetNames_PEi386 ( ObjectCode* oc )
          as we go along.  */
       if (!oc->info->image) {
         /* See Note [Memory allocation].  */
-        ASSERT(code_heap);
+        /* See Note [Pooled Memory Manager].  */
         oc->info->image
-          = HeapAlloc (code_heap, HEAP_ZERO_MEMORY, oc->info->secBytesTotal);
+          = winmem_malloc (WriteAccess | ExecuteAccess, oc->info->secBytesTotal);
         if (!oc->info->image)
-          barf ("Could not allocate any heap memory from private heap.");
+          barf ("Could not allocate any memory from pool.");
       }
 
       ASSERT(section.size == 0 || section.info->virtualSize == 0);
@@ -1613,8 +1584,9 @@ ocGetNames_PEi386 ( ObjectCode* oc )
    /* Allocate BSS space */
    SymbolAddr* bss = NULL;
    if (globalBssSize > 0) {
-       bss = stgCallocBytes(1, globalBssSize,
-                            "ocGetNames_PEi386(non-anonymous bss)");
+       //bss = stgCallocBytes(1, globalBssSize,
+       //                     "ocGetNames_PEi386(non-anonymous bss)");
+       bss = winmem_malloc (WriteAccess, globalBssSize);
        addSection(&oc->sections[oc->n_sections-1],
                   SECTIONKIND_RWDATA, SECTION_MALLOC,
                   bss, globalBssSize, 0, 0, 0);

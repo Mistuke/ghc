@@ -77,7 +77,7 @@ static PoolBuffer_t* buffers = NULL;
 
 const size_t pool_resize_limit       = 10;
 const size_t default_blocks_allocate = 15;
-const uint32_t default_protection    = PAGE_READWRITE;
+const uint32_t default_protection    = PAGE_EXECUTE_READWRITE;
 static volatile bool initialized     = false;
 static bool m_enforcing_mem_protect  = false;
 
@@ -218,7 +218,7 @@ void* winmem_malloc (AccessType_t type, size_t n)
 
   if (!manager)
     {
-      manager = (userInfo_t*)malloc (sizeof (userInfo_t));
+      manager = (userInfo_t*)calloc (1, sizeof (userInfo_t));
       manager->access = getProtection (type);
       manager->m_alloc
         = tlsf_create (winmem_cback_map, winmem_cback_unmap, manager);

@@ -1,3 +1,5 @@
+#include "PosixSource.h"
+
 #include <assert.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -5,6 +7,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include "tlsf.h"
 
 /*
@@ -743,8 +746,9 @@ const tlsf_stats_t* tlsf_stats(tlsf_t t) {
 
 void tlsf_printstats(tlsf_t t) {
   tlsf_stats_t* s = &t->stats;
-  fprintf(stderr, "TSLF free_size=%llu used_size=%llu total_size=%llu "
-                  "pool_count=%llu malloc_count=%llu free_count=%llu\n",
+  fprintf(stderr, "TSLF free_size=%" PRIuMAX " used_size=%" PRIuMAX
+                  " total_size=%" PRIuMAX " pool_count=%" PRIuMAX
+                  " malloc_count=%" PRIuMAX " free_count=%" PRIuMAX "\n",
           s->free_size, s->used_size, s->total_size, s->pool_count,
           s->malloc_count, s->free_count);
 }
