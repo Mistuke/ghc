@@ -14,7 +14,7 @@
  *
  * Copyright (c) 2006-2016, Matthew Conte
  * Copyright (c) 2017, Daniel Mendler
- * Copyright (c) 2017, Tamar Christina
+ * Copyright (c) 2017-2018, Tamar Christina
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -81,6 +81,10 @@
 #  define TLSF_DEBUG
 #  define TLSF_STATS
 #endif
+
+#define TLSF_ASSERT
+#define TLSF_DEBUG
+#define TLSF_STATS
 
 #ifdef __cplusplus
 extern "C" {

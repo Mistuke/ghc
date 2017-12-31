@@ -10,6 +10,11 @@
 #include <inttypes.h>
 #include "tlsf.h"
 
+
+#define TLSF_ASSERT
+#define TLSF_DEBUG
+#define TLSF_STATS
+
 /*
  * log2 of number of linear subdivisions of block sizes. Larger
  * values require more memory in the control structure. Values of
@@ -42,11 +47,11 @@
 */
 #define FL_INDEX_MAX (TLSF_MAX_SHIFT + 1)
 
-#define SL_INDEX_COUNT (1U << SL_INDEX_COUNT_SHIFT)
+#define SL_INDEX_COUNT (1ULL << SL_INDEX_COUNT_SHIFT)
 #define FL_INDEX_SHIFT (SL_INDEX_COUNT_SHIFT + ALIGN_SIZE_SHIFT)
 #define FL_INDEX_COUNT (FL_INDEX_MAX - FL_INDEX_SHIFT + 1)
 
-#define SMALL_BLOCK_SIZE (1U << FL_INDEX_SHIFT)
+#define SMALL_BLOCK_SIZE (1ULL << FL_INDEX_SHIFT)
 
 /*
  * Since block sizes are always at least a multiple of 4, the two least
@@ -88,9 +93,9 @@
 #define OFFSET_TO_BLOCK(p, s) ((block_t)((char*)(p) + (s)))
 
 #ifdef TLSF_ASSERT
-#define XASSERT(cond, msg) assert((cond) && msg)
+#define ASSERT(cond, msg) assert((cond) && msg)
 #else
-#define XASSERT(cond, msg)
+#define ASSERT(cond, msg)
 #endif
 
 // This code has been tested on 32- and 64-bit (LP/LLP) architectures.
@@ -158,6 +163,17 @@ struct tlsf_s {
   void*        user;
 };
 
+
+static void printBlocks (tlsf_t t)
+{
+    for (unsigned int i = 0; i < FL_INDEX_COUNT; ++i) {
+      for (unsigned int j = 0; j < SL_INDEX_COUNT; ++j) {
+        printf ("%p ", t->blocks[i][j]);
+      }
+      printf("\n");
+    }
+}
+
 /*
  * TLSF achieves O(1) cost for malloc and free operations by limiting
  * the search for a free block to a free list of guaranteed size
@@ -170,7 +186,7 @@ struct tlsf_s {
 
 static inline unsigned int tlsf_ffs(size_t x) {
   unsigned int i = (unsigned int)__builtin_ffs((int)x);
-  XASSERT(i, "No set bit found");
+  ASSERT(i, "No set bit found");
   return i - 1U;
 }
 
@@ -221,7 +237,7 @@ static inline void* block_to_ptr(const block_t block) {
 
 // Return location of previous block.
 static inline block_t block_prev(const block_t block) {
-  XASSERT(block_is_prev_free(block), "previous block must be free");
+  ASSERT(block_is_prev_free(block), "previous block must be free");
   return block->prev_phys_block;
 }
 
@@ -229,7 +245,7 @@ static inline block_t block_prev(const block_t block) {
 static inline block_t block_next(const block_t block) {
   block_t next
     = OFFSET_TO_BLOCK(block_to_ptr(block), block_size(block) - BLOCK_OVERHEAD);
-  XASSERT(!block_is_last(block), "Block is last");
+  ASSERT(!block_is_last(block), "Block is last");
   return next;
 }
 
@@ -246,10 +262,10 @@ static inline bool block_can_split(block_t block, size_t size) {
 
 static inline void block_set_free(block_t block, bool free) {
   if (free) {
-    XASSERT(!block_is_free(block), "Block is already free");
+    ASSERT(!block_is_free(block), "Block is already free");
     block->header |= BLOCK_FREE_BIT;
   } else {
-    XASSERT(block_is_free(block), "Block is already used");
+    ASSERT(block_is_free(block), "Block is already used");
     block->header &= ~BLOCK_FREE_BIT;
   }
   block_set_prev_free(block_link_next(block), free);
@@ -273,7 +289,7 @@ static inline size_t adjust_size(size_t size) {
   size = align_up(size);
   if (size < BLOCK_SIZE_MIN)
     return BLOCK_SIZE_MIN;
-  XASSERT(size <= TLSF_MAX_SIZE, "size is too large");
+  ASSERT(size <= TLSF_MAX_SIZE, "size is too large");
   return size;
 }
 
@@ -301,8 +317,8 @@ static inline void mapping_insert(size_t size, unsigned int *fli,
       (1ULL << SL_INDEX_COUNT_SHIFT));
     fl -= (FL_INDEX_SHIFT - 1);
   }
-  XASSERT(fl < FL_INDEX_COUNT, "Wrong fl index count");
-  XASSERT(sl < SL_INDEX_COUNT, "Wrong sl index count");
+  ASSERT(fl < FL_INDEX_COUNT, "Wrong fl index count");
+  ASSERT(sl < SL_INDEX_COUNT, "Wrong sl index count");
   *fli = fl;
   *sli = sl;
 }
@@ -310,8 +326,8 @@ static inline void mapping_insert(size_t size, unsigned int *fli,
 static block_t search_suitable_block(tlsf_t t, unsigned int *fli,
                                      unsigned int *sli) {
   unsigned int fl = *fli, sl = *sli;
-  XASSERT(fl < FL_INDEX_COUNT, "Wrong fl index count");
-  XASSERT(sl < SL_INDEX_COUNT, "Wrong sl index count");
+  ASSERT(fl < FL_INDEX_COUNT, "Wrong fl index count");
+  ASSERT(sl < SL_INDEX_COUNT, "Wrong sl index count");
 
   /*
    * First, search for a block in the list associated with the given
@@ -326,14 +342,14 @@ static block_t search_suitable_block(tlsf_t t, unsigned int *fli,
       return NULL;
 
     *fli = fl = tlsf_ffs(fl_map);
-    XASSERT(fl < FL_INDEX_COUNT, "Wrong fl index count");
+    ASSERT(fl < FL_INDEX_COUNT, "Wrong fl index count");
 
     sl_map = t->sl_bitmap[fl];
   }
-  XASSERT(sl_map, "Second level bitmap is null");
+  ASSERT(sl_map, "Second level bitmap is null");
 
   *sli = sl = tlsf_ffs(sl_map);
-  XASSERT(sl < SL_INDEX_COUNT, "Wrong sl index count");
+  ASSERT(sl < SL_INDEX_COUNT, "Wrong sl index count");
 
   // Return the first block in the free list.
   return t->blocks[fl][sl];
@@ -342,13 +358,13 @@ static block_t search_suitable_block(tlsf_t t, unsigned int *fli,
 // Remove a free block from the free list.
 static void remove_free_block(tlsf_t t, block_t block, unsigned int fl,
                               unsigned int sl) {
-  XASSERT(fl < FL_INDEX_COUNT, "Wrong fl index count");
-  XASSERT(sl < SL_INDEX_COUNT, "Wrong sl index count");
+  ASSERT(fl < FL_INDEX_COUNT, "Wrong fl index count");
+  ASSERT(sl < SL_INDEX_COUNT, "Wrong sl index count");
 
   const block_t prev = block->prev_free;
   const block_t next = block->next_free;
-  XASSERT(prev, "prev_free field can not be null");
-  XASSERT(next, "next_free field can not be null");
+  ASSERT(prev, "prev_free field can not be null");
+  ASSERT(next, "next_free field can not be null");
   next->prev_free = prev;
   prev->next_free = next;
 
@@ -367,7 +383,7 @@ static void remove_free_block(tlsf_t t, block_t block, unsigned int fl,
   }
 
 #ifdef TLSF_STATS
-  XASSERT(t->stats.free_size >= block_size(block), "wrong free");
+  ASSERT(t->stats.free_size >= block_size(block), "wrong free");
   t->stats.free_size -= block_size(block);
   t->stats.used_size += block_size(block);
 #endif
@@ -377,13 +393,13 @@ static void remove_free_block(tlsf_t t, block_t block, unsigned int fl,
 static void insert_free_block(tlsf_t t, block_t block, unsigned int fl,
                               unsigned int sl) {
   const block_t current = t->blocks[fl][sl];
-  XASSERT(current, "free list cannot have a null entry");
-  XASSERT(block, "cannot insert a null entry into the free list");
+  ASSERT(current, "free list cannot have a null entry");
+  ASSERT(block, "cannot insert a null entry into the free list");
   block->next_free = current;
   block->prev_free = &t->block_null;
   current->prev_free = block;
 
-  XASSERT(block_to_ptr(block) == align_ptr(block_to_ptr(block)),
+  ASSERT(block_to_ptr(block) == align_ptr(block_to_ptr(block)),
          "block not aligned properly");
   /*
    * Insert the new block at the head of the list, and mark the first-
@@ -394,7 +410,7 @@ static void insert_free_block(tlsf_t t, block_t block, unsigned int fl,
   t->sl_bitmap[fl] |= (1U << sl);
 
 #ifdef TLSF_STATS
-  XASSERT(t->stats.used_size >= block_size(block), "wrong used");
+  ASSERT(t->stats.used_size >= block_size(block), "wrong used");
   t->stats.free_size += block_size(block);
   t->stats.used_size -= block_size(block);
 #endif
@@ -422,11 +438,11 @@ static block_t block_split(block_t block, size_t size) {
 
   const size_t remain_size = block_size(block) - (size + BLOCK_OVERHEAD);
 
-  XASSERT(block_to_ptr(remaining) == align_ptr(block_to_ptr(remaining)),
+  ASSERT(block_to_ptr(remaining) == align_ptr(block_to_ptr(remaining)),
          "remaining block not aligned properly");
-  XASSERT(block_size(block) == remain_size + size + BLOCK_OVERHEAD,
+  ASSERT(block_size(block) == remain_size + size + BLOCK_OVERHEAD,
          "remaining block size is wrong");
-  XASSERT(remain_size >= BLOCK_SIZE_MIN, "block split with invalid size");
+  ASSERT(remain_size >= BLOCK_SIZE_MIN, "block split with invalid size");
 
   remaining->header = remain_size;
 
@@ -438,7 +454,7 @@ static block_t block_split(block_t block, size_t size) {
 
 // Absorb a free block's storage into an adjacent previous free block.
 static block_t block_absorb(block_t prev, block_t block) {
-  XASSERT(!block_is_last(prev), "previous block can't be last");
+  ASSERT(!block_is_last(prev), "previous block can't be last");
   // Note: Leaves flags untouched.
   prev->header += block_size(block) + BLOCK_OVERHEAD;
   block_link_next(prev);
@@ -449,8 +465,8 @@ static block_t block_absorb(block_t prev, block_t block) {
 static block_t block_merge_prev(tlsf_t t, block_t block) {
   if (block_is_prev_free(block)) {
     block_t prev = block_prev(block);
-    XASSERT(prev, "prev physical block can't be null");
-    XASSERT(block_is_free(prev), "prev block is not free though marked as such");
+    ASSERT(prev, "prev physical block can't be null");
+    ASSERT(block_is_free(prev), "prev block is not free though marked as such");
     block_remove(t, prev);
     block = block_absorb(prev, block);
   }
@@ -461,10 +477,10 @@ static block_t block_merge_prev(tlsf_t t, block_t block) {
 // Merge a just-freed block with an adjacent free block.
 static block_t block_merge_next(tlsf_t t, block_t block) {
   block_t next = block_next(block);
-  XASSERT(next, "next physical block can't be null");
+  ASSERT(next, "next physical block can't be null");
 
   if (block_is_free(next)) {
-    XASSERT(!block_is_last(block), "previous block can't be last");
+    ASSERT(!block_is_last(block), "previous block can't be last");
     block_remove(t, next);
     block = block_absorb(block, next);
   }
@@ -474,7 +490,7 @@ static block_t block_merge_next(tlsf_t t, block_t block) {
 
 // Trim any trailing block space off the end of a block, return to pool.
 static void block_trim_free(tlsf_t t, block_t block, size_t size) {
-  XASSERT(block_is_free(block), "block must be free");
+  ASSERT(block_is_free(block), "block must be free");
   if (block_can_split(block, size)) {
     block_t remaining = block_split(block, size);
     block_link_next(block);
@@ -485,7 +501,7 @@ static void block_trim_free(tlsf_t t, block_t block, size_t size) {
 
 // Trim any trailing block space off the end of a used block, return to pool.
 static void block_trim_used(tlsf_t t, block_t block, size_t size) {
-  XASSERT(!block_is_free(block), "block must be used");
+  ASSERT(!block_is_free(block), "block must be used");
   if (block_can_split(block, size)) {
     // If the next block is free, we must coalesce.
     block_t remaining = block_split(block, size);
@@ -503,7 +519,7 @@ static block_t block_locate_free(tlsf_t t, size_t size) {
 
   block_t block = search_suitable_block(t, &fl, &sl);
   if (block) {
-    XASSERT(block_size(block) >= size, "insufficient block size");
+    ASSERT(block_size(block) >= size, "insufficient block size");
     remove_free_block(t, block, fl, sl);
     return block;
   }
@@ -521,8 +537,8 @@ static block_t add_pool(tlsf_t t, void* mem, size_t size) {
   if (pool_size > BLOCK_SIZE_MAX)
     pool_size = BLOCK_SIZE_MAX; // Allow larger pool sizes returned by tlsf_map
 
-  XASSERT((size_t)mem % ALIGN_SIZE == 0, "wrong alignment");
-  XASSERT(pool_size >= BLOCK_SIZE_MIN, "pool is too small");
+  ASSERT((size_t)mem % ALIGN_SIZE == 0, "wrong alignment");
+  ASSERT(pool_size >= BLOCK_SIZE_MIN, "pool is too small");
 
 #ifdef TLSF_STATS
   ++t->stats.pool_count;
@@ -549,16 +565,16 @@ static void remove_pool(tlsf_t t, block_t block) {
   size_t size = block_size(block);
 
 #ifdef TLSF_STATS
-  XASSERT(t->stats.used_size >= size, "wrong used");
-  XASSERT(t->stats.total_size >= size, "wrong total");
-  XASSERT(t->stats.pool_count > 0, "wrong pool count");
+  ASSERT(t->stats.used_size >= size, "wrong used");
+  ASSERT(t->stats.total_size >= size, "wrong total");
+  ASSERT(t->stats.pool_count > 0, "wrong pool count");
   t->stats.total_size -= size;
   t->stats.used_size -= size;
   --t->stats.pool_count;
 #endif
 
-  XASSERT(block_is_last(block_next(block)), "sentinel should be last");
-  XASSERT(!block_is_free(block_next(block)),
+  ASSERT(block_is_last(block_next(block)), "sentinel should be last");
+  ASSERT(!block_is_free(block_next(block)),
          "sentinel block should not be free");
   t->unmap((char*)block + BLOCK_OVERHEAD, size + POOL_OVERHEAD, t->user);
 }
@@ -568,13 +584,13 @@ static void remove_pool(tlsf_t t, block_t block) {
 */
 
 tlsf_t tlsf_create(tlsf_map_t map, tlsf_unmap_t unmap, void* user) {
-  XASSERT(map, "map must not be null");
+  ASSERT(map, "map must not be null");
   const size_t minsize = TLSF_SIZE + POOL_OVERHEAD + BLOCK_SIZE_MIN;
   size_t size = minsize;
   void* mem = map(&size, user);
-  XASSERT(mem, "no memory available");
-  XASSERT(size >= minsize, "not enough memory allocated");
-  XASSERT((size_t)mem % ALIGN_SIZE == 0, "wrong alignment");
+  ASSERT(mem, "no memory available");
+  ASSERT(size >= minsize, "not enough memory allocated");
+  ASSERT((size_t)mem % ALIGN_SIZE == 0, "wrong alignment");
 
   tlsf_t t = (tlsf_t)mem;
   t->map = map;
@@ -587,7 +603,7 @@ tlsf_t tlsf_create(tlsf_map_t map, tlsf_unmap_t unmap, void* user) {
 
   t->block_null.next_free = &t->block_null;
   t->block_null.prev_free = &t->block_null;
-
+  printf("FL_INDEX_COUNT: %d, SL_INDEX_COUNT: %llu\n", FL_INDEX_COUNT, SL_INDEX_COUNT);
   t->fl_bitmap = 0;
   for (unsigned int i = 0; i < FL_INDEX_COUNT; ++i) {
     t->sl_bitmap[i] = 0;
@@ -602,23 +618,23 @@ tlsf_t tlsf_create(tlsf_map_t map, tlsf_unmap_t unmap, void* user) {
 
 void tlsf_destroy(tlsf_t t) {
 #ifdef TLSF_STATS
-  XASSERT(t->stats.free_size == t->stats.total_size, "Memory leak detected.");
-  XASSERT((t->unmap && t->stats.pool_count == 1) ||
+  ASSERT(t->stats.free_size == t->stats.total_size, "Memory leak detected.");
+  ASSERT((t->unmap && t->stats.pool_count == 1) ||
          (!t->unmap && t->stats.pool_count >= 1),
         "Memory leak detected. Some pools were not released.");
 #endif
 
   if (t->unmap) {
     block_t first_block = OFFSET_TO_BLOCK(t, TLSF_SIZE  - BLOCK_OVERHEAD);
-    XASSERT(block_is_last(block_next(first_block)), "sentinel should be last");
-    XASSERT(!block_is_free(block_next(first_block)),
+    ASSERT(block_is_last(block_next(first_block)), "sentinel should be last");
+    ASSERT(!block_is_free(block_next(first_block)),
            "sentinel block should not be free");
     t->unmap(t, TLSF_SIZE + block_size(first_block) + POOL_OVERHEAD, t->user);
   }
 }
 
 void* tlsf_mallocx(tlsf_t t, size_t size, int flags) {
-  XASSERT((flags & ~(TLSF_ZERO | TLSF_NOMAP)) == 0, "Invalid flags");
+  ASSERT((flags & ~(TLSF_ZERO | TLSF_NOMAP)) == 0, "Invalid flags");
 
   size = adjust_size(size);
 
@@ -631,11 +647,11 @@ void* tlsf_mallocx(tlsf_t t, size_t size, int flags) {
     void* mem = t->map(&memsize, t->user);
     if (!mem)
       return 0;
-    XASSERT(memsize >= minsize, "not enough memory allocated");
+    ASSERT(memsize >= minsize, "not enough memory allocated");
     add_pool(t, (char*)mem, memsize)->header |= BLOCK_POOL_BIT;
     block = block_locate_free(t, size);
   }
-  XASSERT(block, "No block found");
+  ASSERT(block, "No block found");
 
 #ifdef TLSF_STATS
   ++t->stats.malloc_count;
@@ -647,6 +663,9 @@ void* tlsf_mallocx(tlsf_t t, size_t size, int flags) {
   void* p = block_to_ptr(block);
   if (flags & TLSF_ZERO)
     memset(p, 0, size);
+
+  //printf ("malloc >>\n");
+  //printBlocks (t);
   return p;
 }
 
@@ -655,7 +674,7 @@ void tlsf_free(tlsf_t t, void* mem) {
     return;
 
   block_t block = block_from_ptr(mem);
-  XASSERT(!block_is_free(block), "block already marked as free");
+  ASSERT(!block_is_free(block), "block already marked as free");
 
 #ifdef TLSF_STATS
   ++t->stats.free_count;
@@ -671,6 +690,9 @@ void tlsf_free(tlsf_t t, void* mem) {
     remove_pool(t, block);
   else
     block_insert(t, block);
+
+  //printf ("free >>\n");
+  //printBlocks (t);
 }
 
 /*
@@ -687,7 +709,7 @@ void tlsf_free(tlsf_t t, void* mem) {
  *   contents undefined
  */
 void* tlsf_reallocx(tlsf_t t, void* mem, size_t size, int flags) {
-  XASSERT((flags & ~(TLSF_ZERO | TLSF_NOMAP | TLSF_INPLACE)) == 0,
+  ASSERT((flags & ~(TLSF_ZERO | TLSF_NOMAP | TLSF_INPLACE)) == 0,
          "Invalid flags");
 
   // Zero-size requests are treated as free.
@@ -707,7 +729,7 @@ void* tlsf_reallocx(tlsf_t t, void* mem, size_t size, int flags) {
   const size_t combined = cursize + block_size(next) + BLOCK_OVERHEAD;
   size = adjust_size(size);
 
-  XASSERT(!block_is_free(block), "block already marked as free");
+  ASSERT(!block_is_free(block), "block already marked as free");
 
   /*
    * If the next block is used, or when combined with the current

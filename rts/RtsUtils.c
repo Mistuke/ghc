@@ -49,17 +49,17 @@ extern char *ctime_r(const time_t *, char *);
 
 
 #if defined(_WIN32)
-#include <windows.h>
-//#include "win32/WinMem.h"
-//#define MALLOC(N) winmem_malloc(WriteAccess, N)
-//#define REALLOC(P, N) winmem_realloc(WriteAccess, P, N)
-//#define CALLOC(N, M) winmem_calloc(WriteAccess, N, M)
-//#define FREE(P) winmem_free(WriteAccess, P)
-//#else
-#define MALLOC(N) malloc(N)
-#define REALLOC(P, N) realloc(P, N)
-#define CALLOC(N, M) calloc(N, M)
-#define FREE(P) free(P)
+#  include <windows.h>
+#  include "win32/WinMem.h"
+#  define MALLOC(N) winmem_malloc(WriteAccess, N)
+#  define REALLOC(P, N) winmem_realloc(WriteAccess, P, N)
+#  define CALLOC(N, M) winmem_calloc(WriteAccess, N, M)
+#  define FREE(P) winmem_free(WriteAccess, P)
+#else
+#  define MALLOC(N) malloc(N)
+#  define REALLOC(P, N) realloc(P, N)
+#  define CALLOC(N, M) calloc(N, M)
+#  define FREE(P) free(P)
 #endif
 
 /* -----------------------------------------------------------------------------
