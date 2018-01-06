@@ -305,6 +305,7 @@ void initLinker_PEi386()
 #endif
 }
 
+/* We're exiting, free all the objects so we don't leak.  */
 void exitLinker_PEi386()
 {
 }
@@ -393,12 +394,14 @@ void freePreloadObjectFile_PEi386(ObjectCode *oc)
         oc->image = NULL;
     }
 
-    if (oc->info->image) {
-        winmem_free (WriteAccess | ExecuteAccess, oc->info->image);
-        oc->info->image = NULL;
-    }
 
     if (oc->info) {
+
+        if (oc->info->image) {
+            winmem_free (WriteAccess | ExecuteAccess, oc->info->image);
+            oc->info->image = NULL;
+        }
+
         if (oc->info->ch_info)
            stgFree (oc->info->ch_info);
         stgFree (oc->info);

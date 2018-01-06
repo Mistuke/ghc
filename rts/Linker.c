@@ -47,6 +47,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <assert.h>
 
 #if defined(HAVE_SYS_STAT_H)
@@ -392,7 +393,7 @@ HsBool ghciLookupSymbolInfo(HashTable *table,
  */
 
 
-static int linker_init_done = 0 ;
+static bool linker_init_done = false ;
 
 #if defined(OBJFORMAT_ELF) || defined(OBJFORMAT_MACHO)
 static void *dl_prog_handle;
@@ -424,11 +425,11 @@ initLinker_ (int retain_cafs)
     /* Make initLinker idempotent, so we can call it
        before every relevant operation; that means we
        don't need to initialise the linker separately */
-    if (linker_init_done == 1) {
+    if (linker_init_done) {
         IF_DEBUG(linker, debugBelch("initLinker: idempotent return\n"));
         return;
     } else {
-        linker_init_done = 1;
+        linker_init_done = true;
     }
 
     objects = NULL;
@@ -515,21 +516,26 @@ initLinker_ (int retain_cafs)
 
 void
 exitLinker( void ) {
+   if (!linker_init_done)
+     return;
+   /* Properly free all object files we still have loaded.  */
+   if (objects) {
+      for (ObjectCode* obj = objects; obj; obj = obj->next)
+        freeObjectCode (obj);
+      objects = NULL;
+   }
+
 #if defined(OBJFORMAT_PEi386)
    exitLinker_PEi386();
 #endif
 #if defined(OBJFORMAT_ELF) || defined(OBJFORMAT_MACHO)
-   if (linker_init_done == 1) {
-      regfree(&re_invalid);
-      regfree(&re_realso);
+   regfree(&re_invalid);
+   regfree(&re_realso);
 #if defined(THREADED_RTS)
-      closeMutex(&dl_mutex);
+   closeMutex(&dl_mutex);
 #endif
-   }
 #endif
-   if (linker_init_done == 1) {
-       freeHashTable(symhash, free);
-   }
+   freeHashTable(symhash, free);
 #if defined(THREADED_RTS)
    closeMutex(&linker_mutex);
 #endif

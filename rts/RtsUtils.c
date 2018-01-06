@@ -48,7 +48,7 @@ extern char *ctime_r(const time_t *, char *);
 #endif
 
 
-#if defined(_WIN32)
+#if defined(_WIN32) && 0
 #  include <windows.h>
 #  include "win32/WinMem.h"
 #  define MALLOC(N) winmem_malloc(WriteAccess, N)

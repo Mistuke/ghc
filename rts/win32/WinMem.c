@@ -60,7 +60,7 @@ typedef struct _PoolBuffer
   struct _PoolBuffer* next;
 } PoolBuffer_t;
 
-/* Defaukt access mapping used by the manager.  */
+/* Default access mapping used by the manager.  */
 AccessMap_t map[] = {
   { ReadAccess                               , 0, PAGE_READONLY          },
   { WriteAccess                              , 1, PAGE_READWRITE         },
