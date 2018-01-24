@@ -1148,7 +1148,7 @@ freePreloadObjectFile (ObjectCode *oc)
     if (RTS_LINKER_USE_MMAP && oc->imageMapped) {
         munmap(oc->image, oc->fileSize);
     }
-    else {
+    else if (oc->image) {
         stgFree(oc->image);
     }
 
@@ -1180,7 +1180,7 @@ void freeObjectCode (ObjectCode *oc)
     if (oc->sections != NULL) {
         int i;
         for (i=0; i < oc->n_sections; i++) {
-            if (oc->sections[i].start != NULL) {
+            if (oc->sections[i].start) {
                 switch(oc->sections[i].alloc){
 #if RTS_LINKER_USE_MMAP
                 case SECTION_MMAP:

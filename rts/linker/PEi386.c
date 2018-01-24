@@ -394,19 +394,7 @@ void freePreloadObjectFile_PEi386(ObjectCode *oc)
         oc->image = NULL;
     }
 
-
-    if (oc->info) {
-
-        if (oc->info->image) {
-            winmem_free (WriteAccess | ExecuteAccess, oc->info->image);
-            oc->info->image = NULL;
-        }
-
-        if (oc->info->ch_info)
-           stgFree (oc->info->ch_info);
-        stgFree (oc->info);
-        oc->info = NULL;
-    }
+   releaseOcInfo (oc);
 
     IndirectAddr *ia, *ia_next;
     ia = indirects;
@@ -426,18 +414,25 @@ static void releaseOcInfo(ObjectCode* oc) {
         stgFree (oc->info->str_tab);
         stgFree (oc->info->symbols);
         stgFree (oc->info);
+
+        winmem_free (WriteAccess | ExecuteAccess, oc->info->image);
+        oc->info->image = NULL;
         oc->info = NULL;
     }
+
     for (int i = 0; i < oc->n_sections; i++){
-        Section section = oc->sections[i];
-        if (section.info) {
-            stgFree (section.info->name);
-            if (section.info->relocs) {
-                stgFree (section.info->relocs);
-                section.info->relocs = NULL;
+        Section *section = &oc->sections[i];
+        if (oc->sections[i].alloc == SECTION_MALLOC)
+            winmem_free (WriteAccess, oc->sections[i].start);
+        oc->sections[i].start = NULL;
+        if (section->info) {
+            stgFree (section->info->name);
+            if (section->info->relocs) {
+                stgFree (section->info->relocs);
+                section->info->relocs = NULL;
             }
-            stgFree (section.info);
-            section.info = NULL;
+            stgFree (section->info);
+            section->info = NULL;
         }
     }
 }
@@ -1584,7 +1579,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
       i += getSymNumberOfAuxSymbols (info, sym);
    }
 
-   /* Allocate BSS space */
+   /* Allocate BSS space.  */
    SymbolAddr* bss = NULL;
    if (globalBssSize > 0) {
        //bss = stgCallocBytes(1, globalBssSize,
