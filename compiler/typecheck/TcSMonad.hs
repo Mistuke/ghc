@@ -26,7 +26,7 @@ module TcSMonad (
     wrapErrTcS, wrapWarnTcS,
 
     -- Evidence creation and transformation
-    MaybeNew(..), freshGoals, isFresh, getEvTerm,
+    MaybeNew(..), freshGoals, isFresh, getEvExpr,
 
     newTcEvBinds,
     newWantedEq, emitNewWantedEq,
@@ -42,9 +42,8 @@ module TcSMonad (
     getInstEnvs, getFamInstEnvs,                -- Getting the environments
     getTopEnv, getGblEnv, getLclEnv,
     getTcEvBindsVar, getTcLevel,
-    getTcEvBindsAndTCVs, getTcEvBindsMap,
-    tcLookupClass,
-    tcLookupId,
+    getTcEvTyCoVars, getTcEvBindsMap, setTcEvBindsMap,
+    tcLookupClass, tcLookupId,
 
     -- Inerts
     InertSet(..), InertCans(..),
@@ -144,6 +143,7 @@ import TyCon
 import TcErrors   ( solverDepthErrorTcS )
 
 import Name
+import Module ( HasModule, getModule )
 import RdrName ( GlobalRdrEnv, GlobalRdrElt )
 import qualified RnEnv as TcM
 import Var
@@ -871,7 +871,7 @@ The idea is that
     (NB: we could strengten K1) in this way too, but see K3.
 
   - (K2b): If this holds then, by (T2), b is not in t.  So applying the
-    work item does not genenerate any new opportunities for applying S
+    work item does not generate any new opportunities for applying S
 
   - (K2c): If this holds, we can't pass through this triple infinitely
     often, because if we did then fs>=f, fw>=f, hence by (R2)
@@ -1828,7 +1828,7 @@ getUnsolvedInerts
     -- For CFunEqCans we ignore the Derived ones, and keep
     -- only the Wanteds for flattening.  The Derived ones
     -- share a unification variable with the corresponding
-    -- Wanted, so we definitely don't want to to participate
+    -- Wanted, so we definitely don't want to participate
     -- in unflattening
     -- See Note [Type family equations]
     add_if_wanted ct cts | isWantedCt ct = ct `consCts` cts
@@ -2386,6 +2386,12 @@ instance MonadFail.MonadFail TcS where
 instance MonadUnique TcS where
    getUniqueSupplyM = wrapTcS getUniqueSupplyM
 
+instance HasModule TcS where
+   getModule = wrapTcS getModule
+
+instance MonadThings TcS where
+   lookupThing n = wrapTcS (lookupThing n)
+
 -- Basic functionality
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 wrapTcS :: TcM a -> TcS a
@@ -2636,16 +2642,13 @@ buildImplication skol_info skol_tvs givens (TcS thing_inside)
                             null (wl_deriv wl) && null (wl_implics wl), ppr wl )
                    WC { wc_simple = listToCts eqs
                       , wc_impl   = emptyBag }
-             imp = Implic { ic_tclvl  = new_tclvl
-                          , ic_skols  = skol_tvs
-                          , ic_no_eqs = True
-                          , ic_given  = givens
-                          , ic_wanted = wc
-                          , ic_status = IC_Unsolved
-                          , ic_binds  = ev_binds_var
-                          , ic_env    = env
-                          , ic_needed = emptyVarSet
-                          , ic_info   = skol_info }
+             imp = newImplication { ic_tclvl  = new_tclvl
+                                  , ic_skols  = skol_tvs
+                                  , ic_given  = givens
+                                  , ic_wanted = wc
+                                  , ic_binds  = ev_binds_var
+                                  , ic_env    = env
+                                  , ic_info   = skol_info }
       ; return (unitBag imp, TcEvBinds ev_binds_var, res) } }
 
 {-
@@ -2718,16 +2721,17 @@ getTcEvBindsVar = TcS (return . tcs_ev_binds)
 getTcLevel :: TcS TcLevel
 getTcLevel = wrapTcS TcM.getTcLevel
 
-getTcEvBindsAndTCVs :: EvBindsVar -> TcS (EvBindMap, TyCoVarSet)
-getTcEvBindsAndTCVs ev_binds_var
-  = wrapTcS $ do { bnds <- TcM.getTcEvBindsMap ev_binds_var
-                 ; tcvs <- TcM.getTcEvTyCoVars ev_binds_var
-                 ; return (bnds, tcvs) }
+getTcEvTyCoVars :: EvBindsVar -> TcS TyCoVarSet
+getTcEvTyCoVars ev_binds_var
+  = wrapTcS $ TcM.getTcEvTyCoVars ev_binds_var
 
-getTcEvBindsMap :: TcS EvBindMap
-getTcEvBindsMap
-  = do { ev_binds_var <- getTcEvBindsVar
-       ; wrapTcS $ TcM.getTcEvBindsMap ev_binds_var }
+getTcEvBindsMap :: EvBindsVar -> TcS EvBindMap
+getTcEvBindsMap ev_binds_var
+  = wrapTcS $ TcM.getTcEvBindsMap ev_binds_var
+
+setTcEvBindsMap :: EvBindsVar -> EvBindMap -> TcS ()
+setTcEvBindsMap ev_binds_var binds
+  = wrapTcS $ TcM.setTcEvBindsMap ev_binds_var binds
 
 unifyTyVar :: TcTyVar -> TcType -> TcS ()
 -- Unify a meta-tyvar with a type
@@ -2872,7 +2876,7 @@ newFlattenSkolem flav loc tc xis
            -- Construct the Refl evidence
            ; let pred = mkPrimEqPred fam_ty (mkTyVarTy fsk)
                  co   = mkNomReflCo fam_ty
-           ; ev  <- newGivenEvVar loc (pred, EvCoercion co)
+           ; ev  <- newGivenEvVar loc (pred, evCoercion co)
            ; return (ev, co, fsk) }
 
       | otherwise  -- Generate a [WD] for both Wanted and Derived
@@ -2884,7 +2888,7 @@ newFlattenSkolem flav loc tc xis
 ----------------------------
 unflattenGivens :: IORef InertSet -> TcM ()
 -- Unflatten all the fsks created by flattening types in Given
--- constraints We must be sure to do this, else we end up with
+-- constraints. We must be sure to do this, else we end up with
 -- flatten-skolems buried in any residual Wanteds
 --
 -- NB: this is the /only/ way that a fsk (MetaDetails = FlatSkolTv)
@@ -2984,7 +2988,7 @@ tcInstSkolTyVarsX subst tvs = wrapTcS $ TcM.tcInstSkolTyVarsX subst tvs
 -- Creating and setting evidence variables and CtFlavors
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-data MaybeNew = Fresh CtEvidence | Cached EvTerm
+data MaybeNew = Fresh CtEvidence | Cached EvExpr
 
 isFresh :: MaybeNew -> Bool
 isFresh (Fresh {})  = True
@@ -2993,9 +2997,9 @@ isFresh (Cached {}) = False
 freshGoals :: [MaybeNew] -> [CtEvidence]
 freshGoals mns = [ ctev | Fresh ctev <- mns ]
 
-getEvTerm :: MaybeNew -> EvTerm
-getEvTerm (Fresh ctev) = ctEvTerm ctev
-getEvTerm (Cached evt) = evt
+getEvExpr :: MaybeNew -> EvExpr
+getEvExpr (Fresh ctev) = ctEvExpr ctev
+getEvExpr (Cached evt) = evt
 
 setEvBind :: EvBind -> TcS ()
 setEvBind ev_bind
@@ -3034,11 +3038,11 @@ setWantedEvTerm (EvVarDest ev) tm = setWantedEvBind ev tm
 setWantedEvBind :: EvVar -> EvTerm -> TcS ()
 setWantedEvBind ev_id tm = setEvBind (mkWantedEvBind ev_id tm)
 
-setEvBindIfWanted :: CtEvidence -> EvTerm -> TcS ()
+setEvBindIfWanted :: CtEvidence -> EvExpr -> TcS ()
 setEvBindIfWanted ev tm
   = case ev of
       CtWanted { ctev_dest = dest }
-        -> setWantedEvTerm dest tm
+        -> setWantedEvTerm dest (EvExpr tm)
       _ -> return ()
 
 newTcEvBinds :: TcS EvBindsVar
@@ -3047,7 +3051,7 @@ newTcEvBinds = wrapTcS TcM.newTcEvBinds
 newEvVar :: TcPredType -> TcS EvVar
 newEvVar pred = wrapTcS (TcM.newEvVar pred)
 
-newGivenEvVar :: CtLoc -> (TcPredType, EvTerm) -> TcS CtEvidence
+newGivenEvVar :: CtLoc -> (TcPredType, EvExpr) -> TcS CtEvidence
 -- Make a new variable of the given PredType,
 -- immediately bind it to the given term
 -- and return its CtEvidence
@@ -3058,13 +3062,13 @@ newGivenEvVar loc (pred, rhs)
 
 -- | Make a new 'Id' of the given type, bound (in the monad's EvBinds) to the
 -- given term
-newBoundEvVarId :: TcPredType -> EvTerm -> TcS EvVar
+newBoundEvVarId :: TcPredType -> EvExpr -> TcS EvVar
 newBoundEvVarId pred rhs
   = do { new_ev <- newEvVar pred
        ; setEvBind (mkGivenEvBind new_ev rhs)
        ; return new_ev }
 
-newGivenEvVars :: CtLoc -> [(TcPredType, EvTerm)] -> TcS [CtEvidence]
+newGivenEvVars :: CtLoc -> [(TcPredType, EvExpr)] -> TcS [CtEvidence]
 newGivenEvVars loc pts = mapM (newGivenEvVar loc) pts
 
 emitNewWantedEq :: CtLoc -> Role -> TcType -> TcType -> TcS Coercion
@@ -3079,12 +3083,12 @@ emitNewWantedEq loc role ty1 ty2
 -- | Make a new equality CtEvidence
 newWantedEq :: CtLoc -> Role -> TcType -> TcType -> TcS (CtEvidence, Coercion)
 newWantedEq loc role ty1 ty2
-  = do { hole <- wrapTcS $ TcM.newCoercionHole
+  = do { hole <- wrapTcS $ TcM.newCoercionHole pty
        ; traceTcS "Emitting new coercion hole" (ppr hole <+> dcolon <+> ppr pty)
        ; return ( CtWanted { ctev_pred = pty, ctev_dest = HoleDest hole
                            , ctev_nosh = WDeriv
                            , ctev_loc = loc}
-                , mkHoleCo hole role ty1 ty2 ) }
+                , mkHoleCo hole ) }
   where
     pty = mkPrimEqPredRole role ty1 ty2
 
@@ -3107,7 +3111,7 @@ newWantedEvVar loc pty
             Just ctev
               | not (isDerived ctev)
               -> do { traceTcS "newWantedEvVar/cache hit" $ ppr ctev
-                    ; return $ Cached (ctEvTerm ctev) }
+                    ; return $ Cached (ctEvExpr ctev) }
             _ -> do { ctev <- newWantedEvVarNC loc pty
                     ; return (Fresh ctev) } }
 

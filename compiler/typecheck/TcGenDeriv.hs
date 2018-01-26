@@ -1132,7 +1132,7 @@ gen_Show_binds get_fixity loc tycon
   = (unitBag shows_prec, emptyBag)
   where
     data_cons = tyConDataCons tycon
-    shows_prec = mkFunBindEC 1 loc showsPrec_RDR id (map pats_etc data_cons)
+    shows_prec = mkFunBindEC 2 loc showsPrec_RDR id (map pats_etc data_cons)
     comma_space = nlHsVar showCommaSpace_RDR
 
     pats_etc data_con
@@ -1849,7 +1849,8 @@ mkFunBindSE :: Arity -> SrcSpan -> RdrName
 mkFunBindSE arity loc fun pats_and_exprs
   = mkRdrFunBindSE arity (L loc fun) matches
   where
-    matches = [mkMatch (mkPrefixFunRhs (L loc fun)) p e
+    matches = [mkMatch (mkPrefixFunRhs (L loc fun))
+                               (map parenthesizeCompoundPat p) e
                                (noLoc emptyLocalBinds)
               | (p,e) <-pats_and_exprs]
 
@@ -1869,7 +1870,8 @@ mkFunBindEC :: Arity -> SrcSpan -> RdrName
 mkFunBindEC arity loc fun catch_all pats_and_exprs
   = mkRdrFunBindEC arity catch_all (L loc fun) matches
   where
-    matches = [ mkMatch (mkPrefixFunRhs (L loc fun)) p e
+    matches = [ mkMatch (mkPrefixFunRhs (L loc fun))
+                                (map parenthesizeCompoundPat p) e
                                 (noLoc emptyLocalBinds)
               | (p,e) <- pats_and_exprs ]
 

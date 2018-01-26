@@ -39,7 +39,7 @@ test('T1969',
              # 2013-11-13 17 (x86/Windows, 64bit machine)
              # 2015-07-11 21 (x86/Linux, 64bit machine) use +RTS -G1
              # 2016-04-06 30 (x86/Linux, 64bit machine)
-           (wordsize(64), 61, 20)]),
+           (wordsize(64), 78, 20)]),
              #            28 (amd64/Linux)
              #            34 (amd64/Linux)
              # 2012-09-20 23 (amd64/Linux)
@@ -55,6 +55,7 @@ test('T1969',
              #                See the comment 16 on #8472.
              # 2017-02-17 83  (amd64/Linux) Type-indexed Typeable
              # 2017-03-31 61  (amd64/Linux) Fix memory leak in simplifier
+             # 2018-01-25 78  (amd64/Linux) Use CoreExpr for EvTerm
       compiler_stats_num_field('max_bytes_used',
           [(platform('i386-unknown-mingw32'), 5719436, 20),
                                  # 2010-05-17 5717704 (x86/Windows)
@@ -545,7 +546,7 @@ test('T5321Fun',
              # 2016-04-06: 279922360 x86/Linux
              # 2017-03-24: 244387620 x86/Linux (64-bit machine)
 
-            (wordsize(64), 449577856, 5)])
+            (wordsize(64), 423774560, 5)])
              # prev:       585521080
              # 2012-08-29: 713385808     #  (increase due to new codegen)
              # 2013-05-15: 628341952     #  (reason for decrease unknown)
@@ -572,6 +573,7 @@ test('T5321Fun',
              # 2017-02-23: 524706256     #  Type-indexed Typeable? (on Darwin)
              # 2017-02-25: 488295304     #  Early inlining patch
              # 2017-05-14: 449577856     #  (amd64/Linxu) Two-pass CmmLayoutStack
+             # 2017-12-13: 423774560     #  (amd64/Linxu) Typechecker improvements
       ],
       compile,[''])
 
@@ -655,9 +657,10 @@ test('T5837',
              # 2016-04-06: 24199320  (x86/Linux, 64-bit machine) TypeInType
              # 2017-03-24: 27028956  (x86/Linux, 64-bit machine)
 
-           (platform('x86_64-unknown-mingw32'), 59161648, 7),
+           (platform('x86_64-unknown-mingw32'), 54793816, 7),
              # 2017-02-19                       59161648 (x64/Windows) - Unknown
              # 2017-04-21                       54985248 (x64/Windows) - Unknown
+             # 2017-12-24                       54793816 (x64/Windows) - Unknown
 
            (wordsize(64), 52089424, 7)])
              # sample: 3926235424 (amd64/Linux, 15/2/2012)
@@ -1008,12 +1011,13 @@ test('T10547',
 test('T12227',
      [ only_ways(['normal']),
        compiler_stats_num_field('bytes allocated',
-          [(wordsize(64), 1060158624, 5),
+          [(wordsize(64), 812869424, 5),
           # 2016-07-11    5650186880 (Windows) before fix for #12227
           # 2016-07-11    1822822016 (Windows) after fix for #12227
           # 2016-12-20    1715827784 after d250d493 (INLINE in Traversable dms)
           #                          (or thereabouts in the commit history)
           # 2017-02-14    1060158624  Early inlining: 35% improvement
+          # 2018-01-04    812869424   Drop unused givens (#13032): 23% better
           ]),
      ],
      compile,
@@ -1140,16 +1144,41 @@ test('T13379',
 
 test('MultiLayerModules',
      [ compiler_stats_num_field('bytes allocated',
-          [(wordsize(64), 6294813000, 10),
+          [(wordsize(64), 5619893176, 10),
           # initial:    12139116496
           # 2017-05-12: 6956533312   Revert "Use a deterministic map for imp_dep_mods"
           # 2017-05-31: 6294813000   Faster checkFamInstConsistency
+          # 2018-01-21: 5619893176   Allocate less in plus_mod_dep
           ]),
        pre_cmd('./genMultiLayerModules'),
        extra_files(['genMultiLayerModules']),
      ],
      multimod_compile,
      ['MultiLayerModules', '-v0'])
+
+test('ManyConstructors',
+     [ compiler_stats_num_field('bytes allocated',
+          [(wordsize(64), 4246959352, 10),
+          # initial:    8130527160
+          # 2018-01-05: 4246959352  Lift constructor tag allocation out of a loop
+          ]),
+       pre_cmd('./genManyConstructors'),
+       extra_files(['genManyConstructors']),
+     ],
+     multimod_compile,
+     ['ManyConstructors', '-v0'])
+
+test('ManyAlternatives',
+     [ compiler_stats_num_field('bytes allocated',
+          [(wordsize(64), 1398898072, 10),
+          # initial:    1756999240
+          # 2018-01-20: 1398898072  Use IntSet in Dataflow
+          ]),
+       pre_cmd('./genManyAlternatives'),
+       extra_files(['genManyAlternatives']),
+     ],
+     multimod_compile,
+     ['ManyAlternatives', '-v0'])
 
 test('T13701',
      [ compiler_stats_num_field('bytes allocated',
@@ -1183,14 +1212,19 @@ test('Naperian',
      [ reqlib('vector'),
        only_ways(['optasm']),
        compiler_stats_num_field('bytes allocated',
-          [(wordsize(64), 2381935784, 10)])
+          [(platform('x86_64-unknown-mingw32'), 54116696, 10),
+           # 2017-12-24                       54116696 (x64/Windows) - Unknown
+          (wordsize(64), 53576760, 10)])
+           # 2018-01-25                       53576760 (x64/Linux) - The previous value looked very wrong
      ],
      compile,
      [''])
 
 test ('T9630',
       [ compiler_stats_num_field('max_bytes_used', # Note [residency]
-          [(wordsize(64), 41568168, 15)
+          [(platform('x86_64-unknown-mingw32'),   39867088, 15),
+          # 2017-12-24:                     34171816 (x64/Windows)
+          (wordsize(64), 41568168, 15)
           # initial:    56955240
           # 2017-06-07: 41568168     Stop the specialiser generating loopy code
           ]),

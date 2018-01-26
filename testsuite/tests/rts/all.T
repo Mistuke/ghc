@@ -381,6 +381,8 @@ test('T12497', [ unless(opsys('mingw32'), skip)
 test('T12903', [when(opsys('mingw32'), skip)], compile_and_run, [''])
 test('T13832', exit_code(1), compile_and_run, ['-threaded'])
 test('T13894', normal, compile_and_run, [''])
+test('T14497', normal, compile_and_run, ['-O'])
+test('T14695', normal, run_command, ['$MAKE -s --no-print-directory T14695'])
 
 test('T13617', [ unless(opsys('mingw32'), skip)
                ],

@@ -202,8 +202,8 @@ points but not the RHSes of value bindings (thunks and functions).
 ************************************************************************
 
 These functions are not CoreM monad stuff, but they probably ought to
-be, and it makes a conveneint place.  place for them.  They print out
-stuff before and after core passes, and do Core Lint when necessary.
+be, and it makes a convenient place for them.  They print out stuff
+before and after core passes, and do Core Lint when necessary.
 -}
 
 endPass :: CoreToDo -> CoreProgram -> [CoreRule] -> CoreM ()
@@ -1666,8 +1666,6 @@ lintCoercion co@(UnivCo prov r ty1 ty2)
                                     ; check_kinds kco k1 k2 }
 
            PluginProv _     -> return ()  -- no extra checks
-           HoleProv h       -> addErrL $
-                               text "Unfilled coercion hole:" <+> ppr h
 
        ; when (r /= Phantom && classifiesTypeWithValues k1
                             && classifiesTypeWithValues k2)
@@ -1873,6 +1871,11 @@ lintCoercion this@(AxiomRuleCo co cs)
   lintRoles n es []  = err "Not enough coercion arguments"
                           [ text "Expected:" <+> int (n + length es)
                           , text "Provided:" <+> int n ]
+
+lintCoercion (HoleCo h)
+  = do { addErrL $ text "Unfilled coercion hole:" <+> ppr h
+       ; lintCoercion (CoVarCo (coHoleCoVar h)) }
+
 
 ----------
 lintUnliftedCoVar :: CoVar -> LintM ()

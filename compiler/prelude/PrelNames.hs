@@ -83,7 +83,6 @@ This is accomplished through a combination of mechanisms:
 
 Note [Infinite families of known-key names]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 Infinite families of known-key things (e.g. tuples and sums) pose a tricky
 problem: we can't add them to the knownKeyNames finite map which we use to
 ensure that, e.g., a reference to (,) gets assigned the right unique (if this
@@ -185,7 +184,7 @@ names with uniques.  These ones are the *non* wired-in ones.  The
 wired in ones are defined in TysWiredIn etc.
 -}
 
-basicKnownKeyNames :: [Name]
+basicKnownKeyNames :: [Name]  -- See Note [Known-key names]
 basicKnownKeyNames
  = genericTyConNames
  ++ [   --  Classes.  *Must* include:
@@ -217,6 +216,7 @@ basicKnownKeyNames
         -- See Note [TyConRepNames for non-wired-in TyCons]
         ioTyConName, ioDataConName,
         runMainIOName,
+        runRWName,
 
         -- Type representation types
         trModuleTyConName, trModuleDataConName,
@@ -335,6 +335,7 @@ basicKnownKeyNames
         breakpointAutoName,  opaqueTyConName,
         assertErrorName, traceName,
         printName, fstName, sndName,
+        dollarName,
 
         -- Integer
         integerTyConName, mkIntegerName,
@@ -886,8 +887,9 @@ and it's convenient to write them all down in one place.
 wildCardName :: Name
 wildCardName = mkSystemVarName wildCardKey (fsLit "wild")
 
-runMainIOName :: Name
+runMainIOName, runRWName :: Name
 runMainIOName = varQual gHC_TOP_HANDLER (fsLit "runMainIO") runMainKey
+runRWName     = varQual gHC_MAGIC       (fsLit "runRW#")    runRWKey
 
 orderingTyConName, ltDataConName, eqDataConName, gtDataConName :: Name
 orderingTyConName = tcQual  gHC_TYPES (fsLit "Ordering") orderingTyConKey
@@ -1060,8 +1062,8 @@ groupWithName = varQual gHC_EXTS (fsLit "groupWith") groupWithIdKey
 fromStringName, otherwiseIdName, foldrName, buildName, augmentName,
     mapName, appendName, assertName,
     breakpointName, breakpointCondName, breakpointAutoName,
-    opaqueTyConName :: Name
-fromStringName = varQual dATA_STRING (fsLit "fromString") fromStringClassOpKey
+    opaqueTyConName, dollarName :: Name
+dollarName        = varQual gHC_BASE (fsLit "$")          dollarIdKey
 otherwiseIdName   = varQual gHC_BASE (fsLit "otherwise")  otherwiseIdKey
 foldrName         = varQual gHC_BASE (fsLit "foldr")      foldrIdKey
 buildName         = varQual gHC_BASE (fsLit "build")      buildIdKey
@@ -1073,6 +1075,7 @@ breakpointName    = varQual gHC_BASE (fsLit "breakpoint") breakpointIdKey
 breakpointCondName= varQual gHC_BASE (fsLit "breakpointCond") breakpointCondIdKey
 breakpointAutoName= varQual gHC_BASE (fsLit "breakpointAuto") breakpointAutoIdKey
 opaqueTyConName   = tcQual  gHC_BASE (fsLit "Opaque")     opaqueTyConKey
+fromStringName = varQual dATA_STRING (fsLit "fromString") fromStringClassOpKey
 
 breakpointJumpName :: Name
 breakpointJumpName
@@ -2070,7 +2073,7 @@ typeLitNatDataConKey      = mkPreludeDataConUnique 108
 
 wildCardKey, absentErrorIdKey, augmentIdKey, appendIdKey,
     buildIdKey, errorIdKey, foldrIdKey, recSelErrorIdKey,
-    seqIdKey, irrefutPatErrorIdKey, eqStringIdKey,
+    seqIdKey, eqStringIdKey,
     noMethodBindingErrorIdKey, nonExhaustiveGuardsErrorIdKey,
     runtimeErrorIdKey, patErrorIdKey, voidPrimIdKey,
     realWorldPrimIdKey, recConErrorIdKey,
@@ -2087,7 +2090,6 @@ errorIdKey                    = mkPreludeMiscIdUnique  5
 foldrIdKey                    = mkPreludeMiscIdUnique  6
 recSelErrorIdKey              = mkPreludeMiscIdUnique  7
 seqIdKey                      = mkPreludeMiscIdUnique  8
-irrefutPatErrorIdKey          = mkPreludeMiscIdUnique  9
 eqStringIdKey                 = mkPreludeMiscIdUnique 10
 noMethodBindingErrorIdKey     = mkPreludeMiscIdUnique 11
 nonExhaustiveGuardsErrorIdKey = mkPreludeMiscIdUnique 12

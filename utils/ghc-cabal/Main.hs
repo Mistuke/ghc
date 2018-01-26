@@ -6,7 +6,7 @@ import qualified Distribution.ModuleName as ModuleName
 import Distribution.PackageDescription
 import Distribution.PackageDescription.Check hiding (doesFileExist)
 import Distribution.PackageDescription.Configuration
-import Distribution.PackageDescription.Parse
+import Distribution.PackageDescription.Parsec
 import Distribution.Package
 import Distribution.Simple
 import Distribution.Simple.Configure
@@ -93,13 +93,13 @@ runDefaultMain :: IO ()
 runDefaultMain
  = do let verbosity = normal
       gpdFile <- defaultPackageDesc verbosity
-      gpd <- readPackageDescription verbosity gpdFile
+      gpd <- readGenericPackageDescription verbosity gpdFile
       case buildType (flattenPackageDescription gpd) of
-          Just Configure -> defaultMainWithHooks autoconfUserHooks
+          Configure -> defaultMainWithHooks autoconfUserHooks
           -- time has a "Custom" Setup.hs, but it's actually Configure
           -- plus a "./Setup test" hook. However, Cabal is also
           -- "Custom", but doesn't have a configure script.
-          Just Custom ->
+          Custom ->
               do configureExists <- doesFileExist "configure"
                  if configureExists
                      then defaultMainWithHooks autoconfUserHooks
@@ -118,7 +118,7 @@ doCheck directory
  = withCurrentDirectory directory
  $ do let verbosity = normal
       gpdFile <- defaultPackageDesc verbosity
-      gpd <- readPackageDescription verbosity gpdFile
+      gpd <- readGenericPackageDescription verbosity gpdFile
       case filter isFailure $ checkPackage gpd Nothing of
           []   -> return ()
           errs -> mapM_ print errs >> exitWith (ExitFailure 1)
@@ -266,7 +266,7 @@ generate directory distdir config_args
       writePersistBuildConfig distdir lbi
 
       hooked_bi <-
-           if (buildType pd0 == Just Configure) || (buildType pd0 == Just Custom)
+           if (buildType pd0 == Configure) || (buildType pd0 == Custom)
            then do
               maybe_infoFile <- defaultHookedPackageDesc
               case maybe_infoFile of
