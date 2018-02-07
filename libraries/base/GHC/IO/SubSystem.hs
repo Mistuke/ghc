@@ -29,8 +29,6 @@ import GHC.IORef
 import GHC.RTS.Flags
 
 import Control.Monad
-import Data.Functor
-import Data.Maybe
 
 ioSubSystem :: IORef IoSubSystem
 ioSubSystem = unsafePerformIO sub

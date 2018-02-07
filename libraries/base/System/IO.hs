@@ -19,7 +19,7 @@ module System.IO (
     -- * The IO monad
 
     IO,
-    fixIO,
+    GHC.IO.fixIO,
 
     -- * Files and handles
 
@@ -537,7 +537,7 @@ openTempFile' loc tmp_dir template binary mode
                                      True{-is_nonblock-}
 
              enc <- getLocaleEncoding
-             h <- mkHandleFromFD fD fd_type filename ReadWriteMode
+             h <- POSIX.mkHandleFromFD fD fd_type filename ReadWriteMode
                                  False{-set non-block-} (Just enc)
 
              return (filename, h)

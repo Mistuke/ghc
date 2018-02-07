@@ -1,4 +1,5 @@
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE CPP                  #-}
+{-# LANGUAGE NoImplicitPrelude    #-}
 {- |
    Module      :  System.Win32.Encoding
    Copyright   :  2012 shelarcy
@@ -30,6 +31,9 @@ import Foreign.Marshal.Array  (allocaArray)
 import Foreign.Marshal.Unsafe (unsafeLocalState)
 import GHC.Windows
 import GHC.IO.Encoding.CodePage (CodePage)
+import GHC.IO
+import GHC.Base
+import GHC.Real
 
 #include "windows_cconv.h"
 
