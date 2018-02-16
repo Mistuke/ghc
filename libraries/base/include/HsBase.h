@@ -27,7 +27,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
 #include <math.h>
 
 #if HAVE_SYS_TYPES_H
@@ -539,6 +538,12 @@ INLINE wchar_t* __hs_create_device_name (const wchar_t* filename) {
   wchar_t* result = _wcsdup (filename);
   wchar_t ns[10] = {0};
 
+  /* If the file is already in a native namespace don't change it.  */
+  if (   wcsncmp (nt_namespace, filename, 4) == 0
+      || wcsncmp (win32_namespace, filename, 4) == 0
+      || wcsncmp (device_namespace, filename, 8) == 0)
+    return result;
+
     /* Since we're using the lower level APIs we must normalize slashes now.  The
      Win32 API layer will no longer convert '/' into '\\' for us.  */
   for (int i = 0; i < wcslen (result); i++)
@@ -546,12 +551,6 @@ INLINE wchar_t* __hs_create_device_name (const wchar_t* filename) {
       if (result[i] == L'/')
         result[i] = L'\\';
     }
-
-  /* If the file is already in a native namespace don't change it.  */
-  if (   wcsncmp (nt_namespace, filename, 4) == 0
-      || wcsncmp (win32_namespace, filename, 4) == 0
-      || wcsncmp (device_namespace, filename, 8) == 0)
-    return result;
 
     /* Now resolve any . and .. in the path or subsequent API calls may fail since
      Win32 will no longer resolve them.  */
@@ -642,11 +641,11 @@ INLINE int __hs_sopen (const wchar_t* filename, int oflag,
     dwCreationDisposition = OPEN_ALWAYS;
   if (HAS_FLAG (oflag, (_O_CREAT | _O_EXCL)))
     dwCreationDisposition = CREATE_NEW;
-  if (HAS_FLAG (oflag, _O_TRUNC))
+  if (HAS_FLAG (oflag, _O_TRUNC) && !HAS_FLAG (oflag, _O_CREAT))
     dwCreationDisposition = TRUNCATE_EXISTING;
 
   /* Set file access attributes.  */
-  DWORD dwFlagsAndAttributes = FILE_FLAG_BACKUP_SEMANTICS;
+  DWORD dwFlagsAndAttributes = FILE_ATTRIBUTE_NORMAL;
   if (HAS_FLAG (oflag, _O_RDONLY))
     dwFlagsAndAttributes |= 0; /* No special attribute.  */
   if (HAS_FLAG (oflag, (_O_CREAT | _O_TEMPORARY)))
@@ -657,6 +656,9 @@ INLINE int __hs_sopen (const wchar_t* filename, int oflag,
     dwFlagsAndAttributes |= FILE_FLAG_RANDOM_ACCESS;
   if (HAS_FLAG (oflag, _O_SEQUENTIAL))
     dwFlagsAndAttributes |= FILE_FLAG_SEQUENTIAL_SCAN;
+  /* Flag is only valid on it's own.  */
+  if (dwFlagsAndAttributes != FILE_ATTRIBUTE_NORMAL)
+    dwFlagsAndAttributes &= ~FILE_ATTRIBUTE_NORMAL;
 
   /* Set security attributes.  */
   SECURITY_ATTRIBUTES securityAttributes;
@@ -676,7 +678,7 @@ INLINE int __hs_sopen (const wchar_t* filename, int oflag,
   if (INVALID_HANDLE_VALUE == hResult)
     {
       maperrno ();
-      return errno;
+      return -1;
     }
 
   /* Now we have a Windows handle, we have to convert it to an FD and apply
@@ -686,15 +688,15 @@ INLINE int __hs_sopen (const wchar_t* filename, int oflag,
   if (-1 == fd)
     {
       maperrno();
-      return errno;
+      return -1;
     }
 
   /* Finally we can change the mode to the requested one.  */
   const int mode_mask = _O_TEXT | _O_BINARY | _O_U16TEXT | _O_U8TEXT | _O_WTEXT;
-  if (-1 == _setmode (fd, oflag & mode_mask))
+  if ((oflag & mode_mask) && (-1 == _setmode (fd, oflag & mode_mask)))
     {
       maperrno();
-      return errno;
+      return -1;
     }
 
   return fd;
