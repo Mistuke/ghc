@@ -529,22 +529,22 @@ extern void __hscore_set_saved_termios(int fd, void* ts);
    of doing any of this is that we can break the MAX_PATH restriction and also
    access raw handles that we couldn't before.  */
 INLINE wchar_t* __hs_create_device_name (const wchar_t* filename) {
-  const wchar_t* nt_namespace     = L"\\\\.\\";
-  const wchar_t* win32_namespace  = L"\\\\?\\";
-  const wchar_t* device_namespace = L"\\Device\\";
-  const wchar_t* unc_prefix       = L"UNC\\";
-  const wchar_t* network_share    = L"\\\\";
+  const wchar_t* win32_dev_namespace  = L"\\\\.\\";
+  const wchar_t* win32_file_namespace = L"\\\\?\\";
+  const wchar_t* nt_device_namespace  = L"\\Device\\";
+  const wchar_t* unc_prefix           = L"UNC\\";
+  const wchar_t* network_share        = L"\\\\";
 
   wchar_t* result = _wcsdup (filename);
   wchar_t ns[10] = {0};
 
   /* If the file is already in a native namespace don't change it.  */
-  if (   wcsncmp (nt_namespace, filename, 4) == 0
-      || wcsncmp (win32_namespace, filename, 4) == 0
-      || wcsncmp (device_namespace, filename, 8) == 0)
+  if (   wcsncmp (win32_dev_namespace , filename, 4) == 0
+      || wcsncmp (win32_file_namespace, filename, 4) == 0
+      || wcsncmp (nt_device_namespace , filename, 8) == 0)
     return result;
 
-    /* Since we're using the lower level APIs we must normalize slashes now.  The
+  /* Since we're using the lower level APIs we must normalize slashes now.  The
      Win32 API layer will no longer convert '/' into '\\' for us.  */
   for (int i = 0; i < wcslen (result); i++)
     {
@@ -552,7 +552,7 @@ INLINE wchar_t* __hs_create_device_name (const wchar_t* filename) {
         result[i] = L'\\';
     }
 
-    /* Now resolve any . and .. in the path or subsequent API calls may fail since
+  /* Now resolve any . and .. in the path or subsequent API calls may fail since
      Win32 will no longer resolve them.  */
   DWORD nResult = GetFullPathNameW (result, 0, NULL, NULL) + 1;
   wchar_t *temp = _wcsdup (result);
@@ -566,12 +566,12 @@ INLINE wchar_t* __hs_create_device_name (const wchar_t* filename) {
 
   if (wcsncmp (network_share, result, 2) == 0)
     {
-      if (swprintf (ns, 10, L"%ls%ls", win32_namespace, unc_prefix) <= 0)
+      if (swprintf (ns, 10, L"%ls%ls", win32_file_namespace, unc_prefix) <= 0)
         {
           goto cleanup;
         }
     }
-  else if (swprintf (ns, 10, L"%ls", win32_namespace) <= 0)
+  else if (swprintf (ns, 10, L"%ls", win32_file_namespace) <= 0)
     {
       goto cleanup;
     }

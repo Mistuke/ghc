@@ -69,9 +69,9 @@ Runtime system
   else. This fixes ``iuuc`` on Windows given the proper search directories (e.g
   ``-L/mingw64/lib``).
 
-	- The GHC runtime linker now uses ``LIBRARY_PATH`` and the runtime loader now also
-	  searches ``LD_LIBRARY_PATH``.
-
+- The GHC runtime linker now uses ``LIBRARY_PATH`` and the runtime loader now also
+  searches ``LD_LIBRARY_PATH``.
+- The GHC runtime on Windows is no longer constrained by MAX_PATH.
 Template Haskell
 ~~~~~~~~~~~~~~~~
 
