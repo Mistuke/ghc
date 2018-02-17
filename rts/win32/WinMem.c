@@ -186,6 +186,9 @@ static void winmem_cback_unmap (void* mem, size_t size, void* user)
 
 void winmem_init (void)
 {
+  if (initialized)
+    return;
+
 #if defined(THREADED_RTS)
     initMutex(&winmem_mutex);
 #endif
