@@ -284,7 +284,7 @@ FILE *__hs_fopen (const char* filename, const char* mode)
   return result;
 }
 #else
-FILE *__hs_fwopen (const wchar_t* filename, const wchar_t* mode)
+FILE *__hs_fopen (const char* filename, const char* mode)
 {
   return fopen (filename, mode);
 }
