@@ -10,6 +10,8 @@
 #include <inttypes.h>
 #include "tlsf.h"
 
+/* TODO: Disable these when submitting the patch.
+   Ideally we'd wire a flag for these in GHC.  */
 #define TLSF_ASSERT
 #define TLSF_DEBUG
 #define TLSF_STATS
@@ -617,7 +619,7 @@ tlsf_t tlsf_create(tlsf_map_t map, tlsf_unmap_t unmap, void* user) {
 
 void tlsf_destroy(tlsf_t t) {
 #ifdef TLSF_STATS
-  tlsf_printstats(t);
+  //tlsf_printstats(t);
   bool validated = t->stats.free_size == t->stats.total_size;
   TL_ASSERT(validated, "Memory leak detected.");
   TL_ASSERT((t->unmap && t->stats.pool_count == 1) ||

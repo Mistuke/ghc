@@ -15,6 +15,8 @@ The highlights, since the 8.4.1 release, are:
 
 - Many, many bug fixes.
 
+- SSE code can now be used in GHCi on Windows. (e.g. hmatrix etc.)
+
 
 Full details
 ------------
@@ -37,7 +39,14 @@ Runtime system
 
 	- The GHC runtime linker now uses ``LIBRARY_PATH`` and the runtime loader now also
 	  searches ``LD_LIBRARY_PATH``.
-	
+
+- The runtime linker on Windows has been overhauled to properly handle section
+  alignment, lower the amount of wasted memory and lower the amount of in use
+  memory and apply memory protection.
+  See :ghc-ticket:`13617`. Note that committed memory may be slightly higher for
+  now because the entire compiler has not been switched over to the new memory
+  allocator yet.
+
 Template Haskell
 ~~~~~~~~~~~~~~~~
 

@@ -196,6 +196,7 @@
 #include <wchar.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <assert.h>
 
 #include <inttypes.h>
 #include <dbghelp.h>
@@ -1181,6 +1182,7 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
       indexing later on.  */
    uint32_t s_symbols = info->numberOfSymbols * sizeof(COFF_symbol);
    uint32_t sym_size  = getSymbolSize (info);
+   assert (sym_size <= sizeof(COFF_symbol));
    oc->info->symbols
      = stgMallocBytes (s_symbols, "ocVerifyImage_PEi386(oc->info->symbols)");
    for (uint32_t i = 0; i < info->numberOfSymbols; i++)

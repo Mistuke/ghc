@@ -49,6 +49,9 @@ int hs_main ( int argc, char *argv[],       // program args
 
 {
 #if defined(mingw32_HOST_OS)
+    // Initialize TLSF2 manager.
+    /* See Note [Memory allocation].  */
+    /* See Note [Pooled Memory Manager].  */
     winmem_init ();
 #endif
 

@@ -38,6 +38,12 @@ typedef struct _userInfo
   /* The access protection the memory pages in the allocator should be
      protected with.  */
   uint32_t access;
+  /* Indicates that pages for this allocator need to be unprotected to allocate
+     or de-allocate memory.  */
+  bool is_lockable;
+  /* Indicates if the pages are currently locked.  If they are new allocations
+     require them to be unlocked first.  */
+  bool is_locked;
   /* A reference to the allocator itself. Not that this value should not be
      dereferenced in call-backs from the allocator as it may not have been
      initialized yet.  */
@@ -79,7 +85,6 @@ const size_t pool_resize_limit       = 10;
 const size_t default_blocks_allocate = 15;
 const uint32_t default_protection    = PAGE_EXECUTE_READWRITE;
 static volatile bool initialized     = false;
-static bool m_enforcing_mem_protect  = false;
 
 /* This protects all the memory allocator's global state.   */
 Mutex winmem_mutex;
@@ -158,14 +163,13 @@ static void* winmem_cback_map (size_t* size, void* user)
   size_t m_size      = getAllocSize (*size);
   uint32_t m_protect = info->access;
   void* cache
-    = VirtualAlloc (NULL, m_size, MEM_COMMIT | MEM_RESERVE,
-                    m_enforcing_mem_protect ? m_protect : default_protection);
+    = VirtualAlloc (NULL, m_size, MEM_COMMIT | MEM_RESERVE, default_protection);
   addPoolBuffer (m_size, cache, info, m_protect);
   *size = m_size;
 
   if (info->m_alloc)
     {
-      tlsf_check (info->m_alloc);
+      //tlsf_check (info->m_alloc);
       //tlsf_printstats (info->m_alloc);
     }
   return cache;
@@ -175,8 +179,8 @@ static void winmem_cback_unmap (void* mem, size_t size, void* user)
 {
   (void)user;
   VirtualFree (mem, 0, (uint32_t)size);
-  userInfo_t* info   = (userInfo_t*)user;
-  tlsf_check (info->m_alloc);
+  //userInfo_t* info   = (userInfo_t*)user;
+  //tlsf_check (info->m_alloc);
   //tlsf_printstats (info->m_alloc);
 }
 
@@ -187,12 +191,16 @@ void winmem_init (void)
 #endif
 
   initialized = true;
+
+  winmem_memory_protect (NULL);
 }
 
 void winmem_deinit ()
 {
   if (!initialized)
     return;
+
+  winmem_memory_unprotect (NULL);
 
   ACQUIRE_LOCK(&winmem_mutex);
   for (PoolBuffer_t* b = buffers; b; ) {
@@ -224,19 +232,25 @@ void* winmem_malloc (AccessType_t type, size_t n)
   ACQUIRE_LOCK(&winmem_mutex);
   uint64_t index = findManager (type);
   userInfo_t* manager = mem_manager[index];
+  bool is_lockable = type & WriteAccess;
 
   if (!manager)
     {
       manager = (userInfo_t*)calloc (1, sizeof (userInfo_t));
+      manager->is_lockable = is_lockable;
+      manager->is_locked = false;
       manager->access = getProtection (type);
       manager->m_alloc
         = tlsf_create (winmem_cback_map, winmem_cback_unmap, manager);
       mem_manager[index] = manager;
-      tlsf_check (manager->m_alloc);
+      //tlsf_check (manager->m_alloc);
       //tlsf_printstats (manager->m_alloc);
     }
 
+  winmem_memory_unprotect (manager);
   void* result = tlsf_malloc (manager->m_alloc, n);
+  winmem_memory_protect (manager);
+
   RELEASE_LOCK(&winmem_mutex);
 
   return result;
@@ -250,17 +264,23 @@ void* winmem_realloc (AccessType_t type, void* p, size_t n)
   ACQUIRE_LOCK(&winmem_mutex);
   uint64_t index = findManager (type);
   userInfo_t* manager = mem_manager[index];
+  bool is_lockable = type & WriteAccess;
 
   if (!manager)
     {
       manager = (userInfo_t*)malloc (sizeof (userInfo_t));
+      manager->is_lockable = is_lockable;
+      manager->is_locked = false;
       manager->access = getProtection (type);
       manager->m_alloc
         = tlsf_create (winmem_cback_map, winmem_cback_unmap, manager);
       mem_manager[index] = manager;
     }
 
+  winmem_memory_unprotect (manager);
   void* result = tlsf_realloc (manager->m_alloc, p, n);
+  winmem_memory_protect (manager);
+
   RELEASE_LOCK(&winmem_mutex);
 
   return result;
@@ -275,17 +295,23 @@ void* winmem_calloc (AccessType_t type, size_t n, size_t m)
   ACQUIRE_LOCK(&winmem_mutex);
   uint64_t index = findManager (type);
   userInfo_t* manager = mem_manager[index];
+  bool is_lockable = type & WriteAccess;
 
   if (!manager)
     {
       manager = (userInfo_t*)malloc (sizeof (userInfo_t));
+      manager->is_lockable = is_lockable;
+      manager->is_locked = false;
       manager->access = getProtection (type);
       manager->m_alloc
         = tlsf_create (winmem_cback_map, winmem_cback_unmap, manager);
       mem_manager[index] = manager;
     }
 
+  winmem_memory_unprotect (manager);
   void* result = tlsf_calloc (manager->m_alloc, m);
+  winmem_memory_protect (manager);
+
   RELEASE_LOCK(&winmem_mutex);
 
   return result;
@@ -300,38 +326,56 @@ void winmem_free (AccessType_t type, void* memptr)
   uint64_t index = findManager (type);
   tlsf_t manager = mem_manager[index]->m_alloc;
   assert (manager);
+
+  winmem_memory_unprotect (manager);
   tlsf_free (manager, memptr);
+  winmem_memory_protect (manager);
+
   RELEASE_LOCK(&winmem_mutex);
 }
 
-void winmem_memory_protect ()
+void winmem_memory_protect (void* manager)
 {
-  if (!initialized)
+  userInfo_t *m = (userInfo_t*)manager;
+  if (   !initialized
+      || (manager && (m->is_locked || !m->is_lockable)))
     return;
 
   ACQUIRE_LOCK(&winmem_mutex);
-  m_enforcing_mem_protect = true;
 
-  for (PoolBuffer_t* b = buffers; b; b = b->next ) {
-    /* Note: Abort if this fails when added to GHC.  */
+  for (PoolBuffer_t* b = buffers; b; b = b->next) {
+    if (   !b->m_alloc->is_lockable
+        || b->m_alloc->is_locked
+        || (manager && b->m_alloc != manager))
+      continue;
+
+    b->m_alloc->is_locked = true;
     DWORD old_flags;
-    VirtualProtect (b->buffer, b->size, b->m_flags, &old_flags);
+    bool success
+      = VirtualProtect (b->buffer, b->size, b->m_flags, &old_flags);
+    assert (success);
   }
   RELEASE_LOCK(&winmem_mutex);
 }
 
-void winmem_memory_unprotect ()
+void winmem_memory_unprotect (void* manager)
 {
   if (!initialized)
     return;
 
   ACQUIRE_LOCK(&winmem_mutex);
-  m_enforcing_mem_protect = false;
 
-  for (PoolBuffer_t* b = buffers; b; b = b->next) {;
-    /* Note: Abort if this fails when added to GHC.  */
+  for (PoolBuffer_t* b = buffers; b; b = b->next) {
+    if (   !b->m_alloc->is_lockable
+        || !b->m_alloc->is_locked
+        || (manager && b->m_alloc != manager))
+      continue;
+
+    b->m_alloc->is_locked = false;
     DWORD old_flags;
-    VirtualProtect (b->buffer, b->size, PAGE_EXECUTE_READWRITE, &old_flags);
+    bool success
+      = VirtualProtect (b->buffer, b->size, default_protection, &old_flags);
+    assert (success);
   }
   RELEASE_LOCK(&winmem_mutex);
 }
