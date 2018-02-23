@@ -4,6 +4,11 @@
  *
  * OS-specific memory management, Windows now uses a Two Level Segregated
  * pooled memory manager to more dynamically address the modern needs of GHC.
+ * Our pools are 1mb in size so we get 32 allocation units, which should fit
+ * approx 65 MBlocks before requiring another call to the OS.
+ *
+ * Since we only allocate MBlocks here we will waste memory only once per pool
+ * when we align the pool itself.
  *
  * ---------------------------------------------------------------------------*/
 
@@ -11,7 +16,7 @@
 #include "sm/OSMem.h"
 #include "sm/HeapAlloc.h"
 #include "RtsUtils.h"
-#include "winmem.h"
+#include "tlsf.h"
 
 #include <windows.h>
 
@@ -21,11 +26,60 @@ typedef LPVOID(WINAPI *VirtualAllocExNumaProc)(HANDLE, LPVOID, SIZE_T, DWORD, DW
 /* Cache NUMA API call. */
 VirtualAllocExNumaProc VirtualAllocExNuma;
 
+/* Reserve 2mb at a time, which fits ~20 MBlocks + Overhead bits on average.
+   If adjusting this number in the future please keep alignment + overhead in
+   mind.  The overhead for TLSF2 is POOL_OVERHEAD + TLSF_SIZE and BLOCK_OVERHEAD
+   for each block.  */
+static size_t default_blocks_allocate = 5;
+static uint32_t default_protection    = PAGE_READWRITE;
+
+static tlsf_t m_alloc;
+
+static size_t getAllocationSize (void) {
+  static size_t allocsize = 0;
+
+  if (allocsize == 0) {
+      SYSTEM_INFO sSysInfo;
+      GetSystemInfo(&sSysInfo);
+      allocsize = sSysInfo.dwAllocationGranularity;
+  }
+
+  return allocsize;
+}
+
+static void* osmem_cback_map (size_t* size, void* user) {
+  (void)user;
+  size_t allocsize = getAllocationSize ();
+  size_t m_size = allocsize * default_blocks_allocate;
+  if (m_size < *size)
+  {
+    m_size = *size;
+    /* Now round up to next page size to keep aligned to the page boundary.  */
+    size_t pages    = m_size / allocsize;
+    size_t overflow = pages * allocsize;
+    if (m_size > overflow)
+      pages++;
+    m_size = pages * allocsize;
+  }
+
+  void* cache
+    = VirtualAlloc (NULL, m_size, MEM_COMMIT | MEM_RESERVE, default_protection);
+  *size = m_size;
+  if (!cache)
+    barf ("Could not allocate any more memory from OS in OSMem.c.");
+  return cache;
+}
+
+static void osmem_cback_unmap (void* mem, size_t size, void* user) {
+  (void)user;
+  VirtualFree (mem, 0, (uint32_t)size);
+}
+
 void
-osMemInit(void)
-{
+osMemInit(void) {
     /* Make sure Memory manager has been initialized.  */
-    winmem_init ();
+    if (!m_alloc)
+      m_alloc = tlsf_create (osmem_cback_map, osmem_cback_unmap, NULL);
 
     /* Resolve and cache VirtualAllocExNuma. */
     if (osNumaAvailable() && RtsFlags.GcFlags.numa)
@@ -42,8 +96,12 @@ osMemInit(void)
 void *
 osGetMBlocks(uint32_t n) {
     void* ret;
-    uint32_t size = (n+1) * MBLOCK_SIZE; // TODO: stop wasting this.
-    ret = winmem_malloc (WriteAccess, size);
+    /* TLSF2 won't solve the fragmentation issues here. The alignment
+       requirements are so huge that we will always waste large blocks.  But
+       at least down calls to the OS should be less and should be faster than
+       the buddy allocator used before.  */
+    uint32_t size = (n+1) * MBLOCK_SIZE;
+    ret = tlsf_malloc (m_alloc, size);
     ret = MBLOCK_ROUND_UP (ret);
 
     if (ret && ((W_)ret & MBLOCK_MASK) != 0) {
@@ -53,33 +111,26 @@ osGetMBlocks(uint32_t n) {
     return ret;
 }
 
-void osFreeMBlocks(void *addr, uint32_t n)
-{
+void osFreeMBlocks(void *addr, uint32_t n) {
     (void)n;
-    winmem_free (WriteAccess, addr);
+    tlsf_free (m_alloc, addr);
 }
 
-void osReleaseFreeMemory(void)
-{
+void osReleaseFreeMemory(void) {
     /* This is done automatically by the TLSF2 allocator.
        So no code needed here.  */
 }
 
 void
-osFreeAllMBlocks(void)
-{
-    /* This one I don't quite get.  Presumably it's only called when we're not
-       blocked on a foreign call.  But if we're terminating, then why leave the
-       heap around? Surely the OS will clean it up regardless of the foreign
-       call finished or not? So shouldn't the entire RTS not exit with
-       outstanding foreign calls?
-
-       Supporting this means I have to separate out memory allocated from this
-       file. Which is possible, but not ideal.  */
+osFreeAllMBlocks(void) {
+    if (m_alloc)
+    {
+        tlsf_destroy (m_alloc);
+        m_alloc = NULL;
+    }
 }
 
-size_t getPageSize (void)
-{
+size_t getPageSize (void) {
     static size_t pagesize = 0;
 
     if (pagesize == 0) {
@@ -92,8 +143,7 @@ size_t getPageSize (void)
 }
 
 /* Returns 0 if physical memory size cannot be identified */
-StgWord64 getPhysicalMemorySize (void)
-{
+StgWord64 getPhysicalMemorySize (void) {
     static StgWord64 physMemSize = 0;
     if (!physMemSize) {
         MEMORYSTATUSEX status;

@@ -1,8 +1,6 @@
 /* -----------------------------------------------------------------------------
 *
-* (c) The GHC Team 2017
-*
-* Contributed by Tamar Christina.
+* (c) Tamar Christina 2018
 *
 * Secured pooled memory allocator for the GHC runtime to manage object code
 * and data on Windows.

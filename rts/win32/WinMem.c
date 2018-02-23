@@ -1,8 +1,6 @@
 /* -----------------------------------------------------------------------------
 *
-* (c) The GHC Team 2017
-*
-* Contributed by Tamar Christina.
+* (c) Tamar Christina 2018
 *
 * Secured pooled memory allocator for the GHC runtime to manage object code
 * and data on Windows. This makes the GHC runtime DEP compliant by controlling
@@ -81,9 +79,8 @@ enum { NUM_ACCESS = sizeof(map) / sizeof (AccessMap_t) };
 static userInfo_t* mem_manager[NUM_ACCESS];
 static PoolBuffer_t* buffers = NULL;
 
-const size_t pool_resize_limit       = 10;
-const size_t default_blocks_allocate = 15;
-const uint32_t default_protection    = PAGE_EXECUTE_READWRITE;
+static size_t default_blocks_allocate = 15;
+static uint32_t default_protection    = PAGE_EXECUTE_READWRITE;
 static volatile bool initialized     = false;
 
 /* This protects all the memory allocator's global state.   */
