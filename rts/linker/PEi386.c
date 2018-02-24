@@ -416,7 +416,7 @@ static void releaseOcInfo(ObjectCode* oc) {
         stgFree (oc->info->symbols);
         stgFree (oc->info);
 
-        winmem_free (WriteAccess | ExecuteAccess, oc->info->image);
+        winmem_free (ReadAccess | ExecuteAccess, oc->info->image);
         oc->info->image = NULL;
         oc->info = NULL;
     }
@@ -1415,6 +1415,9 @@ ocGetNames_PEi386 ( ObjectCode* oc )
 
    COFF_HEADER_INFO *info = oc->info->ch_info;
 
+   /* Disable memory protection while we load code, we'll need WRITE access.  */
+   winmem_memory_unprotect (NULL);
+
    /* Copy section information into the ObjectCode. */
    for (uint32_t i = 0; i < info->numberOfSections; i++) {
       uint8_t* start;
@@ -1490,6 +1493,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
              releaseOcInfo (oc);
              stgFree (oc->image);
              oc->image = NULL;
+             winmem_memory_protect (NULL);
              return false;
           }
           setImportSymbol (oc, sname);
@@ -1500,6 +1504,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
           stgFree (oc->image);
           oc->image = NULL;
           releaseOcInfo (oc);
+          winmem_memory_protect (NULL);
           return true;
       }
 
@@ -1545,10 +1550,12 @@ ocGetNames_PEi386 ( ObjectCode* oc )
         /* See Note [Memory allocation].  */
         /* See Note [Pooled Memory Manager].  */
         oc->info->image
-          = winmem_malloc (WriteAccess | ExecuteAccess, oc->info->secBytesTotal);
+          = winmem_malloc (ReadAccess | ExecuteAccess, oc->info->secBytesTotal);
         if (!oc->info->image)
           barf ("Could not allocate any memory from pool.");
       }
+
+      winmem_memory_protect (NULL);
 
       ASSERT(section.size == 0 || section.info->virtualSize == 0);
       sz = section.size;
@@ -1802,6 +1809,9 @@ ocResolve_PEi386 ( ObjectCode* oc )
    COFF_HEADER_INFO *info = oc->info->ch_info;
    uint32_t numberOfSections = info->numberOfSections;
 
+   /* Unlock pages, we need the write bits.  */
+   winmem_memory_unprotect (oc->info->image);
+
    for (uint32_t i = 0; i < numberOfSections; i++) {
       Section section = oc->sections[i];
 
@@ -1847,6 +1857,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
             if ((void*)S == NULL) {
                 errorBelch(" | %" PATH_FMT ": unknown symbol `%s'", oc->fileName, symbol);
                 releaseOcInfo (oc);
+                winmem_memory_protect (oc->info->image);
                 return false;
             }
          }
@@ -1939,12 +1950,15 @@ ocResolve_PEi386 ( ObjectCode* oc )
                debugBelch("%" PATH_FMT ": unhandled PEi386 relocation type %d\n",
                      oc->fileName, reloc->Type);
                releaseOcInfo (oc);
+               winmem_memory_protect (oc->info->image);
                return false;
          }
 
       }
    }
 
+   /* Relock pages.  */
+   winmem_memory_protect (oc->info->image);
    IF_DEBUG(linker, debugBelch("completed %" PATH_FMT "\n", oc->fileName));
    return true;
 }
