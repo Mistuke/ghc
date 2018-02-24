@@ -1850,8 +1850,13 @@ ocResolve_PEi386 ( ObjectCode* oc )
             if ((void*)S == NULL) {
                 errorBelch(" | %" PATH_FMT ": unknown symbol `%s'", oc->fileName, symbol);
                 releaseOcInfo (oc);
-                winmem_memory_protect (NULL, true);
+                winmem_memory_protect (NULL);
                 return false;
+            } else {
+                /* The recursive call may have re-locked us.  Force the pages
+                   open again. Ideally we would tell lookupSymbol_ not to lock
+                   but fair enough.  For now this is simpler.  */
+                winmem_memory_unprotect (NULL);
             }
          }
          /* All supported relocations write at least 4 bytes */
@@ -1943,7 +1948,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
                debugBelch("%" PATH_FMT ": unhandled PEi386 relocation type %d\n",
                      oc->fileName, reloc->Type);
                releaseOcInfo (oc);
-               winmem_memory_protect (NULL, true);
+               winmem_memory_protect (NULL);
                return false;
          }
 
@@ -1951,7 +1956,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
    }
 
    /* Relock pages.  */
-   winmem_memory_protect (NULL, false);
+   winmem_memory_protect (NULL);
    IF_DEBUG(linker, debugBelch("completed %" PATH_FMT "\n", oc->fileName));
    return true;
 }
@@ -2068,7 +2073,7 @@ addCopySection (ObjectCode *oc, Section *s, SectionKind kind,
   AccessType_t type = ExecuteAccess;
   winmem_memory_unprotect (&type);
   memcpy (newStart, start, size);
-  winmem_memory_protect (&type, false);
+  winmem_memory_protect (&type);
   uintptr_t offset = (uintptr_t)newStart - (uintptr_t)oc->info->image;
   oc->info->secBytesUsed = (size_t)offset + size;
   start = newStart;

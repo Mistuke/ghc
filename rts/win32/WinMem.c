@@ -42,10 +42,6 @@ typedef struct _userInfo
   /* Indicates if the pages are currently locked.  If they are new allocations
      require them to be unlocked first.  */
   bool is_locked;
-  /* Keep track of how many times this info has been requested to be unlocked.
-     We should only re-lock the pages when the reference reaches 0, otherwise
-     recursive calls would break.  */
-  uint32_t ref_lock_cnt;
   /* A reference to the allocator itself. Not that this value should not be
      dereferenced in call-backs from the allocator as it may not have been
      initialized yet.  */
@@ -193,7 +189,7 @@ void winmem_init (void)
 
   initialized = true;
 
-  winmem_memory_protect (NULL, false);
+  winmem_memory_protect (NULL);
 }
 
 void winmem_deinit ()
@@ -240,7 +236,6 @@ void* winmem_malloc (AccessType_t type, size_t n)
       manager = (userInfo_t*)calloc (1, sizeof (userInfo_t));
       manager->is_lockable = is_lockable;
       manager->is_locked = false;
-      manager->ref_lock_cnt = 0;
       manager->access = getProtection (type);
       manager->m_alloc
         = tlsf_create (winmem_cback_map, winmem_cback_unmap, manager);
@@ -251,7 +246,7 @@ void* winmem_malloc (AccessType_t type, size_t n)
 
   winmem_memory_unprotect (&type);
   void* result = tlsf_malloc (manager->m_alloc, n);
-  winmem_memory_protect (&type, false);
+  winmem_memory_protect (&type);
 
   RELEASE_LOCK(&winmem_mutex);
 
@@ -273,7 +268,6 @@ void* winmem_realloc (AccessType_t type, void* p, size_t n)
       manager = (userInfo_t*)malloc (sizeof (userInfo_t));
       manager->is_lockable = is_lockable;
       manager->is_locked = false;
-      manager->ref_lock_cnt = 0;
       manager->access = getProtection (type);
       manager->m_alloc
         = tlsf_create (winmem_cback_map, winmem_cback_unmap, manager);
@@ -282,7 +276,7 @@ void* winmem_realloc (AccessType_t type, void* p, size_t n)
 
   winmem_memory_unprotect (&type);
   void* result = tlsf_realloc (manager->m_alloc, p, n);
-  winmem_memory_protect (&type, false);
+  winmem_memory_protect (&type);
 
   RELEASE_LOCK(&winmem_mutex);
 
@@ -305,7 +299,6 @@ void* winmem_calloc (AccessType_t type, size_t n, size_t m)
       manager = (userInfo_t*)malloc (sizeof (userInfo_t));
       manager->is_lockable = is_lockable;
       manager->is_locked = false;
-      manager->ref_lock_cnt = 0;
       manager->access = getProtection (type);
       manager->m_alloc
         = tlsf_create (winmem_cback_map, winmem_cback_unmap, manager);
@@ -314,7 +307,7 @@ void* winmem_calloc (AccessType_t type, size_t n, size_t m)
 
   winmem_memory_unprotect (&type);
   void* result = tlsf_calloc (manager->m_alloc, m);
-  winmem_memory_protect (&type, false);
+  winmem_memory_protect (&type);
 
   RELEASE_LOCK(&winmem_mutex);
 
@@ -333,12 +326,12 @@ void winmem_free (AccessType_t type, void* memptr)
 
   winmem_memory_unprotect (&type);
   tlsf_free (manager, memptr);
-  winmem_memory_protect (&type, false);
+  winmem_memory_protect (&type);
 
   RELEASE_LOCK(&winmem_mutex);
 }
 
-void winmem_memory_protect (AccessType_t *type, bool force)
+void winmem_memory_protect (AccessType_t *type)
 {
   userInfo_t* manager = NULL;
   if (type) {
@@ -356,10 +349,6 @@ void winmem_memory_protect (AccessType_t *type, bool force)
     if (   !b->m_alloc->is_lockable
         || b->m_alloc->is_locked
         || (manager && b->m_alloc != manager))
-      continue;
-
-    /* We have outstanding unlock references. Don't honor the re-lock yet.  */
-    if (--b->m_alloc->ref_lock_cnt > 0 && !force)
       continue;
 
     b->m_alloc->is_locked = true;
@@ -385,12 +374,8 @@ void winmem_memory_unprotect (AccessType_t *type)
 
   for (PoolBuffer_t* b = buffers; b; b = b->next) {
     if (   !b->m_alloc->is_lockable
+        || !b->m_alloc->is_locked
         || (manager && b->m_alloc != manager))
-      continue;
-
-    /* If we're already unprotected, no need to re-protect region but do
-       increase the ref-count.  */
-    if (b->m_alloc->ref_lock_cnt++ > 0 && !b->m_alloc->is_locked)
       continue;
 
     b->m_alloc->is_locked = false;

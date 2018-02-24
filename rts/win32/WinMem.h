@@ -92,4 +92,4 @@ void winmem_memory_unprotect (AccessType_t *type);
 
 /* Enforce all requested protection. During this time the allocator only allows
    further allocation of RW memory.  */
-void winmem_memory_protect (AccessType_t *type, bool force);
+void winmem_memory_protect (AccessType_t *type);
