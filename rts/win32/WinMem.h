@@ -88,8 +88,8 @@ void winmem_free (AccessType_t type, void* memptr);
 
 /* Disable all memory protection which sets all memory allocated to RW mode to
    allow manipulation of the content.  */
-void winmem_memory_unprotect (void*);
+void winmem_memory_unprotect (AccessType_t *type);
 
 /* Enforce all requested protection. During this time the allocator only allows
    further allocation of RW memory.  */
-void winmem_memory_protect (void*);
+void winmem_memory_protect (AccessType_t *type, bool force);

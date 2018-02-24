@@ -42,6 +42,10 @@ typedef struct _userInfo
   /* Indicates if the pages are currently locked.  If they are new allocations
      require them to be unlocked first.  */
   bool is_locked;
+  /* Keep track of how many times this info has been requested to be unlocked.
+     We should only re-lock the pages when the reference reaches 0, otherwise
+     recursive calls would break.  */
+  uint32_t ref_lock_cnt;
   /* A reference to the allocator itself. Not that this value should not be
      dereferenced in call-backs from the allocator as it may not have been
      initialized yet.  */
@@ -80,8 +84,8 @@ static userInfo_t* mem_manager[NUM_ACCESS];
 static PoolBuffer_t* buffers = NULL;
 
 static size_t default_blocks_allocate = 15;
-static uint32_t default_protection    = PAGE_EXECUTE_READWRITE;
-static volatile bool initialized     = false;
+static uint32_t default_protection    = PAGE_READWRITE;
+static volatile bool initialized      = false;
 
 /* This protects all the memory allocator's global state.   */
 Mutex winmem_mutex;
@@ -102,9 +106,6 @@ static size_t getAllocationSize (void)
 static void addPoolBuffer (size_t size, void* buffer,
                            userInfo_t* manager, uint32_t flags)
 {
-  if (flags == default_protection)
-    return;
-
   PoolBuffer_t* m_buffer = (PoolBuffer_t*)malloc (sizeof(PoolBuffer_t));
   assert (m_buffer);
   m_buffer->size    = size;
@@ -192,7 +193,7 @@ void winmem_init (void)
 
   initialized = true;
 
-  winmem_memory_protect (NULL);
+  winmem_memory_protect (NULL, false);
 }
 
 void winmem_deinit ()
@@ -232,13 +233,14 @@ void* winmem_malloc (AccessType_t type, size_t n)
   ACQUIRE_LOCK(&winmem_mutex);
   uint64_t index = findManager (type);
   userInfo_t* manager = mem_manager[index];
-  bool is_lockable = type & WriteAccess;
+  bool is_lockable = type & ~WriteAccess;
 
   if (!manager)
     {
       manager = (userInfo_t*)calloc (1, sizeof (userInfo_t));
       manager->is_lockable = is_lockable;
       manager->is_locked = false;
+      manager->ref_lock_cnt = 0;
       manager->access = getProtection (type);
       manager->m_alloc
         = tlsf_create (winmem_cback_map, winmem_cback_unmap, manager);
@@ -247,9 +249,9 @@ void* winmem_malloc (AccessType_t type, size_t n)
       //tlsf_printstats (manager->m_alloc);
     }
 
-  winmem_memory_unprotect (manager);
+  winmem_memory_unprotect (&type);
   void* result = tlsf_malloc (manager->m_alloc, n);
-  winmem_memory_protect (manager);
+  winmem_memory_protect (&type, false);
 
   RELEASE_LOCK(&winmem_mutex);
 
@@ -264,22 +266,23 @@ void* winmem_realloc (AccessType_t type, void* p, size_t n)
   ACQUIRE_LOCK(&winmem_mutex);
   uint64_t index = findManager (type);
   userInfo_t* manager = mem_manager[index];
-  bool is_lockable = type & WriteAccess;
+  bool is_lockable = type & ~WriteAccess;
 
   if (!manager)
     {
       manager = (userInfo_t*)malloc (sizeof (userInfo_t));
       manager->is_lockable = is_lockable;
       manager->is_locked = false;
+      manager->ref_lock_cnt = 0;
       manager->access = getProtection (type);
       manager->m_alloc
         = tlsf_create (winmem_cback_map, winmem_cback_unmap, manager);
       mem_manager[index] = manager;
     }
 
-  winmem_memory_unprotect (manager);
+  winmem_memory_unprotect (&type);
   void* result = tlsf_realloc (manager->m_alloc, p, n);
-  winmem_memory_protect (manager);
+  winmem_memory_protect (&type, false);
 
   RELEASE_LOCK(&winmem_mutex);
 
@@ -295,22 +298,23 @@ void* winmem_calloc (AccessType_t type, size_t n, size_t m)
   ACQUIRE_LOCK(&winmem_mutex);
   uint64_t index = findManager (type);
   userInfo_t* manager = mem_manager[index];
-  bool is_lockable = type & WriteAccess;
+  bool is_lockable = type & ~WriteAccess;
 
   if (!manager)
     {
       manager = (userInfo_t*)malloc (sizeof (userInfo_t));
       manager->is_lockable = is_lockable;
       manager->is_locked = false;
+      manager->ref_lock_cnt = 0;
       manager->access = getProtection (type);
       manager->m_alloc
         = tlsf_create (winmem_cback_map, winmem_cback_unmap, manager);
       mem_manager[index] = manager;
     }
 
-  winmem_memory_unprotect (manager);
+  winmem_memory_unprotect (&type);
   void* result = tlsf_calloc (manager->m_alloc, m);
-  winmem_memory_protect (manager);
+  winmem_memory_protect (&type, false);
 
   RELEASE_LOCK(&winmem_mutex);
 
@@ -327,18 +331,23 @@ void winmem_free (AccessType_t type, void* memptr)
   tlsf_t manager = mem_manager[index]->m_alloc;
   assert (manager);
 
-  winmem_memory_unprotect (manager);
+  winmem_memory_unprotect (&type);
   tlsf_free (manager, memptr);
-  winmem_memory_protect (manager);
+  winmem_memory_protect (&type, false);
 
   RELEASE_LOCK(&winmem_mutex);
 }
 
-void winmem_memory_protect (void* manager)
+void winmem_memory_protect (AccessType_t *type, bool force)
 {
-  userInfo_t *m = (userInfo_t*)manager;
+  userInfo_t* manager = NULL;
+  if (type) {
+    uint64_t index = findManager (*type);
+    manager = mem_manager[index];
+  }
+
   if (   !initialized
-      || (manager && (m->is_locked || !m->is_lockable)))
+      || (manager && (manager->is_locked || !manager->is_lockable)))
     return;
 
   ACQUIRE_LOCK(&winmem_mutex);
@@ -347,6 +356,10 @@ void winmem_memory_protect (void* manager)
     if (   !b->m_alloc->is_lockable
         || b->m_alloc->is_locked
         || (manager && b->m_alloc != manager))
+      continue;
+
+    /* We have outstanding unlock references. Don't honor the re-lock yet.  */
+    if (--b->m_alloc->ref_lock_cnt > 0 && !force)
       continue;
 
     b->m_alloc->is_locked = true;
@@ -358,17 +371,26 @@ void winmem_memory_protect (void* manager)
   RELEASE_LOCK(&winmem_mutex);
 }
 
-void winmem_memory_unprotect (void* manager)
+void winmem_memory_unprotect (AccessType_t *type)
 {
   if (!initialized)
     return;
-
   ACQUIRE_LOCK(&winmem_mutex);
+
+  userInfo_t* manager = NULL;
+  if (type) {
+    uint64_t index = findManager (*type);
+    manager = mem_manager[index];
+  }
 
   for (PoolBuffer_t* b = buffers; b; b = b->next) {
     if (   !b->m_alloc->is_lockable
-        || !b->m_alloc->is_locked
         || (manager && b->m_alloc != manager))
+      continue;
+
+    /* If we're already unprotected, no need to re-protect region but do
+       increase the ref-count.  */
+    if (b->m_alloc->ref_lock_cnt++ > 0 && !b->m_alloc->is_locked)
       continue;
 
     b->m_alloc->is_locked = false;
