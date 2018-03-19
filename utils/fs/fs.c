@@ -4,8 +4,10 @@
  *
  * Windows I/O routines for file opening.
  *
+ * NOTE: Only modify this file in utils/fs/ and rerun configure. Do not edit
+ *       this file in any other directory as it will be overwritten.
+ *
  * ---------------------------------------------------------------------------*/
-#include "PosixSource.h"
 #include "fs.h"
 #include <stdio.h>
 
