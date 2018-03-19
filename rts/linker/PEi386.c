@@ -407,6 +407,27 @@ void freePreloadObjectFile_PEi386(ObjectCode *oc)
     indirects = NULL;
 }
 
+static AccessType_t
+getMemProtectionForKind (SectionKind kind)
+{
+    switch (kind) {
+        case SECTIONKIND_CODE_OR_RODATA:
+        case SECTIONKIND_INIT_ARRAY:
+        case SECTIONKIND_FINIT_ARRAY:
+            return ReadAccess | ExecuteAccess;
+        case SECTIONKIND_RWDATA:
+            return ReadAccess | WriteAccess;
+        case SECTIONKIND_OTHER:
+        case SECTIONKIND_DEBUG:
+        case SECTIONKIND_IMPORT:
+        case SECTIONKIND_IMPORT_LIBRARY:
+        case SECTIONKIND_NOINFOAVAIL:
+            return ReadAccess;
+        default:
+            barf ("Unknown section kind in getMemProtectionForKind.");
+  }
+}
+
 static void releaseOcInfo(ObjectCode* oc) {
     if (!oc) return;
 
@@ -416,7 +437,7 @@ static void releaseOcInfo(ObjectCode* oc) {
         stgFree (oc->info->symbols);
         stgFree (oc->info);
 
-        winmem_free (ExecuteAccess, oc->info->image);
+        winmem_free (getMemProtectionForKind (oc->info->kind), oc->info->image);
         oc->info->image = NULL;
         oc->info = NULL;
     }
@@ -1545,7 +1566,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
         /* See Note [Memory allocation].  */
         /* See Note [Pooled Memory Manager].  */
         oc->info->image
-          = winmem_malloc (ExecuteAccess, oc->info->secBytesTotal);
+          = winmem_malloc (getMemProtectionForKind (kind), oc->info->secBytesTotal);
         if (!oc->info->image)
           barf ("Could not allocate any memory from pool.");
       }
@@ -2070,7 +2091,7 @@ addCopySection (ObjectCode *oc, Section *s, SectionKind kind,
   char* newStart = (char*)getAlignedMemory ((uint8_t*)pos, *s);
 
    /* Disable memory protection while we load code, we'll need WRITE access.  */
-  AccessType_t type = ExecuteAccess;
+  AccessType_t type = getMemProtectionForKind (kind);
   winmem_memory_unprotect (&type);
   memcpy (newStart, start, size);
   winmem_memory_protect (&type);
