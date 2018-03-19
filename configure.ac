@@ -669,6 +669,13 @@ dnl --------------------------------------------------------------
 dnl End of configure script option section
 dnl --------------------------------------------------------------
 
+dnl ** Copy the files from the "fs" utility into the right folders.
+dnl --------------------------------------------------------------
+cp --link --update -v utils/fs/fs.* utils/lndir/
+cp --link --update -v utils/fs/fs.* utils/unlit/
+cp --link --update -v utils/fs/fs.* rts/
+cp --link --update -v utils/fs/fs.h libraries/base/include/
+cp --link --update -v utils/fs/fs.c libraries/base/cbits/
 
 dnl --------------------------------------------------------------
 dnl ** Can the unix package be built?
