@@ -383,6 +383,13 @@ test('T13832', exit_code(1), compile_and_run, ['-threaded'])
 test('T13894', normal, compile_and_run, [''])
 test('T14497', normal, compile_and_run, ['-O'])
 test('T14695', normal, run_command, ['$MAKE -s --no-print-directory T14695'])
+test('T14702', [ ignore_stdout
+               , only_ways(['threaded1', 'threaded2'])
+               , extra_run_opts('+RTS -A32m -N8 -T -RTS')
+               ]
+               , compile_and_run, [''])
+
+test('T14900', normal, compile_and_run, ['-package ghc-compact'])
 
 test('T13617', [ unless(opsys('mingw32'), skip)
                ],

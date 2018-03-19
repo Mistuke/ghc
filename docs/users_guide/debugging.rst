@@ -212,11 +212,16 @@ subexpression elimination pass.
     Print a one-line summary of the size of the Core program at the end
     of the optimisation pipeline.
 
-.. ghc-flag:: -ddump-ds
-    :shortdesc: Dump desugarer output
+.. ghc-flag:: -ddump-ds -ddump-ds-preopt
+    :shortdesc: Dump desugarer output.
     :type: dynamic
 
-    Dump desugarer output
+    Dump desugarer output. `-ddump-ds` dumps the output after the very simple
+    optimiser has run (which discards a lot of clutter and
+    hence is a sensible default.  `-ddump-ds-preopt` shows
+    the output after desugaring but before the very simple
+    optimiser.
+
 
 .. ghc-flag:: -ddump-simpl-iterations
     :shortdesc: Dump output from each simplifier iteration
@@ -607,7 +612,7 @@ are doing, not all of it will be useful. Use these flags to suppress the
 parts that you are not interested in.
 
 .. ghc-flag:: -dsuppress-all
-    :shortdesc: In core dumps, suppress everything (except for uniques) that is
+    :shortdesc: In dumps, suppress everything (except for uniques) that is
         suppressible.
     :type: dynamic
 
@@ -657,6 +662,13 @@ parts that you are not interested in.
 
     Suppress the printing of module qualification prefixes. This is the
     ``Data.List`` in ``Data.List.length``.
+
+.. ghc-flag:: -dsuppress-timestamps
+    :shortdesc: Suppress timestamps in dumps
+    :type: dynamic
+
+    Suppress the printing of timestamps.
+    This makes it easier to diff dumps.
 
 .. ghc-flag:: -dsuppress-type-signatures
     :shortdesc: Suppress type signatures
@@ -710,7 +722,7 @@ Checking for consistency
     :shortdesc: STG pass sanity checking
     :type: dynamic
 
-    Ditto for STG level. (note: currently doesn't work).
+    Ditto for STG level.
 
 .. ghc-flag:: -dcmm-lint
     :shortdesc: C-\\- pass sanity checking

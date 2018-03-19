@@ -24,6 +24,7 @@ import Panic
 import Util
 
 import Control.Monad
+import Data.List
 
 
 -- Note [What is shortcutting]
@@ -177,7 +178,7 @@ blockConcat splitting_procs g@CmmGraph { g_entry = entry_id }
      -- a map of blocks. We process each element from blocks and update
      -- blockmap accordingly
      blocks = postorderDfs g
-     blockmap = foldr addBlock emptyBody blocks
+     blockmap = foldl' (flip addBlock) emptyBody blocks
 
      -- Accumulator contains three components:
      --  * map of blocks in a graph
@@ -427,10 +428,10 @@ removeUnreachableBlocksProc proc@(CmmProc info lbl live g)
              -- Remove any info_tbls for unreachable
 
      keep_used :: LabelMap CmmInfoTable -> LabelMap CmmInfoTable
-     keep_used bs = mapFoldWithKey keep mapEmpty bs
+     keep_used bs = mapFoldlWithKey keep mapEmpty bs
 
-     keep :: Label -> CmmInfoTable -> LabelMap CmmInfoTable -> LabelMap CmmInfoTable
-     keep l i env | l `setMember` used_lbls = mapInsert l i env
+     keep :: LabelMap CmmInfoTable -> Label -> CmmInfoTable -> LabelMap CmmInfoTable
+     keep env l i | l `setMember` used_lbls = mapInsert l i env
                   | otherwise               = env
 
      used_blocks :: [CmmBlock]

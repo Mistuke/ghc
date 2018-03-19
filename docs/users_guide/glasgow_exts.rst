@@ -284,21 +284,21 @@ for an unboxed sum type with N alternatives is ::
 
     (# t_1 | t_2 | ... | t_N #)
 
-where `t_1` ... `t_N` are types (which can be unlifted, including unboxed tuple
-and sums).
+where ``t_1`` ... ``t_N`` are types (which can be unlifted, including unboxed
+tuples and sums).
 
 Unboxed tuples can be used for multi-arity alternatives. For example: ::
 
     (# (# Int, String #) | Bool #)
 
-Term level syntax is similar. Leading and preceding bars (`|`) indicate which
-alternative it is. Here is two terms of the type shown above: ::
+The term level syntax is similar. Leading and preceding bars (`|`) indicate which
+alternative it is. Here are two terms of the type shown above: ::
 
     (# (# 1, "foo" #) | #) -- first alternative
 
     (# | True #) -- second alternative
 
-Pattern syntax reflects the term syntax: ::
+The pattern syntax reflects the term syntax: ::
 
     case x of
       (# (# i, str #) | #) -> ...
@@ -307,45 +307,56 @@ Pattern syntax reflects the term syntax: ::
 Unboxed sums are "unboxed" in the sense that, instead of allocating sums in the
 heap and representing values as pointers, unboxed sums are represented as their
 components, just like unboxed tuples. These "components" depend on alternatives
-of a sum type. Code generator tries to generate as compact layout as possible.
-In the best case, size of an unboxed sum is size of its biggest alternative +
-one word (for tag). The algorithm for generating memory layout for a sum type
-works like this:
+of a sum type. Like unboxed tuples, unboxed sums are lazy in their lifted
+components.
+
+The code generator tries to generate as compact layout as possible for each
+unboxed sum. In the best case, size of an unboxed sum is size of its biggest
+alternative plus one word (for a tag). The algorithm for generating the memory
+layout for a sum type works like this:
 
 - All types are classified as one of these classes: 32bit word, 64bit word,
   32bit float, 64bit float, pointer.
 
 - For each alternative of the sum type, a layout that consists of these fields
-  is generated. For example, if an alternative has `Int`, `Float#` and `String`
-  fields, the layout will have an 32bit word, 32bit float and pointer fields.
+  is generated. For example, if an alternative has ``Int``, ``Float#`` and
+  ``String`` fields, the layout will have an 32bit word, 32bit float and
+  pointer fields.
 
 - Layout fields are then overlapped so that the final layout will be as compact
-  as possible. E.g. say two alternatives have these fields: ::
+  as possible. For example, suppose we have the unboxed sum: ::
 
-    Word32, String, Float#
-    Float#, Float#, Maybe Int
+    (# (# Word32#, String, Float# #)
+    |  (# Float#, Float#, Maybe Int #) #)
 
-  Final layout will be something like ::
+  The final layout will be something like ::
 
     Int32, Float32, Float32, Word32, Pointer
 
-  First `Int32` is for the tag. It has two `Float32` fields because floating
-  point types can't overlap with other types, because of limitations of the code
-  generator that we're hoping to overcome in the future, and second alternative
-  needs two `Float32` fields. `Word32` field is for the `Word32` in the first
-  alternative. `Pointer` field is shared between `String` and `Maybe Int` values
-  of the alternatives.
+  The first ``Int32`` is for the tag. There are two ``Float32`` fields because
+  floating point types can't overlap with other types, because of limitations of
+  the code generator that we're hoping to overcome in the future. The second
+  alternative needs two ``Float32`` fields: The ``Word32`` field is for the
+  ``Word32#`` in the first alternative. The ``Pointer`` field is shared between
+  ``String`` and ``Maybe Int`` values of the alternatives.
 
-  In the case of enumeration types (like `Bool`), the unboxed sum layout only
-  has an `Int32` field (i.e. the whole thing is represented by an integer).
-
-In the example above, a value of this type is thus represented as 5 values. As
-an another example, this is the layout for unboxed version of `Maybe a` type: ::
+  As another example, this is the layout for the unboxed version of ``Maybe a``
+  type, ``(# (# #) | a #)``: ::
 
     Int32, Pointer
 
-The `Pointer` field is not used when tag says that it's `Nothing`. Otherwise
-`Pointer` points to the value in `Just`.
+  The ``Pointer`` field is not used when tag says that it's ``Nothing``.
+  Otherwise ``Pointer`` points to the value in ``Just``. As mentioned
+  above, this type is lazy in its lifted field. Therefore, the type ::
+
+    data Maybe' a = Maybe' (# (# #) | a #)
+
+  is *precisely* isomorphic to the type ``Maybe a``, although its memory
+  representation is different.
+
+  In the degenerate case where all the alternatives have zero width, such
+  as the ``Bool``-like ``(# (# #) | (# #) #)``, the unboxed sum layout only
+  has an ``Int32`` tag field (i.e., the whole thing is represented by an integer).
 
 .. _syntax-extns:
 
@@ -2097,6 +2108,104 @@ In addition, with :extension:`PatternSynonyms` you can prefix the name of a
 data constructor in an import or export list with the keyword
 ``pattern``, to allow the import or export of a data constructor without
 its parent type constructor (see :ref:`patsyn-impexp`).
+
+.. _block-arguments:
+
+More liberal syntax for function arguments
+------------------------------------------
+
+.. extension:: BlockArguments
+    :shortdesc: Allow ``do`` blocks and other constructs as function arguments.
+
+    :since: 8.6.1
+
+    Allow ``do`` expressions, lambda expressions, etc. to be directly used as
+    a function argument.
+
+In Haskell 2010, certain kinds of expressions can be used without parentheses
+as an argument to an operator, but not as an argument to a function.
+They include ``do``, lambda, ``if``, ``case``, and ``let``
+expressions. Some GHC extensions also define language constructs of this type:
+``mdo`` (:ref:`recursive-do-notation`), ``\case`` (:ref:`lambda-case`), and
+``proc`` (:ref:`arrow-notation`).
+
+The :extension:`BlockArguments` extension allows these constructs to be directly
+used as a function argument. For example::
+
+    when (x > 0) do
+      print x
+      exitFailure
+
+will be parsed as::
+
+    when (x > 0) (do
+      print x
+      exitFailure)
+
+and
+
+::
+
+    withForeignPtr fptr \ptr -> c_memcpy buf ptr size
+
+will be parsed as::
+
+    withForeignPtr fptr (\ptr -> c_memcpy buf ptr size)
+
+Changes to the grammar
+~~~~~~~~~~~~~~~~~~~~~~
+
+The Haskell report `defines
+<https://www.haskell.org/onlinereport/haskell2010/haskellch3.html#x8-220003>`_
+the ``lexp`` nonterminal thus (``*`` indicates a rule of interest)::
+
+    lexp  →  \ apat1 … apatn -> exp            (lambda abstraction, n ≥ 1)  *
+          |  let decls in exp                  (let expression)             *
+          |  if exp [;] then exp [;] else exp  (conditional)                *
+          |  case exp of { alts }              (case expression)            *
+          |  do { stmts }                      (do expression)              *
+          |  fexp
+
+    fexp  →  [fexp] aexp                       (function application)
+
+    aexp  →  qvar                              (variable)
+          |  gcon                              (general constructor)
+          |  literal
+          |  ( exp )                           (parenthesized expression)
+          |  qcon { fbind1 … fbindn }          (labeled construction)
+          |  aexp { fbind1 … fbindn }          (labelled update)
+          |  …
+
+The :extension:`BlockArguments` extension moves these production rules under
+``aexp``::
+
+    lexp  →  fexp
+
+    fexp  →  [fexp] aexp                       (function application)
+
+    aexp  →  qvar                              (variable)
+          |  gcon                              (general constructor)
+          |  literal
+          |  ( exp )                           (parenthesized expression)
+          |  qcon { fbind1 … fbindn }          (labeled construction)
+          |  aexp { fbind1 … fbindn }          (labelled update)
+          |  \ apat1 … apatn -> exp            (lambda abstraction, n ≥ 1)  *
+          |  let decls in exp                  (let expression)             *
+          |  if exp [;] then exp [;] else exp  (conditional)                *
+          |  case exp of { alts }              (case expression)            *
+          |  do { stmts }                      (do expression)              *
+          |  …
+
+Now the ``lexp`` nonterminal is redundant and can be dropped from the grammar.
+
+Note that this change relies on an existing meta-rule to resolve ambiguities:
+
+    The grammar is ambiguous regarding the extent of lambda abstractions, let
+    expressions, and conditionals. The ambiguity is resolved by the meta-rule
+    that each of these constructs extends as far to the right as possible.
+
+For example, ``f \a -> a b`` will be parsed as ``f (\a -> a b)``, not as ``f
+(\a -> a) b``.
 
 .. _syntax-stolen:
 
@@ -4477,7 +4586,7 @@ Generalised derived instances for newtypes
                GeneralizedNewtypeDeriving
     :shortdesc: Enable newtype deriving.
 
-    :since: 6.8.1
+    :since: 6.8.1. British spelling since 8.6.1.
 
     Enable GHC's cunning generalised deriving mechanism for ``newtype``\s
 
@@ -5046,7 +5155,7 @@ Pattern synonyms
 
 Pattern synonyms are enabled by the language extension :extension:`PatternSynonyms`, which is
 required for defining them, but *not* for using them. More information and
-examples of view patterns can be found on the `Wiki page <PatternSynonyms>`.
+examples of pattern synonyms can be found on the :ghc-wiki:`Wiki page <PatternSynonyms>`.
 
 Pattern synonyms enable giving names to parametrized pattern schemes.
 They can also be thought of as abstract constructors that don't have a
@@ -10942,6 +11051,12 @@ for typed holes:
                 (imported from ‘Prelude’ at show_constraints.hs:1:8-11
                 (and originally defined in ‘GHC.Err’))
 
+.. _typed-hole-valid-substitutions:
+
+Valid Substitutions
+-------------------
+GHC sometimes suggests valid substitutions for typed holes, which is
+configurable by a few flags.
 
 .. ghc-flag:: -fno-show-valid-substitutions
     :shortdesc: Disables showing a list of valid substitutions for typed holes
@@ -11024,7 +11139,7 @@ for typed holes:
                 (and originally defined in ‘GHC.List’))
 
     where the substitutions are ordered by the order they were defined and
-    imported in, with all local bindings before global bindings. 
+    imported in, with all local bindings before global bindings.
 
 .. ghc-flag:: -fmax-valid-substitutions=⟨n⟩
     :shortdesc: *default: 6.* Set the maximum number of valid substitutions for
@@ -11037,9 +11152,115 @@ for typed holes:
 
     The list of valid substitutions is limited by displaying up to 6
     substitutions per hole. The number of substitutions shown can be set by this
-    flag. Turning the limit off with ``-fno-max-valid-substitutions`` displays
-    all the found substitutions. 
+    flag. Turning the limit off with :ghc-flag:`-fno-max-valid-substitutions`
+    displays all found substitutions.
 
+.. ghc-flag:: -funclutter-valid-substitutions
+    :shortdesc: Unclutter the list of valid substitutions by not showing
+        provenance of suggestion.
+    :type: dynamic
+    :category: verbosity
+
+    :default: off
+
+    This flag can be toggled to decrease the verbosity of the valid
+    substitution suggestions by not showing the provenance the suggestions.
+
+.. _typed-holes-refinement-substitutions:
+
+Refinement Substitutions
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+When the flag :ghc-flag:`-frefinement-level-substitutions=⟨n⟩` is set to an
+``n`` larger than ``0``, GHC will offer up a list of valid refinement
+substitutions, which are valid substitutions that need up to ``n`` levels of
+additional refinement to be complete, where each level represents an additional
+hole in the substitution that requires filling in.  As an example, consider the
+hole in ::
+
+  f :: [Integer] -> Integer
+  f = _
+
+When the refinement level is not set, it will only offer valid substitutions
+suggestions: ::
+
+  Valid substitutions include
+    f :: [Integer] -> Integer
+    product :: forall (t :: * -> *).
+              Foldable t => forall a. Num a => t a -> a
+    sum :: forall (t :: * -> *).
+          Foldable t => forall a. Num a => t a -> a
+    maximum :: forall (t :: * -> *).
+              Foldable t => forall a. Ord a => t a -> a
+    minimum :: forall (t :: * -> *).
+              Foldable t => forall a. Ord a => t a -> a
+    head :: forall a. [a] -> a
+    (Some substitutions suppressed; use -fmax-valid-substitutions=N or -fno-max-valid-substitutions)
+
+However, with :ghc-flag:`-frefinement-level-substitutions=⟨n⟩` set to e.g. `1`,
+it will additionally offer up a list of refinement substitutions, in this case: ::
+
+  Valid refinement substitutions include
+    foldl1 _ :: forall (t :: * -> *).
+                Foldable t => forall a. (a -> a -> a) -> t a -> a
+    foldr1 _ :: forall (t :: * -> *).
+                Foldable t => forall a. (a -> a -> a) -> t a -> a
+    head _ :: forall a. [a] -> a
+    last _ :: forall a. [a] -> a
+    error _ :: forall (a :: TYPE r).
+                GHC.Stack.Types.HasCallStack => [Char] -> a
+    errorWithoutStackTrace _ :: forall (a :: TYPE r). [Char] -> a
+    (Some refinement substitutions suppressed;
+      use -fmax-refinement-substitutions=N or -fno-max-refinement-substitutions)
+
+Which shows that the hole could be replaced with e.g. ``foldl1 _``. While not
+fixing the hole, this can help users understand what options they have.
+
+.. ghc-flag:: -frefinement-level-substitutions=⟨n⟩
+    :shortdesc: *default: off.* Sets the level of refinement of the
+         refinement substitutions, where level ``n`` means that substitutions
+         of up to ``n`` holes will be considered.
+    :type: dynamic
+    :reverse: -fno-refinement-level-substitutions
+    :category: verbosity
+
+    :default: off
+
+    The list of valid refinement substitutions is generated by considering
+    substitutions with a varying amount of additional holes. The amount of
+    holes in a refinement can be set by this flag. If the flag is set to 0
+    or not set at all, no valid refinement substitutions will be suggested.
+
+.. ghc-flag:: -fabstract-refinement-substitutions
+    :shortdesc: *default: off.* Toggles whether refinements where one or more
+         or more of the holes are abstract are reported.
+    :type: dynamic
+    :reverse: -fno-abstract-refinement-substitutions
+    :category: verbosity
+
+    :default: off
+
+    Valid list of valid refinement substitutions can often grow large when
+    the refinement level is ``>= 2``, with holes like ``head _ _`` or
+    ``fst _ _``, which are valid refinements, but which are unlikely to be
+    relevant since one or more of the holes are still completely open, in that
+    neither the type nor kind of those holes are constrained by the proposed
+    identifier at all. By default, such holes are not reported. By turning this
+    flag on, such holes are included in the list of valid refinement substitutions.
+
+.. ghc-flag:: -fmax-refinement-substitutions=⟨n⟩
+    :shortdesc: *default: 6.* Set the maximum number of refinement substitutions
+         for typed holes to display in type error messages.
+    :type: dynamic
+    :reverse: -fno-max-refinement-substitutions
+    :category: verbosity
+
+    :default: 6
+
+    The list of valid refinement substitutions is limited by displaying up to 6
+    substitutions per hole. The number of substitutions shown can be set by this
+    flag. Turning the limit off with :ghc-flag:`-fno-max-refinement-substitutions`
+    displays all found substitutions.
 
 .. _partial-type-signatures:
 
@@ -13557,9 +13778,8 @@ Conjunction binds stronger than disjunction.
 
 If no ``MINIMAL`` pragma is given in the class declaration, it is just as if
 a pragma ``{-# MINIMAL op1, op2, ..., opn #-}`` was given, where the
-``opi`` are the methods (a) that lack a default method in the class
-declaration, and (b) whose name that does not start with an underscore
-(c.f. :ghc-flag:`-Wmissing-methods`, :ref:`options-sanity`).
+``opi`` are the methods that lack a default method in the class
+declaration (c.f. :ghc-flag:`-Wmissing-methods`, :ref:`options-sanity`).
 
 This warning can be turned off with the flag
 :ghc-flag:`-Wno-missing-methods <-Wmissing-methods>`.

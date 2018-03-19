@@ -24,6 +24,7 @@ import PprCmm ()
 import qualified Data.IntSet as IntSet
 import Data.List (partition)
 import qualified Data.Set as Set
+import Data.List
 import Data.Maybe
 
 -- Compact sets for membership tests of local variables.
@@ -233,7 +234,7 @@ cmmSink dflags graph = ofBlockList (g_entry graph) $ sink mapEmpty $ blocks
 
             live_rhs = foldRegsUsed dflags extendRegSet emptyRegSet rhs
 
-      final_middle = foldl blockSnoc middle' dropped_last
+      final_middle = foldl' blockSnoc middle' dropped_last
 
       sunk' = mapUnion sunk $
                  mapFromList [ (l, filterAssignments dflags (getLive l) assigs'')
@@ -343,7 +344,7 @@ walk dflags nodes assigs = go nodes emptyBlock assigs
       (dropped, as') = dropAssignmentsSimple dflags
                           (\a -> conflicts dflags a node2) as1
 
-      block' = foldl blockSnoc block dropped `blockSnoc` node2
+      block' = foldl' blockSnoc block dropped `blockSnoc` node2
 
 
 --
@@ -462,8 +463,12 @@ tryToInline dflags live node assigs = go usages node emptyLRegSet assigs
                      CmmCondBranch (CmmMachOp (MO_Ne w) args)
                                    ti fi l
                            -> CmmCondBranch (cmmMachOpFold dflags (MO_Eq w) args)
-                                            fi ti l
+                                            fi ti (inv_likeliness l)
                      node' -> node'
+
+        inv_likeliness :: Maybe Bool -> Maybe Bool
+        inv_likeliness Nothing  = Nothing
+        inv_likeliness (Just l) = Just (not l)
 
         inl_exp :: CmmExpr -> CmmExpr
         -- inl_exp is where the inlining actually takes place!
@@ -741,7 +746,7 @@ loadAddr dflags e w =
   case e of
    CmmReg r       -> regAddr dflags r 0 w
    CmmRegOff r i  -> regAddr dflags r i w
-   _other | regUsedIn dflags (CmmGlobal Sp) e -> StackMem
+   _other | regUsedIn dflags spReg e -> StackMem
           | otherwise -> AnyMem
 
 regAddr :: DynFlags -> CmmReg -> Int -> Width -> AbsMem
