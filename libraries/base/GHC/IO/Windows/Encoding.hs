@@ -20,17 +20,18 @@ module GHC.IO.Windows.Encoding
   , decodeMultiByteIO
   , wideCharToMultiByte
   , multiByteToWideChar
+  , withGhcInternalToUTF16
   ) where
 
-import Data.Word (Word8)
+import Data.Word (Word8, Word16)
 import Foreign.C.Types        (CInt(..))
 import Foreign.C.String       (peekCAStringLen, peekCWStringLen,
                                withCWStringLen, withCAStringLen, )
-import Foreign.Ptr (nullPtr)
+import Foreign.Ptr (nullPtr, Ptr ())
 import Foreign.Marshal.Array  (allocaArray)
 import Foreign.Marshal.Unsafe (unsafeLocalState)
 import GHC.Windows
-import GHC.IO.Encoding.CodePage (CodePage)
+import GHC.IO.Encoding.CodePage (CodePage, getCurrentCodePage)
 import GHC.IO
 import GHC.Base
 import GHC.Real
@@ -148,3 +149,28 @@ decodeMultiByte cp = unsafeLocalState . decodeMultiByteIO cp
 decodeMultiByteIO :: CodePage -> String -> IO String
 decodeMultiByteIO = stringToUnicode
 {-# INLINE decodeMultiByteIO #-}
+
+foreign import WINDOWS_CCONV unsafe "MultiByteToWideChar"
+  multiByteToWideChar'
+        :: CodePage
+        -> DWORD   -- dwFlags,
+        -> Ptr Word8  -- lpMultiByteStr
+        -> CInt    -- cbMultiByte
+        -> Ptr Word16  -- lpWideCharStr
+        -> CInt    -- cchWideChar
+        -> IO CInt
+
+-- TODO: GHC is internally UTF-32 which means we have re-encode for
+--       Windows which is annoying. Switch to UTF-16 on IoNative
+--       being default.
+withGhcInternalToUTF16 :: Ptr Word8 -> Int -> ((Ptr Word16, CInt) -> IO a)
+                       -> IO a
+withGhcInternalToUTF16 ptr len fn
+ = do cp <- getCurrentCodePage
+      wchars <- failIfZero "MultiByteToWideChar" $
+                  multiByteToWideChar' cp 0 ptr (fromIntegral len) nullPtr 0
+      -- wchars is the length of buffer required
+      allocaArray (fromIntegral wchars) $ \cwstr -> do
+        wchars' <- failIfZero "MultiByteToWideChar" $
+                    multiByteToWideChar' cp 0 ptr (fromIntegral len) cwstr wchars
+        fn (cwstr, wchars')

@@ -1,5 +1,5 @@
 /*
- * (c) The GHC Team 2017.
+ * (c) The GHC Team 2017-2018.
  *
  * I/O Utility functions for Windows.
  */

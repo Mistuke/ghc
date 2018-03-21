@@ -5,7 +5,8 @@
 module GHC.IO.Encoding.CodePage(
 #if defined(mingw32_HOST_OS)
                         codePageEncoding, mkCodePageEncoding,
-                        localeEncoding, mkLocaleEncoding, CodePage
+                        localeEncoding, mkLocaleEncoding, CodePage,
+                        getCurrentCodePage
 #endif
                             ) where
 

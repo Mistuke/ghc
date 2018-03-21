@@ -42,7 +42,7 @@ module GHC.IO.Windows.Handle
 #include <windows.h>
 ##include "windows_cconv.h"
 
-import Data.Word (Word8)
+import Data.Word (Word8, Word16)
 import Data.Functor ((<$>))
 import Data.Typeable
 
@@ -56,7 +56,7 @@ import GHC.IO.BufferedIO
 import qualified GHC.IO.Device
 import GHC.IO.Device (SeekMode(..), IODeviceType(..), IODevice())
 import GHC.IO.Unsafe
-import GHC.IO.Windows.Encoding (encodeMultiByteRawIO)
+import GHC.IO.Windows.Encoding (withGhcInternalToUTF16)
 import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
 import Foreign.Ptr
 import Foreign.C
@@ -267,7 +267,7 @@ foreign import WINDOWS_CCONV unsafe "windows.h ReadConsoleW"
                  -> IO BOOL
 
 foreign import WINDOWS_CCONV unsafe "windows.h WriteConsoleW"
-  c_write_console :: HANDLE -> Ptr Word8 -> DWORD -> Ptr DWORD -> Ptr ()
+  c_write_console :: HANDLE -> Ptr Word16 -> DWORD -> Ptr DWORD -> Ptr ()
                   -> IO BOOL
 
 -- -----------------------------------------------------------------------------
@@ -359,20 +359,22 @@ hwndWriteNonBlocking hwnd ptr bytes
 consoleWrite :: Io ConsoleHandle -> Ptr Word8 -> Int -> IO ()
 consoleWrite hwnd ptr bytes
   = alloca $ \res ->
-      do throwErrnoIf_ not "GHC.IO.Handle.consoleWrite" $ do
-            success <- c_write_console (toHANDLE hwnd) ptr (fromIntegral bytes)
-                                       res nullPtr
-            if not success
-               then return False
-               else do val <- fromIntegral <$> peek res
-                       return $ val==bytes
+      do throwErrnoIf_ not "GHC.IO.Handle.consoleWrite" $
+           withGhcInternalToUTF16 ptr bytes $ \(w_ptr, w_len) -> do
+              success <- c_write_console (toHANDLE hwnd) w_ptr
+                                         (fromIntegral w_len) res nullPtr
+              if not success
+                 then return False
+                 else do val <- fromIntegral <$> peek res
+                         return $ val==bytes
 
 consoleWriteNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Int -> IO Int
 consoleWriteNonBlocking hwnd ptr bytes
   = alloca $ \res ->
       do throwErrnoIf_ not "GHC.IO.Handle.consoleWriteNonBlocking" $
-            c_write_console (toHANDLE hwnd) ptr (fromIntegral bytes)
-                            res nullPtr
+           withGhcInternalToUTF16 ptr bytes $ \(w_ptr, w_len) -> do
+              c_write_console (toHANDLE hwnd) w_ptr (fromIntegral w_len)
+                              res nullPtr
          val <- fromIntegral <$> peek res
          return val
 
