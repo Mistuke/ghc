@@ -57,6 +57,7 @@ import qualified GHC.IO.Device
 import GHC.IO.Device (SeekMode(..), IODeviceType(..), IODevice())
 import GHC.IO.Unsafe
 import GHC.IO.Windows.Encoding (withGhcInternalToUTF16)
+import GHC.IO.Handle.Internals (debugIO)
 import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
 import Foreign.Ptr
 import Foreign.C
@@ -366,7 +367,7 @@ consoleWrite hwnd ptr bytes
               if not success
                  then return False
                  else do val <- fromIntegral <$> peek res
-                         return $ val==bytes
+                         return $ val==w_len
 
 consoleWriteNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Int -> IO Int
 consoleWriteNonBlocking hwnd ptr bytes
