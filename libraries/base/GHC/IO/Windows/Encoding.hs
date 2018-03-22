@@ -21,6 +21,7 @@ module GHC.IO.Windows.Encoding
   , wideCharToMultiByte
   , multiByteToWideChar
   , withGhcInternalToUTF16
+  , withUTF16ToGhcInternal
   ) where
 
 import Data.Word (Word8, Word16)
@@ -167,10 +168,48 @@ withGhcInternalToUTF16 :: Ptr Word8 -> Int -> ((Ptr Word16, CInt) -> IO a)
                        -> IO a
 withGhcInternalToUTF16 ptr len fn
  = do cp <- getCurrentCodePage
-      wchars <- failIfZero "MultiByteToWideChar" $
+      wchars <- failIfZero "withGhcInternalToUTF16" $
                   multiByteToWideChar' cp 0 ptr (fromIntegral len) nullPtr 0
       -- wchars is the length of buffer required
       allocaArray (fromIntegral wchars) $ \cwstr -> do
-        wchars' <- failIfZero "MultiByteToWideChar" $
+        wchars' <- failIfZero "withGhcInternalToUTF16" $
                     multiByteToWideChar' cp 0 ptr (fromIntegral len) cwstr wchars
         fn (cwstr, wchars')
+
+foreign import WINDOWS_CCONV "WideCharToMultiByte"
+  wideCharToMultiByte'
+        :: CodePage
+        -> DWORD   -- dwFlags,
+        -> Ptr Word16 -- lpWideCharStr
+        -> CInt    -- cchWideChar
+        -> Ptr Word8   -- lpMultiByteStr
+        -> CInt    -- cbMultiByte
+        -> LPCSTR  -- lpMultiByteStr
+        -> LPBOOL  -- lpbFlags
+        -> IO CInt
+
+-- TODO: GHC is internally UTF-32 which means we have re-encode for
+--       Windows which is annoying. Switch to UTF-16 on IoNative
+--       being default.
+withUTF16ToGhcInternal :: Ptr Word8 -> Int
+                       -> (CInt -> Ptr Word16 -> IO CInt) -> IO Int
+withUTF16ToGhcInternal ptr len fn
+ = do cp <- getCurrentCodePage
+      -- Annoyingly the IO system is very UTF-32 oriented and asks for bytes
+      -- as buffer reads.  Problem is we don't know how many bytes we'll end up
+      -- having as UTF-32 MultiByte encoded UTF-16. So be conservative.  We
+      -- that a single byte may expand to atmost 1 Word16.  So assume that each
+      -- byte does and divide the requested number of bytes by two since each
+      -- Word16 encoded wchar may expand to only two Word8 sequences.
+      let reqBytes = fromIntegral (len `div` 2)
+      allocaArray reqBytes $ \w_ptr -> do
+        w_len <- fn (fromIntegral reqBytes) w_ptr
+        mbchars' <- failIfZero "withUTF16ToGhcInternal" $
+                      wideCharToMultiByte' cp 0 w_ptr (fromIntegral w_len)
+                                           nullPtr 0 nullPtr nullPtr
+        assert (mbchars' <= (fromIntegral len)) $ do
+          -- mbchar' is the length of buffer required
+          mbchars <- failIfZero "withUTF16ToGhcInternal" $
+                       wideCharToMultiByte' cp 0 w_ptr (fromIntegral w_len) ptr
+                                            mbchars' nullPtr nullPtr
+          return $ fromIntegral mbchars

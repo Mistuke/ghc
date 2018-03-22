@@ -56,7 +56,7 @@ import GHC.IO.BufferedIO
 import qualified GHC.IO.Device
 import GHC.IO.Device (SeekMode(..), IODeviceType(..), IODevice())
 import GHC.IO.Unsafe
-import GHC.IO.Windows.Encoding (withGhcInternalToUTF16)
+import GHC.IO.Windows.Encoding (withGhcInternalToUTF16, withUTF16ToGhcInternal)
 import GHC.IO.Handle.Internals (debugIO)
 import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
 import Foreign.Ptr
@@ -264,7 +264,7 @@ foreign import ccall safe "__set_console_buffer_size"
   c_set_console_buffer_size :: HANDLE -> CLong -> IO BOOL
 
 foreign import WINDOWS_CCONV unsafe "windows.h ReadConsoleW"
-  c_read_console :: HANDLE -> Ptr Word8 -> DWORD -> Ptr DWORD -> Ptr ()
+  c_read_console :: HANDLE -> Ptr Word16 -> DWORD -> Ptr DWORD -> Ptr ()
                  -> IO BOOL
 
 foreign import WINDOWS_CCONV unsafe "windows.h WriteConsoleW"
@@ -373,7 +373,7 @@ consoleWriteNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Int -> IO Int
 consoleWriteNonBlocking hwnd ptr bytes
   = alloca $ \res ->
       do throwErrnoIf_ not "GHC.IO.Handle.consoleWriteNonBlocking" $
-           withGhcInternalToUTF16 ptr bytes $ \(w_ptr, w_len) -> do
+            withGhcInternalToUTF16 ptr bytes $ \(w_ptr, w_len) -> do
               c_write_console (toHANDLE hwnd) w_ptr (fromIntegral w_len)
                               res nullPtr
          val <- fromIntegral <$> peek res
@@ -381,11 +381,12 @@ consoleWriteNonBlocking hwnd ptr bytes
 
 consoleRead :: Io ConsoleHandle -> Ptr Word8 -> Int -> IO Int
 consoleRead hwnd ptr bytes
-  = alloca $ \res ->
-      do throwErrnoIf_ not "GHC.IO.Handle.consoleRead" $
-            c_read_console (toHANDLE hwnd) ptr (fromIntegral bytes)
-                           res nullPtr
-         fromIntegral <$> peek res
+  = withUTF16ToGhcInternal ptr bytes $ \reqBytes w_ptr ->
+      alloca $ \res ->
+        do throwErrnoIf_ not "GHC.IO.Handle.consoleRead" $
+             c_read_console (toHANDLE hwnd) w_ptr (fromIntegral reqBytes) res
+                            nullPtr
+           fromIntegral <$> peek res
 
 consoleReadNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Int -> IO (Maybe Int)
 consoleReadNonBlocking hwnd ptr bytes = Just <$> consoleRead hwnd ptr bytes
