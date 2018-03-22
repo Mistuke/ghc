@@ -19,6 +19,7 @@ struct SectionFormatInfo {
     uint32_t props;
     uint64_t virtualSize;
     uint64_t virtualAddr;
+    SectionKind kind;
  };
 struct ObjectCodeFormatInfo {
     size_t secBytesTotal;

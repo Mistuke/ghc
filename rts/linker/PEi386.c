@@ -437,7 +437,7 @@ static void releaseOcInfo(ObjectCode* oc) {
         stgFree (oc->info->symbols);
         stgFree (oc->info);
 
-        winmem_free (getMemProtectionForKind (oc->info->kind), oc->info->image);
+        winmem_free (ReadAccess | WriteAccess, oc->info->image);
         oc->info->image = NULL;
         oc->info = NULL;
     }
@@ -446,6 +446,9 @@ static void releaseOcInfo(ObjectCode* oc) {
         Section *section = &oc->sections[i];
         if (oc->sections[i].alloc == SECTION_MALLOC)
             winmem_free (WriteAccess, oc->sections[i].start);
+        else
+            winmem_free (getMemProtectionForKind (oc->sections[i]->info->kind),
+                                                  oc->sections[i].start);
         oc->sections[i].start = NULL;
         if (section->info) {
             stgFree (section->info->name);
@@ -1566,7 +1569,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
         /* See Note [Memory allocation].  */
         /* See Note [Pooled Memory Manager].  */
         oc->info->image
-          = winmem_malloc (getMemProtectionForKind (kind), oc->info->secBytesTotal);
+          = winmem_malloc (ReadAccess | WriteAccess, oc->info->secBytesTotal);
         if (!oc->info->image)
           barf ("Could not allocate any memory from pool.");
       }
@@ -1577,6 +1580,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
 
       start = section.start;
       end   = start + sz - 1;
+      oc->sections[i]->info->kind = kind;
 
       if (kind != SECTIONKIND_OTHER && end >= start) {
           /* See Note [Section alignment].  */
