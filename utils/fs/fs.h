@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <stdio.h>
+
 #if defined(_WIN32)
 #include <wchar.h>
 
