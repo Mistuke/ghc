@@ -348,7 +348,6 @@ Library
     include-dirs: include
     includes:
         HsBase.h
-        fs.h
     install-includes:
         HsBase.h
         WCsubst.h

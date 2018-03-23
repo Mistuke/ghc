@@ -23,7 +23,6 @@
 #define _REENTRANT 1
 
 #include "HsFFI.h"
-#include "fs.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -521,6 +520,10 @@ extern void* __hscore_get_saved_termios(int fd);
 extern void __hscore_set_saved_termios(int fd, void* ts);
 
 #if defined(_WIN32)
+/* Defined in fs.c.  */
+extern int __hs_swopen (const wchar_t* filename, int oflag, int shflag,
+                        int pmode);
+
 INLINE int __hscore_open(wchar_t *file, int how, mode_t mode) {
   int result = -1;
 	if ((how & O_WRONLY) || (how & O_RDWR) || (how & O_APPEND))
