@@ -521,6 +521,7 @@ extern void __hscore_set_saved_termios(int fd, void* ts);
 
 #if defined(_WIN32)
 /* Defined in fs.c.  */
+__attribute__ ((weak))
 extern int __hs_swopen (const wchar_t* filename, int oflag, int shflag,
                         int pmode);
 
