@@ -20,7 +20,7 @@
 module GHC.IO.SmartHandles
   ( -- std handles
     stdin, stdout, stderr,
-    openFile, openBinaryFile
+    openFile, openBinaryFile, openFileBlocking
   ) where
 
 import GHC.IO
@@ -33,41 +33,36 @@ import qualified GHC.IO.Handle.FD as POSIX
 import qualified GHC.IO.Handle.Windows as Win
 #endif
 
-stdin :: Handle
-stdin =  withIoSubSystem' sub
+infixl 7 <!>
+
+conditional :: a -> a -> a
+conditional posix windows = withIoSubSystem' sub
   where
     sub = \s -> case s of
-                  IoPOSIX -> POSIX.stdin
+                  IoPOSIX -> posix
 #if defined(mingw32_HOST_OS)
-                  IoNative -> Win.stdin
+                  IoNative -> windows
 #else
-                  IoNative -> POSIX.stdin
+                  IoNative -> posix
 #endif
+
+(<!>) :: a -> a -> a
+(<!>) = conditional
+
+stdin :: Handle
+stdin = POSIX.stdin <!> Win.stdin
 
 stdout :: Handle
-stdout =  withIoSubSystem' sub
-  where
-    sub = \s -> case s of
-                  IoPOSIX -> POSIX.stdout
-#if defined(mingw32_HOST_OS)
-                  IoNative -> Win.stdout
-#else
-                  IoNative -> POSIX.stdout
-#endif
+stdout = POSIX.stdout <!> Win.stdout
 
 stderr :: Handle
-stderr =  withIoSubSystem' sub
-  where
-    sub = \s -> case s of
-                  IoPOSIX -> POSIX.stderr
-#if defined(mingw32_HOST_OS)
-                  IoNative -> Win.stderr
-#else
-                  IoNative -> POSIX.stderr
-#endif
+stderr = POSIX.stderr <!> Win.stderr
 
 openFile :: FilePath -> IOMode -> IO Handle
-openFile = POSIX.openFile
+openFile = POSIX.openFile <!> Win.openFile
 
 openBinaryFile :: FilePath -> IOMode -> IO Handle
-openBinaryFile = POSIX.openBinaryFile
+openBinaryFile = POSIX.openBinaryFile <!> Win.openBinaryFile
+
+openFileBlocking :: FilePath -> IOMode -> IO Handle
+openFileBlocking = POSIX.openFileBlocking <!> Win.openFileBlocking

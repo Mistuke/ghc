@@ -36,12 +36,16 @@ module GHC.IO.Windows.Handle
    -- * Standard Handles
    stdin,
    stdout,
-   stderr
+   stderr,
+
+   -- * File utilities
+   openFile
  ) where
 
 #include <windows.h>
 ##include "windows_cconv.h"
 
+import Data.Bits ((.|.))
 import Data.Word (Word8, Word16)
 import Data.Functor ((<$>))
 import Data.Typeable
@@ -51,21 +55,24 @@ import GHC.Enum
 import GHC.Num
 import GHC.Real
 
+import GHC.IO
 import GHC.IO.Buffer
 import GHC.IO.BufferedIO
 import qualified GHC.IO.Device
-import GHC.IO.Device (SeekMode(..), IODeviceType(..), IODevice())
+import GHC.IO.Device (SeekMode(..), IODeviceType(..), IODevice(), devType)
 import GHC.IO.Unsafe
+import GHC.IO.IOMode
 import GHC.IO.Windows.Encoding (withGhcInternalToUTF16, withUTF16ToGhcInternal)
 import GHC.IO.Handle.Internals (debugIO)
 import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
 import Foreign.Ptr
 import Foreign.C
+import Foreign.C.String
 import Foreign.Marshal.Alloc (alloca)
 import Foreign.Storable (peek)
 import qualified GHC.Event.Windows as Mgr
 
-import GHC.Windows (LPVOID, LPDWORD, DWORD, HANDLE, BOOL,
+import GHC.Windows (LPVOID, LPDWORD, DWORD, HANDLE, BOOL, LPCTSTR,
                     failIf, iNVALID_HANDLE_VALUE, failIf_)
 import qualified GHC.Windows as Win32
 import Text.Show
@@ -204,6 +211,12 @@ stderr = unsafePerformIO $ ConsoleHandle <$> getStdHandle sTD_ERROR_HANDLE
 -- -----------------------------------------------------------------------------
 -- Foreign imports
 
+
+foreign import WINDOWS_CCONV unsafe "windows.h CreateFileW"
+    c_CreateFile :: LPCTSTR -> DWORD -> DWORD -> LPSECURITY_ATTRIBUTES
+                 -> DWORD -> DWORD -> HANDLE
+                 -> IO HANDLE
+
 foreign import WINDOWS_CCONV unsafe "windows.h ReadFile"
     c_ReadFile :: HANDLE -> LPVOID -> DWORD -> LPDWORD -> LPOVERLAPPED
                -> IO BOOL
@@ -270,6 +283,8 @@ foreign import WINDOWS_CCONV unsafe "windows.h ReadConsoleW"
 foreign import WINDOWS_CCONV unsafe "windows.h WriteConsoleW"
   c_write_console :: HANDLE -> Ptr Word16 -> DWORD -> Ptr DWORD -> Ptr ()
                   -> IO BOOL
+
+type LPSECURITY_ATTRIBUTES = LPVOID
 
 -- -----------------------------------------------------------------------------
 -- Reading and Writing
@@ -472,9 +487,9 @@ handle_console_seek hwnd mode off =
  where
     seektype :: DWORD
     seektype = case mode of
-                   AbsoluteSeek -> #{const FILE_BEGIN}
-                   RelativeSeek -> #{const FILE_CURRENT}
-                   SeekFromEnd  -> #{const FILE_END}
+                 AbsoluteSeek -> #{const FILE_BEGIN}
+                 RelativeSeek -> #{const FILE_CURRENT}
+                 SeekFromEnd  -> #{const FILE_END}
 
 handle_console_tell :: RawHandle a => a -> IO Integer
 handle_console_tell hwnd =
@@ -492,3 +507,30 @@ handle_get_console_size hwnd =
    fromIntegral `fmap`
       (throwErrnoIfMinus1Retry "GHC.IO.Handle.handle_get_console_size" $
           c_get_console_buffer_size (toHANDLE hwnd))
+
+-- -----------------------------------------------------------------------------
+-- opening files
+
+-- | Open a file and make an 'FD' for it.  Truncates the file to zero
+-- size when the `IOMode` is `WriteMode`.
+openFile
+  :: FilePath -- ^ file to open
+  -> IOMode   -- ^ mode in which to open the file
+  -> Bool     -- ^ open the file in non-blocking mode?
+  -> IO (Io NativeHandle, IODeviceType)
+openFile filepath iomode non_blocking =
+   do h <- createFile
+      Mgr.associateHandle' h
+      let hwnd = fromHANDLE h
+      _type <- devType hwnd
+      return (hwnd, _type)
+        where
+          createFile =
+            withCWString filepath $ \fp ->
+                failIf (== iNVALID_HANDLE_VALUE) "CreateFile failed" $
+                      c_CreateFile fp #{const GENERIC_READ}
+                                      #{const FILE_SHARE_READ}
+                                      nullPtr
+                                      #{const OPEN_EXISTING}
+                                      (#{const FILE_FLAG_OVERLAPPED} .|. #{const FILE_FLAG_SEQUENTIAL_SCAN })
+                                      nullPtr

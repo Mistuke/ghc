@@ -204,12 +204,16 @@ withUTF16ToGhcInternal ptr len fn
       let reqBytes = fromIntegral (len `div` 2)
       allocaArray reqBytes $ \w_ptr -> do
         w_len <- fn (fromIntegral reqBytes) w_ptr
-        mbchars' <- failIfZero "withUTF16ToGhcInternal" $
-                      wideCharToMultiByte' cp 0 w_ptr (fromIntegral w_len)
-                                           nullPtr 0 nullPtr nullPtr
-        assert (mbchars' <= (fromIntegral len)) $ do
-          -- mbchar' is the length of buffer required
-          mbchars <- failIfZero "withUTF16ToGhcInternal" $
-                       wideCharToMultiByte' cp 0 w_ptr (fromIntegral w_len) ptr
-                                            mbchars' nullPtr nullPtr
-          return $ fromIntegral mbchars
+        if w_len == 0
+           then return 0 else do
+                mbchars' <- failIfZero "withUTF16ToGhcInternal" $
+                              wideCharToMultiByte' cp 0 w_ptr
+                                                  (fromIntegral w_len) nullPtr
+                                                  0 nullPtr nullPtr
+                assert (mbchars' <= (fromIntegral len)) $ do
+                  -- mbchar' is the length of buffer required
+                  mbchars <- failIfZero "withUTF16ToGhcInternal" $
+                                wideCharToMultiByte' cp 0 w_ptr
+                                                    (fromIntegral w_len) ptr
+                                                    mbchars' nullPtr nullPtr
+                  return $ fromIntegral mbchars

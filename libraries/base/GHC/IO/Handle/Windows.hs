@@ -16,7 +16,8 @@
 -----------------------------------------------------------------------------
 
 module GHC.IO.Handle.Windows (
-  stdin, stdout, stderr
+  stdin, stdout, stderr,
+  openFile, openBinaryFile, openFileBlocking
  ) where
 
 import Data.Maybe
@@ -154,7 +155,7 @@ openFileBlocking :: FilePath -> IOMode -> IO Handle
 openFileBlocking fp im =
   catchException
     (openFile' fp im dEFAULT_OPEN_IN_BINARY_MODE False)
-    (\e -> ioError (addFilePathToIOError "openFile" fp e))
+    (\e -> ioError (addFilePathToIOError "openFileBlocking" fp e))
 
 -- | Like 'openFile', but open the file in binary mode.
 -- On Windows, reading a file in text mode (which is the default)
@@ -172,25 +173,17 @@ openBinaryFile fp m =
     (\e -> ioError (addFilePathToIOError "openBinaryFile" fp e))
 
 openFile' :: String -> IOMode -> Bool -> Bool -> IO Handle
-openFile' = undefined
-{-}
 openFile' filepath iomode binary non_blocking = do
-  -- first open the file to get an FD
-  (fd, fd_type) <- FD.openFile filepath iomode non_blocking
+  -- first open the file to get a Win32 handle
+  (hwnd, hwnd_type) <- Win.openFile filepath iomode non_blocking
 
   mb_codec <- if binary then return Nothing else fmap Just getLocaleEncoding
 
   -- then use it to make a Handle
-  mkHandleFromFD fd fd_type filepath iomode
-                   False {- do not *set* non-blocking mode -}
-                   mb_codec
-            `onException` IODevice.close fd
-        -- NB. don't forget to close the FD if mkHandleFromFD fails, otherwise
-        -- this FD leaks.
-        -- ASSERT: if we just created the file, then fdToHandle' won't fail
-        -- (so we don't need to worry about removing the newly created file
-        --  in the event of an error).
--}
+  mkHandleFromHANDLE hwnd hwnd_type filepath iomode mb_codec
+            `onException` IODevice.close hwnd
+        -- NB. don't forget to close the Handle if mkHandleFromHANDLE fails,
+        -- otherwise this Handle leaks.
 
 -- ---------------------------------------------------------------------------
 -- Converting file descriptors from/to Handles
