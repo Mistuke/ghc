@@ -11,12 +11,6 @@
 #include "fs.h"
 #include <stdio.h>
 
-/* We'll export these as weak symbols to avoid the issue with the mutual
-   dependency of base and rts and doing whole-archive linking. Ideally you'd
-   just want a hidden symbol visibility, but that's not available on non-ELF
-   targets.  */
-#define WEAK_SYM __attribute__ ((weak))
-
 #if defined(_WIN32)
 
 #include <stdbool.h>
@@ -108,8 +102,7 @@ cleanup:
 
 #define HAS_FLAG(a,b) ((a & b) == b)
 
-WEAK_SYM int __hs_swopen (const wchar_t* filename, int oflag, int shflag,
-                          int pmode)
+int __hs_swopen (const wchar_t* filename, int oflag, int shflag, int pmode)
 {
   /* Construct access mode.  */
   DWORD dwDesiredAccess = 0;
@@ -204,7 +197,7 @@ WEAK_SYM int __hs_swopen (const wchar_t* filename, int oflag, int shflag,
   return fd;
 }
 
-WEAK_SYM FILE *__hs_fwopen (const wchar_t* filename, const wchar_t* mode)
+FILE *__hs_fwopen (const wchar_t* filename, const wchar_t* mode)
 {
   int shflag = 0;
   int pmode  = 0;
@@ -275,7 +268,7 @@ WEAK_SYM FILE *__hs_fwopen (const wchar_t* filename, const wchar_t* mode)
   return file;
 }
 
-WEAK_SYM FILE *__hs_fopen (const char* filename, const char* mode)
+FILE *__hs_fopen (const char* filename, const char* mode)
 {
   size_t len = mbstowcs (NULL, filename, 0);
   wchar_t *w_filename = malloc (sizeof (wchar_t) * (len + 1));
@@ -293,10 +286,8 @@ WEAK_SYM FILE *__hs_fopen (const char* filename, const char* mode)
   return result;
 }
 #else
-WEAK_SYM FILE *__hs_fopen (const char* filename, const char* mode)
+FILE *__hs_fopen (const char* filename, const char* mode)
 {
   return fopen (filename, mode);
 }
 #endif
-
-#undef WEAK_SYM
