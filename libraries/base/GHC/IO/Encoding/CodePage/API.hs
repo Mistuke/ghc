@@ -31,7 +31,7 @@ import System.Posix.Internals
 
 
 c_DEBUG_DUMP :: Bool
-c_DEBUG_DUMP = True
+c_DEBUG_DUMP = False
 
 debugIO :: String -> IO ()
 debugIO s
