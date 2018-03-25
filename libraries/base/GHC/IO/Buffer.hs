@@ -31,6 +31,8 @@ module GHC.IO.Buffer (
     bufferAdd,
     slideContents,
     bufferAdjustL,
+    bufferAddOffset,
+    bufferAdjustOffset,
 
     -- ** Inspecting
     isEmptyBuffer,
@@ -39,6 +41,7 @@ module GHC.IO.Buffer (
     isWriteBuffer,
     bufferElems,
     bufferAvailable,
+    bufferOffset,
     summaryBuffer,
 
     -- ** Operating on the raw buffer as a Ptr
@@ -60,6 +63,8 @@ module GHC.IO.Buffer (
     writeCharBufPtr,
     charSize,
  ) where
+
+import Data.Word (Word64)
 
 import GHC.Base
 -- import GHC.IO
@@ -177,13 +182,21 @@ charSize = 4
 -- a memory-mapped file and in which case 'bufL' will point to the
 -- next location to be written, which is not necessarily the beginning
 -- of the file.
+--
+-- On Posix systems the I/O manager has an implicit reliance on doing a file
+-- read moving the file pointer.  However on Windows async operations this
+-- assumption is quite false.  OVERLAPPED operations don't respect the global
+-- file offset as their intention is to support arbitrary async reads to
+-- anywhere.  As such we should explicitly keep track of the intended read
+-- target in the buffer.  Any operation to seek should also update this entry.
 data Buffer e
   = Buffer {
-        bufRaw   :: !(RawBuffer e),
-        bufState :: BufferState,
-        bufSize  :: !Int,          -- in elements, not bytes
-        bufL     :: !Int,          -- offset of first item in the buffer
-        bufR     :: !Int           -- offset of last item + 1
+        bufRaw    :: !(RawBuffer e),
+        bufState  :: BufferState,
+        bufSize   :: !Int,          -- in elements, not bytes
+        bufOffset :: !Word64,       -- start location for next read
+        bufL      :: !Int,          -- offset of first item in the buffer
+        bufR      :: !Int           -- offset of last item + 1
   }
 
 #if defined(CHARBUF_UTF16)
@@ -237,9 +250,19 @@ bufferAdjustL l buf@Buffer{ bufR=w }
 bufferAdd :: Int -> Buffer e -> Buffer e
 bufferAdd i buf@Buffer{ bufR=w } = buf{ bufR=w+i }
 
+bufferOffset :: Buffer e -> Word64
+bufferOffset Buffer{ bufOffset=off } = off
+
+bufferAdjustOffset :: Word64 -> Buffer e -> Buffer e
+bufferAdjustOffset offs buf = buf{ bufOffset=offs }
+
+bufferAddOffset :: Int -> Buffer e -> Buffer e
+bufferAddOffset offs buf@Buffer{ bufOffset=w } =
+  buf{ bufOffset=w+(fromIntegral offs) }
+
 emptyBuffer :: RawBuffer e -> Int -> BufferState -> Buffer e
 emptyBuffer raw sz state =
-  Buffer{ bufRaw=raw, bufState=state, bufR=0, bufL=0, bufSize=sz }
+  Buffer{ bufRaw=raw, bufState=state, bufOffset=0, bufR=0, bufL=0, bufSize=sz }
 
 newByteBuffer :: Int -> BufferState -> IO (Buffer Word8)
 newByteBuffer c st = newBuffer c c st
@@ -266,7 +289,9 @@ foreign import ccall unsafe "memmove"
 
 summaryBuffer :: Buffer a -> String
 summaryBuffer !buf  -- Strict => slightly better code
-   = "buf" ++ show (bufSize buf) ++ "(" ++ show (bufL buf) ++ "-" ++ show (bufR buf) ++ ")"
+   = "buf" ++ show (bufSize buf)
+   ++ "(" ++ show (bufL buf) ++ "-" ++ show (bufR buf) ++ ")"
+   ++ " (>=" ++ show (bufOffset buf) ++ ")"
 
 -- INVARIANTS on Buffers:
 --   * r <= w

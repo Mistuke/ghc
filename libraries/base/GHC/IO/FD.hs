@@ -29,6 +29,8 @@ module GHC.IO.FD (
         stdin, stdout, stderr
     ) where
 
+import Data.Word (Word64)
+
 import GHC.Base
 import GHC.Num
 import GHC.Real
@@ -427,13 +429,13 @@ setRaw fd raw = System.Posix.Internals.setCooked (fdFD fd) (not raw)
 -- -----------------------------------------------------------------------------
 -- Reading and Writing
 
-fdRead :: FD -> Ptr Word8 -> Int -> IO Int
-fdRead fd ptr bytes
+fdRead :: FD -> Ptr Word8 -> Word64 -> Int -> IO Int
+fdRead fd ptr _offset bytes
   = do { r <- readRawBufferPtr "GHC.IO.FD.fdRead" fd ptr 0 (fromIntegral bytes)
        ; return (fromIntegral r) }
 
-fdReadNonBlocking :: FD -> Ptr Word8 -> Int -> IO (Maybe Int)
-fdReadNonBlocking fd ptr bytes = do
+fdReadNonBlocking :: FD -> Ptr Word8 -> Word64 -> Int -> IO (Maybe Int)
+fdReadNonBlocking fd ptr _offset bytes = do
   r <- readRawBufferPtrNoBlock "GHC.IO.FD.fdReadNonBlocking" fd ptr
            0 (fromIntegral bytes)
   case fromIntegral r of

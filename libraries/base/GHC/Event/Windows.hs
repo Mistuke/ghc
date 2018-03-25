@@ -40,6 +40,7 @@ import GHC.Event.Windows.FFI     (OVERLAPPED, LPOVERLAPPED, OVERLAPPED_ENTRY(..)
 import qualified GHC.Event.Windows.FFI    as FFI
 import qualified GHC.Event.PSQ            as Q
 import qualified GHC.Event.IntTable       as IT
+import GHC.IO.Handle.Internals (debugIO)
 
 import {-# SOURCE #-} Control.Concurrent
 import Control.Concurrent.MVar
@@ -60,6 +61,7 @@ import GHC.Num
 import GHC.Real
 import GHC.Windows
 import System.IO.Unsafe     (unsafePerformIO)
+import Text.Show
 
 import qualified GHC.Windows as Win32
 

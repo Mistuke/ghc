@@ -35,18 +35,18 @@ import {-# SOURCE #-} GHC.IO.Exception ( unsupportedOperation )
 
 -- | A low-level I/O provider where the data is bytes in memory.
 class RawIO a where
-  -- | Read up to the specified number of bytes, returning the number
-  -- of bytes actually read.  This function should only block if there
-  -- is no data available.  If there is not enough data available,
-  -- then the function should just return the available data. A return
-  -- value of zero indicates that the end of the data stream (e.g. end
+  -- | Read up to the specified number of bytes starting from an optional
+  -- offset, returning the number of bytes actually read.  This function
+  -- should only block if there is no data available.  If there is not enough
+  -- data available, then the function should just return the available data.
+  -- A return value of zero indicates that the end of the data stream (e.g. end
   -- of file) has been reached.
-  read                :: a -> Ptr Word8 -> Int -> IO Int
+  read                :: a -> Ptr Word8 -> Word64 -> Int -> IO Int
 
-  -- | Read up to the specified number of bytes, returning the number
-  -- of bytes actually read, or 'Nothing' if the end of the stream has
-  -- been reached.
-  readNonBlocking     :: a -> Ptr Word8 -> Int -> IO (Maybe Int)
+  -- | Read up to the specified number of bytes starting from an optional
+  -- offset, returning the number of bytes actually read, or 'Nothing' if
+  -- the end of the stream has been reached.
+  readNonBlocking     :: a -> Ptr Word8 -> Word64 -> Int -> IO (Maybe Int)
 
   -- | Write the specified number of bytes.
   write               :: a -> Ptr Word8 -> Int -> IO ()

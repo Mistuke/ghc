@@ -632,7 +632,7 @@ commitBuffer hdl !raw !sz !count flush release =
       debugIO ("commitBuffer: sz=" ++ show sz ++ ", count=" ++ show count
             ++ ", flush=" ++ show flush ++ ", release=" ++ show release)
 
-      writeCharBuffer h_ Buffer{ bufRaw=raw, bufState=WriteBuffer,
+      writeCharBuffer h_ Buffer{ bufRaw=raw, bufState=WriteBuffer, bufOffset=0,
                                  bufL=0, bufR=count, bufSize=sz }
 
       when flush $ flushByteWriteBuffer h_
@@ -656,7 +656,7 @@ commitBuffer' raw sz@(I# _) count@(I# _) flush release h_@Handle__{..}
             ++ ", flush=" ++ show flush ++ ", release=" ++ show release)
 
       let this_buf = Buffer{ bufRaw=raw, bufState=WriteBuffer,
-                             bufL=0, bufR=count, bufSize=sz }
+                             bufL=0, bufR=count, bufSize=sz, bufOffset=0 }
 
       writeCharBuffer h_ this_buf
 
@@ -864,7 +864,7 @@ bufReadEmpty h_@Handle__{..}
   loop :: FD -> Int -> Int -> IO Int
   loop fd off bytes | bytes <= 0 = return (so_far + off)
   loop fd off bytes = do
-    r <- RawIO.read (fd::FD) (ptr `plusPtr` off) bytes
+    r <- RawIO.read (fd::FD) (ptr `plusPtr` off) (fromIntegral off) bytes
     if r == 0
         then return (so_far + off)
         else loop fd (off + r) (bytes - r)
@@ -899,7 +899,7 @@ hGetBufSome h ptr count
          buf@Buffer{ bufSize=sz } <- readIORef haByteBuffer
          if isEmptyBuffer buf
             then case count > sz of  -- large read? optimize it with a little special case:
-                    True | Just fd <- haFD h_ -> do RawIO.read fd (castPtr ptr) count
+                    True | Just fd <- haFD h_ -> do RawIO.read fd (castPtr ptr) 0 count
                     _ -> do (r,buf') <- Buffered.fillReadBuffer haDevice buf
                             if r == 0
                                then return 0
@@ -949,11 +949,12 @@ hGetBufNonBlocking h ptr count
 
 bufReadNBEmpty :: Handle__ -> Buffer Word8 -> Ptr Word8 -> Int -> Int -> IO Int
 bufReadNBEmpty   h_@Handle__{..}
-                 buf@Buffer{ bufRaw=raw, bufR=w, bufL=r, bufSize=sz }
+                 buf@Buffer{ bufRaw=raw, bufR=w, bufL=r, bufSize=sz
+                           , bufOffset=offset }
                  ptr so_far count
   | count > sz,
     Just fd <- cast haDevice = do
-       m <- RawIO.readNonBlocking (fd::FD) ptr count
+       m <- RawIO.readNonBlocking (fd::FD) ptr offset count
        case m of
          Nothing -> return so_far
          Just n  -> return (so_far + n)

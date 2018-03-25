@@ -43,10 +43,11 @@ module GHC.IO.Windows.Handle
  ) where
 
 #include <windows.h>
+#include <ntstatus.h>
 ##include "windows_cconv.h"
 
 import Data.Bits ((.|.))
-import Data.Word (Word8, Word16)
+import Data.Word (Word8, Word16, Word64)
 import Data.Functor ((<$>))
 import Data.Typeable
 
@@ -73,7 +74,7 @@ import Foreign.Storable (peek)
 import qualified GHC.Event.Windows as Mgr
 
 import GHC.Windows (LPVOID, LPDWORD, DWORD, HANDLE, BOOL, LPCTSTR,
-                    failIf, iNVALID_HANDLE_VALUE, failIf_)
+                    failIf, iNVALID_HANDLE_VALUE, failIf_, failWith)
 import qualified GHC.Windows as Win32
 import Text.Show
 
@@ -291,34 +292,42 @@ type LPSECURITY_ATTRIBUTES = LPVOID
 
 -- For this to actually block, the file handle must have
 -- been created with FILE_FLAG_OVERLAPPED not set.
-hwndRead :: Io NativeHandle -> Ptr Word8 -> Int -> IO Int
-hwndRead hwnd ptr bytes
-  = do fmap fromIntegral $ Mgr.withException "hwndRead" $
-          withOverlapped "hwndRead" (toHANDLE hwnd) 0 (startCB ptr)
-                         completionCB
+hwndRead :: Io NativeHandle -> Ptr Word8 -> Word64 -> Int -> IO Int
+hwndRead hwnd ptr offset bytes
+  = fmap fromIntegral $ Mgr.withException "hwndRead" $
+      withOverlapped "hwndRead" (toHANDLE hwnd) offset (startCB ptr) completionCB
   where
     startCB outBuf lpOverlapped = do
+      debugIO ":: hwndRead"
       ret <- c_ReadFile (toHANDLE hwnd) (castPtr outBuf)
                         (fromIntegral bytes) nullPtr lpOverlapped
-      when (not ret) $
-            failIf_ (/= #{const ERROR_IO_PENDING}) "ReadFile failed" $
-                    Win32.getLastError
-      return Nothing
+
+      case ret of
+        False -> return Nothing
+        True  ->
+          do err <- Win32.getLastError
+             case () of
+              _ | err == #{const ERROR_IO_PENDING} -> return Nothing
+                | otherwise -> failWith "ReadFile failed" err
 
     completionCB err dwBytes
-        | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
-        | otherwise = Mgr.ioFailed err
+      | err == 0                           = Mgr.ioSuccess $ fromIntegral dwBytes
+      | err == #{const ERROR_HANDLE_EOF}   = Mgr.ioSuccess 0
+      | err == #{const STATUS_END_OF_FILE} = Mgr.ioSuccess 0
+      | otherwise                          = Mgr.ioFailed err
 
 -- There's no non-blocking file I/O on Windows I think..
 -- But sockets etc should be possible.
 -- Revisit this when implementing sockets and pipes.
-hwndReadNonBlocking :: Io NativeHandle -> Ptr Word8 -> Int -> IO (Maybe Int)
-hwndReadNonBlocking hwnd ptr bytes
+hwndReadNonBlocking :: Io NativeHandle -> Ptr Word8 -> Word64 -> Int
+                    -> IO (Maybe Int)
+hwndReadNonBlocking hwnd ptr offset bytes
   = do val <- withOverlapped "hwndReadNonBlocking" (toHANDLE hwnd) 0
                               (startCB ptr) completionCB
        return $ Just $ fromIntegral $ ioValue val
   where
     startCB inputBuf lpOverlapped = do
+      debugIO ":: hwndReadNonBlocking"
       ret <- c_ReadFile (toHANDLE hwnd) (castPtr inputBuf)
                         (fromIntegral bytes) nullPtr lpOverlapped
       err <- fmap fromIntegral Win32.getLastError
@@ -329,8 +338,10 @@ hwndReadNonBlocking hwnd ptr bytes
         else return (Just err)
 
     completionCB err dwBytes
-        | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
-        | otherwise = Mgr.ioFailed err
+      | err == 0                           = Mgr.ioSuccess $ fromIntegral dwBytes
+      | err == #{const ERROR_HANDLE_EOF}   = Mgr.ioSuccess 0
+      | err == #{const STATUS_END_OF_FILE} = Mgr.ioSuccess 0
+      | otherwise                          = Mgr.ioFailed err
 
 hwndWrite :: Io NativeHandle -> Ptr Word8 -> Int -> IO ()
 hwndWrite hwnd ptr bytes
@@ -394,8 +405,8 @@ consoleWriteNonBlocking hwnd ptr bytes
          val <- fromIntegral <$> peek res
          return val
 
-consoleRead :: Io ConsoleHandle -> Ptr Word8 -> Int -> IO Int
-consoleRead hwnd ptr bytes
+consoleRead :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int -> IO Int
+consoleRead hwnd ptr _offset bytes
   = withUTF16ToGhcInternal ptr bytes $ \reqBytes w_ptr ->
       alloca $ \res ->
         do throwErrnoIf_ not "GHC.IO.Handle.consoleRead" $
@@ -403,8 +414,10 @@ consoleRead hwnd ptr bytes
                             nullPtr
            fromIntegral <$> peek res
 
-consoleReadNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Int -> IO (Maybe Int)
-consoleReadNonBlocking hwnd ptr bytes = Just <$> consoleRead hwnd ptr bytes
+consoleReadNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int
+                       -> IO (Maybe Int)
+consoleReadNonBlocking hwnd ptr offset bytes
+  = Just <$> consoleRead hwnd ptr offset bytes
 
 -- -----------------------------------------------------------------------------
 -- Operations on file handles
