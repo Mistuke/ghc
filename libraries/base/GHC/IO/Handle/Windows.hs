@@ -90,7 +90,7 @@ stdout = unsafePerformIO $ do
 stderr :: Handle
 {-# NOINLINE stderr #-}
 stderr = unsafePerformIO $ do
-    -- ToDo: acquire lock
+   -- ToDo: acquire lock
    enc <- getLocaleEncoding
    mkConsoleHandle Win.stderr "<stderr>" WriteHandle
                    False{-stderr is unbuffered-} (Just enc)
@@ -218,7 +218,9 @@ mkHandleFromHANDLE dev hw_type filepath iomode mb_codec
 
 -- ---------------------------------------------------------------------------
 -- Are files opened by default in text or binary mode, if the user doesn't
--- specify?
+-- specify? The thing is, to the Win32 APIs which are lowerlevel there exist no
+-- such thing as binary/text mode. That's strictly a thing of the C library on
+-- top of it.  So I'm not sure what to do with this. -Tamar
 
 dEFAULT_OPEN_IN_BINARY_MODE :: Bool
 dEFAULT_OPEN_IN_BINARY_MODE = False

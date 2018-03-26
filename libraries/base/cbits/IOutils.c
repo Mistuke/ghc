@@ -214,9 +214,9 @@ __is_console(HANDLE hFile)
 
     DWORD st;
     /* GetConsoleMode appears to fail when it's not a TTY.  In
-        particular, it's what most of our terminal functions
-        assume works, so if it doesn't work for all intents
-        and purposes we're not dealing with a terminal. */
+       particular, it's what most of our terminal functions
+       assume works, so if it doesn't work for all intents
+       and purposes we're not dealing with a terminal. */
     if (!GetConsoleMode(hFile, &st))
         return false;
 
