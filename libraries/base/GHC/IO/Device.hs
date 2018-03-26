@@ -34,8 +34,11 @@ import GHC.IO
 import {-# SOURCE #-} GHC.IO.Exception ( unsupportedOperation )
 
 -- | A low-level I/O provider where the data is bytes in memory.
+--   The Word64 offsets currently have no effect on POSIX system or consoles
+--   where the implicit behaviour of the C runtime is assume to move the file
+--   pointer on every read/write without needing an explicit seek.
 class RawIO a where
-  -- | Read up to the specified number of bytes starting from an optional
+  -- | Read up to the specified number of bytes starting from a specified
   -- offset, returning the number of bytes actually read.  This function
   -- should only block if there is no data available.  If there is not enough
   -- data available, then the function should just return the available data.
@@ -43,17 +46,17 @@ class RawIO a where
   -- of file) has been reached.
   read                :: a -> Ptr Word8 -> Word64 -> Int -> IO Int
 
-  -- | Read up to the specified number of bytes starting from an optional
+  -- | Read up to the specified number of bytes starting from a specified
   -- offset, returning the number of bytes actually read, or 'Nothing' if
   -- the end of the stream has been reached.
   readNonBlocking     :: a -> Ptr Word8 -> Word64 -> Int -> IO (Maybe Int)
 
-  -- | Write the specified number of bytes.
-  write               :: a -> Ptr Word8 -> Int -> IO ()
+  -- | Write the specified number of bytes starting at a given offset.
+  write               :: a -> Ptr Word8 -> Word64 -> Int -> IO ()
 
-  -- | Write up to the specified number of bytes without blocking.  Returns
-  -- the actual number of bytes written.
-  writeNonBlocking    :: a -> Ptr Word8 -> Int -> IO Int
+  -- | Write up to the specified number of bytes without blocking starting at a
+  -- given offset.  Returns the actual number of bytes written.
+  writeNonBlocking    :: a -> Ptr Word8 -> Word64 -> Int -> IO Int
 
 
 -- | I/O operations required for implementing a 'Handle'.

@@ -116,15 +116,17 @@ readBufNonBlocking dev bbuf = do
 writeBuf :: RawIO dev => dev -> Buffer Word8 -> IO (Buffer Word8)
 writeBuf dev bbuf = do
   let bytes = bufferElems bbuf
+  let offset = bufferOffset bbuf
   withBuffer bbuf $ \ptr ->
-      IODevice.write dev (ptr `plusPtr` bufL bbuf) bytes
+      IODevice.write dev (ptr `plusPtr` bufL bbuf) offset bytes
   return bbuf{ bufL=0, bufR=0 }
 
 -- XXX ToDo
 writeBufNonBlocking :: RawIO dev => dev -> Buffer Word8 -> IO (Int, Buffer Word8)
 writeBufNonBlocking dev bbuf = do
   let bytes = bufferElems bbuf
+  let offset = bufferOffset bbuf
   res <- withBuffer bbuf $ \ptr ->
-            IODevice.writeNonBlocking dev (ptr `plusPtr` bufL bbuf) bytes
+            IODevice.writeNonBlocking dev (ptr `plusPtr` bufL bbuf) offset bytes
   return (res, bufferAdjustL (bufL bbuf + res) bbuf)
 

@@ -734,7 +734,7 @@ hPutBuf' handle ptr count can_block
 bufWrite :: Handle__-> Ptr Word8 -> Int -> Bool -> IO Int
 bufWrite h_@Handle__{..} ptr count can_block =
   seq count $ do  -- strictness hack
-  old_buf@Buffer{ bufRaw=old_raw, bufR=w, bufSize=size }
+  old_buf@Buffer{ bufRaw=old_raw, bufR=w, bufSize=size, bufOffset=offset }
      <- readIORef haByteBuffer
 
   -- TODO: Possible optimisation:
@@ -775,18 +775,18 @@ bufWrite h_@Handle__{..} ptr count can_block =
                 if count < size
                    then bufWrite h_ ptr count can_block
                    else if can_block
-                           then do writeChunk h_ (castPtr ptr) count
+                           then do writeChunk h_ (castPtr ptr) offset count
                                    return count
-                           else writeChunkNonBlocking h_ (castPtr ptr) count
+                           else writeChunkNonBlocking h_ (castPtr ptr) offset count
 
-writeChunk :: Handle__ -> Ptr Word8 -> Int -> IO ()
-writeChunk h_@Handle__{..} ptr bytes
-  | Just fd <- cast haDevice  =  RawIO.write (fd::FD) ptr bytes
+writeChunk :: Handle__ -> Ptr Word8 -> Word64 -> Int -> IO ()
+writeChunk h_@Handle__{..} ptr offset bytes
+  | Just fd <- cast haDevice  =  RawIO.write (fd::FD) ptr offset bytes
   | otherwise = error "Todo: hPutBuf"
 
-writeChunkNonBlocking :: Handle__ -> Ptr Word8 -> Int -> IO Int
-writeChunkNonBlocking h_@Handle__{..} ptr bytes
-  | Just fd <- cast haDevice  =  RawIO.writeNonBlocking (fd::FD) ptr bytes
+writeChunkNonBlocking :: Handle__ -> Ptr Word8 -> Word64 -> Int -> IO Int
+writeChunkNonBlocking h_@Handle__{..} ptr offset bytes
+  | Just fd <- cast haDevice  =  RawIO.writeNonBlocking (fd::FD) ptr offset bytes
   | otherwise = error "Todo: hPutBuf"
 
 -- ---------------------------------------------------------------------------

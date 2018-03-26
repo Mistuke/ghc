@@ -443,17 +443,17 @@ fdReadNonBlocking fd ptr _offset bytes = do
     n    -> return (Just n)
 
 
-fdWrite :: FD -> Ptr Word8 -> Int -> IO ()
-fdWrite fd ptr bytes = do
+fdWrite :: FD -> Ptr Word8 -> Word64 -> Int -> IO ()
+fdWrite fd ptr _offset bytes = do
   res <- writeRawBufferPtr "GHC.IO.FD.fdWrite" fd ptr 0 (fromIntegral bytes)
   let res' = fromIntegral res
   if res' < bytes
-     then fdWrite fd (ptr `plusPtr` res') (bytes - res')
+     then fdWrite fd (ptr `plusPtr` res') (_offset + fromIntegral res') (bytes - res')
      else return ()
 
 -- XXX ToDo: this isn't non-blocking
-fdWriteNonBlocking :: FD -> Ptr Word8 -> Int -> IO Int
-fdWriteNonBlocking fd ptr bytes = do
+fdWriteNonBlocking :: FD -> Ptr Word8 -> Word64 -> Int -> IO Int
+fdWriteNonBlocking fd ptr _offset bytes = do
   res <- writeRawBufferPtrNoBlock "GHC.IO.FD.fdWriteNonBlocking" fd ptr 0
             (fromIntegral bytes)
   return (fromIntegral res)

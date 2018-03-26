@@ -322,7 +322,7 @@ hwndRead hwnd ptr offset bytes
 hwndReadNonBlocking :: Io NativeHandle -> Ptr Word8 -> Word64 -> Int
                     -> IO (Maybe Int)
 hwndReadNonBlocking hwnd ptr offset bytes
-  = do val <- withOverlapped "hwndReadNonBlocking" (toHANDLE hwnd) 0
+  = do val <- withOverlapped "hwndReadNonBlocking" (toHANDLE hwnd) offset
                               (startCB ptr) completionCB
        return $ Just $ fromIntegral $ ioValue val
   where
@@ -343,10 +343,10 @@ hwndReadNonBlocking hwnd ptr offset bytes
       | err == #{const STATUS_END_OF_FILE} = Mgr.ioSuccess 0
       | otherwise                          = Mgr.ioFailed err
 
-hwndWrite :: Io NativeHandle -> Ptr Word8 -> Int -> IO ()
-hwndWrite hwnd ptr bytes
+hwndWrite :: Io NativeHandle -> Ptr Word8 -> Word64 -> Int -> IO ()
+hwndWrite hwnd ptr offset bytes
   = do _ <- Mgr.withException "hwndWrite" $
-          withOverlapped "hwndWrite" (toHANDLE hwnd) 0 (startCB ptr)
+          withOverlapped "hwndWrite" (toHANDLE hwnd) offset (startCB ptr)
                          completionCB
        return ()
   where
@@ -362,9 +362,9 @@ hwndWrite hwnd ptr bytes
         | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
         | otherwise = Mgr.ioFailed err
 
-hwndWriteNonBlocking :: Io NativeHandle -> Ptr Word8 -> Int -> IO Int
-hwndWriteNonBlocking hwnd ptr bytes
-  = do val <- withOverlapped "hwndReadNonBlocking" (toHANDLE hwnd) 0
+hwndWriteNonBlocking :: Io NativeHandle -> Ptr Word8 -> Word64 -> Int -> IO Int
+hwndWriteNonBlocking hwnd ptr offset bytes
+  = do val <- withOverlapped "hwndReadNonBlocking" (toHANDLE hwnd) offset
                              (startCB ptr) completionCB
        return $ fromIntegral $ ioValue val
   where
@@ -383,8 +383,8 @@ hwndWriteNonBlocking hwnd ptr bytes
         | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
         | otherwise = Mgr.ioFailed err
 
-consoleWrite :: Io ConsoleHandle -> Ptr Word8 -> Int -> IO ()
-consoleWrite hwnd ptr bytes
+consoleWrite :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int -> IO ()
+consoleWrite hwnd ptr _offset bytes
   = alloca $ \res ->
       do throwErrnoIf_ not "GHC.IO.Handle.consoleWrite" $
            withGhcInternalToUTF16 ptr bytes $ \(w_ptr, w_len) -> do
@@ -395,8 +395,8 @@ consoleWrite hwnd ptr bytes
                  else do val <- fromIntegral <$> peek res
                          return $ val==w_len
 
-consoleWriteNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Int -> IO Int
-consoleWriteNonBlocking hwnd ptr bytes
+consoleWriteNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int -> IO Int
+consoleWriteNonBlocking hwnd ptr _offset bytes
   = alloca $ \res ->
       do throwErrnoIf_ not "GHC.IO.Handle.consoleWriteNonBlocking" $
             withGhcInternalToUTF16 ptr bytes $ \(w_ptr, w_len) -> do
