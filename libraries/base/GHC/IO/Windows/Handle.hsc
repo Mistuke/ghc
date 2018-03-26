@@ -60,10 +60,11 @@ import GHC.IO
 import GHC.IO.Buffer
 import GHC.IO.BufferedIO
 import qualified GHC.IO.Device
-import GHC.IO.Device (SeekMode(..), IODeviceType(..), IODevice(), devType)
+import GHC.IO.Device (SeekMode(..), IODeviceType(..), IODevice(), devType, setSize)
 import GHC.IO.Unsafe
 import GHC.IO.IOMode
 import GHC.IO.Windows.Encoding (withGhcInternalToUTF16, withUTF16ToGhcInternal)
+import GHC.IO.Windows.Paths (getDevicePath)
 import GHC.IO.Handle.Internals (debugIO)
 import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
 import Foreign.Ptr
@@ -532,18 +533,51 @@ openFile
   -> Bool     -- ^ open the file in non-blocking mode?
   -> IO (Io NativeHandle, IODeviceType)
 openFile filepath iomode non_blocking =
-   do h <- createFile
+   do devicepath <- getDevicePath filepath
+      h <- createFile devicepath
       Mgr.associateHandle' h
       let hwnd = fromHANDLE h
       _type <- devType hwnd
+      -- we want to truncate() if this is an open in WriteMode, but only
+      -- if the target is a RegularFile.  but TRUNCATE_EXISTING would fail if
+      -- the file didn't exit.  So just set the size afterwards.
+      when (iomode == WriteMode && _type == RegularFile) $
+        setSize hwnd 0
+
       return (hwnd, _type)
         where
-          createFile =
-            withCWString filepath $ \fp ->
+          -- Base doesn't currently support file shares and assumes that files
+          -- opened can be removed? TODO: Check if this is correct. I remember
+          -- lazy I/O keeping file handles opened in the past preventing deletes
+          file_share_mode =  #{const FILE_SHARE_READ}
+                         .|. #{const FILE_SHARE_WRITE}
+                         .|. #{const FILE_SHARE_DELETE}
+
+          file_access_mode =
+            case iomode of
+              ReadMode      -> #{const GENERIC_READ}
+              WriteMode     -> #{const GENERIC_WRITE}
+              ReadWriteMode -> #{const GENERIC_READ} .|. #{const GENERIC_WRITE}
+              AppendMode    -> #{const GENERIC_WRITE}
+
+          file_open_mode =
+            case iomode of
+              ReadMode      -> #{const OPEN_EXISTING} -- O_RDONLY
+              WriteMode     -> #{const OPEN_ALWAYS}   -- O_CREAT | O_WRONLY | O_TRUNC
+              ReadWriteMode -> #{const OPEN_ALWAYS}   -- O_CREAT | O_RDWR
+              AppendMode    -> #{const OPEN_EXISTING} -- O_APPEND
+
+          file_create_flags =
+            if non_blocking
+               then #{const FILE_FLAG_OVERLAPPED} -- .|. #{const FILE_FLAG_SEQUENTIAL_SCAN
+               else #{const FILE_ATTRIBUTE_NORMAL}
+
+          createFile devicepath =
+            withCWString devicepath $ \fp ->
                 failIf (== iNVALID_HANDLE_VALUE) "CreateFile failed" $
-                      c_CreateFile fp #{const GENERIC_READ}
-                                      #{const FILE_SHARE_READ}
+                      c_CreateFile fp file_access_mode
+                                      file_share_mode
                                       nullPtr
-                                      #{const OPEN_EXISTING}
-                                      (#{const FILE_FLAG_OVERLAPPED} .|. #{const FILE_FLAG_SEQUENTIAL_SCAN })
+                                      file_open_mode
+                                      file_create_flags
                                       nullPtr

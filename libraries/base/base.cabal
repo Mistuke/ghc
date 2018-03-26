@@ -378,6 +378,7 @@ Library
             GHC.Event.Windows.Thread
             GHC.IO.Windows.Handle
             GHC.IO.Windows.Encoding
+            GHC.IO.Windows.Paths
         other-modules:
             GHC.Event.Arr
             GHC.Event.Array
