@@ -21,6 +21,16 @@ Full details
 
 Language
 ~~~~~~~~
+- GHC now permits the use of a wildcard type as the context of a standalone
+  ``deriving`` declaration with the use of the
+  :extension:`PartialTypeSignatures` language extension. For instance, this
+  declaration: ::
+
+    deriving instance _ => Eq (Foo a)
+
+  Denotes a derived ``Eq (Foo a)`` instance, where the context is inferred in
+  much the same way as ordinary ``deriving`` clauses do.
+  See :ref:`partial-type-signatures`.
 
 - Data declarations with empty ``where`` clauses are no longer valid without the
   extension :extension:`GADTSyntax` enabled. For instance, consider the
@@ -46,6 +56,9 @@ Language
               Guards do not cover entire pattern space
 
   See :ghc-ticket:`14773`.
+
+- Scoped type variables now work in default methods of class declarations
+  and in pattern synonyms in Template Haskell. See :ghc-ticket:`14885`.
 
 Compiler
 ~~~~~~~~

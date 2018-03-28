@@ -678,8 +678,8 @@ static void report_summary(const RTSSummaryStats* sum)
     showStgWord64(stats.max_slop_bytes, temp, true/*commas*/);
     statsPrintf("%16s bytes maximum slop\n", temp);
 
-    statsPrintf("%16" FMT_SizeT " MB total memory in use (%"
-                FMT_SizeT " MB lost due to fragmentation)\n\n",
+    statsPrintf("%16" FMT_Word64 " MB total memory in use (%"
+                FMT_Word64 " MB lost due to fragmentation)\n\n",
                 stats.max_live_bytes  / (1024 * 1024),
                 sum->fragmentation_bytes / (1024 * 1024));
 
@@ -738,8 +738,8 @@ static void report_summary(const RTSSummaryStats* sum)
 
 #if defined(PROFILING)
     statsPrintf("  RP      time  %7.3fs  (%7.3fs elapsed)\n",
-                TimeToSecondsDbl(sum->rc_cpu_ns),
-                TimeToSecondsDbl(sum->rc_elapsed_ns));
+                TimeToSecondsDbl(sum->rp_cpu_ns),
+                TimeToSecondsDbl(sum->rp_elapsed_ns));
     statsPrintf("  PROF    time  %7.3fs  (%7.3fs elapsed)\n",
                 TimeToSecondsDbl(sum->hc_cpu_ns),
                 TimeToSecondsDbl(sum->hc_elapsed_ns));
@@ -881,7 +881,7 @@ static void report_machine_readable (const RTSSummaryStats * sum)
     MR_STAT("average_bytes_used", FMT_Word64, sum->average_bytes_used);
     MR_STAT("max_bytes_used", FMT_Word64, stats.max_live_bytes);
     MR_STAT("num_byte_usage_samples", FMT_Word32, stats.major_gcs);
-    MR_STAT("peak_megabytes_allocated", FMT_SizeT,
+    MR_STAT("peak_megabytes_allocated", FMT_Word64,
       stats.max_mem_in_use_bytes / (1024 * 1024));
 
     MR_STAT("init_cpu_seconds", "f", TimeToSecondsDbl(stats.init_cpu_ns));
@@ -901,8 +901,8 @@ static void report_machine_readable (const RTSSummaryStats * sum)
 #if defined(PROFILING)
     MR_STAT("rp_cpu_seconds", "f", TimeToSecondsDbl(sum->rp_cpu_ns));
     MR_STAT("rp_wall_seconds", "f", TimeToSecondsDbl(sum->rp_elapsed_ns));
-    MR_STAT("hc_cpu_seconds", "f", TimeToSecondsDbl(sum->hp_cpu_ns));
-    MR_STAT("hc_wall_seconds", "f", TimeToSecondsDbl(sum->hp_elapsed_ns));
+    MR_STAT("hc_cpu_seconds", "f", TimeToSecondsDbl(sum->hc_cpu_ns));
+    MR_STAT("hc_wall_seconds", "f", TimeToSecondsDbl(sum->hc_elapsed_ns));
 #endif
     MR_STAT("total_cpu_seconds", "f", TimeToSecondsDbl(stats.cpu_ns));
     MR_STAT("total_wall_seconds", "f",
@@ -937,7 +937,7 @@ static void report_machine_readable (const RTSSummaryStats * sum)
     MR_STAT("gc_cpu_percent", "f", sum->gc_cpu_percent);
     MR_STAT("gc_wall_percent", "f", sum->gc_cpu_percent);
 #endif
-    MR_STAT("fragmentation_bytes", FMT_SizeT, sum->fragmentation_bytes);
+    MR_STAT("fragmentation_bytes", FMT_Word64, sum->fragmentation_bytes);
     // average_bytes_used is done above
     MR_STAT("alloc_rate", FMT_Word64, sum->alloc_rate);
     MR_STAT("productivity_cpu_percent", "f", sum->productivity_cpu_percent);
@@ -949,11 +949,11 @@ static void report_machine_readable (const RTSSummaryStats * sum)
 #if defined(THREADED_RTS)
     MR_STAT("bound_task_count", FMT_Word32, sum->bound_task_count);
     MR_STAT("sparks_count", FMT_Word64, sum->sparks_count);
-    MR_STAT("sparks_converted", FMT_Word64, sum->sparks.converted);
-    MR_STAT("sparks_overflowed", FMT_Word64, sum->sparks.overflowed);
-    MR_STAT("sparks_dud ", FMT_Word64, sum->sparks.dud);
-    MR_STAT("sparks_gcd", FMT_Word64, sum->sparks.gcd);
-    MR_STAT("sparks_fizzled", FMT_Word64, sum->sparks.fizzled);
+    MR_STAT("sparks_converted", FMT_Word, sum->sparks.converted);
+    MR_STAT("sparks_overflowed", FMT_Word, sum->sparks.overflowed);
+    MR_STAT("sparks_dud ", FMT_Word, sum->sparks.dud);
+    MR_STAT("sparks_gcd", FMT_Word, sum->sparks.gcd);
+    MR_STAT("sparks_fizzled", FMT_Word, sum->sparks.fizzled);
     MR_STAT("work_balance", "f", sum->work_balance);
 
     // next, globals (other than internal counters)

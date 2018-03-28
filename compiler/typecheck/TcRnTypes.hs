@@ -638,7 +638,7 @@ data TcGblEnv
         tcg_th_topdecls :: TcRef [LHsDecl GhcPs],
         -- ^ Top-level declarations from addTopDecls
 
-        tcg_th_foreign_files :: TcRef [(ForeignSrcLang, String)],
+        tcg_th_foreign_files :: TcRef [(ForeignSrcLang, FilePath)],
         -- ^ Foreign files emitted from TH.
 
         tcg_th_topnames :: TcRef NameSet,
@@ -2648,15 +2648,6 @@ For Givens we make new EvVars and bind them immediately. Two main reasons:
 
 So a Given has EvVar inside it rather than (as previously) an EvTerm.
 
-Note [Given in ctEvCoercion]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-When retrieving the evidence from a Given equality, we update the type of the EvVar
-from the ctev_pred field. In Note [Evidence field of CtEvidence], we claim that
-the type of the evidence is never looked at -- but this isn't true in the case of
-a coercion that is used in a type. (See the comments in Note [Flattening] in TcFlatten
-about the FTRNotFollowed case of flattenTyVar.) So, right here where we are retrieving
-the coercion from a Given, we update the type to make sure it's zonked.
-
 -}
 
 -- | A place for type-checking evidence to go after it is generated.
@@ -2713,11 +2704,9 @@ ctEvExpr :: CtEvidence -> EvExpr
 ctEvExpr ev@(CtWanted { ctev_dest = HoleDest _ }) = evCoercion $ ctEvCoercion ev
 ctEvExpr ev = evId (ctEvEvId ev)
 
--- Always returns a coercion whose type is precisely ctev_pred of the CtEvidence.
--- See also Note [Given in ctEvCoercion]
 ctEvCoercion :: CtEvidence -> Coercion
-ctEvCoercion (CtGiven { ctev_pred = pred_ty, ctev_evar = ev_id })
-  = mkTcCoVarCo (setVarType ev_id pred_ty)  -- See Note [Given in ctEvCoercion]
+ctEvCoercion (CtGiven { ctev_evar = ev_id })
+  = mkTcCoVarCo ev_id
 ctEvCoercion (CtWanted { ctev_dest = dest })
   | HoleDest hole <- dest
   = -- ctEvCoercion is only called on type equalities
@@ -3359,13 +3348,24 @@ data CtOrigin
                         --    then TypeSize = sizeTypes [ty1, .., tyn]
                         -- See Note [Solving superclass constraints] in TcInstDcls
 
-  | DerivOrigin         -- Typechecking deriving
-  | DerivOriginDC DataCon Int
-                        -- Checking constraints arising from this data con and field index
-  | DerivOriginCoerce Id Type Type
+  | DerivClauseOrigin   -- Typechecking a deriving clause (as opposed to
+                        -- standalone deriving).
+  | DerivOriginDC DataCon Int Bool
+      -- Checking constraints arising from this data con and field index. The
+      -- Bool argument in DerivOriginDC and DerivOriginCoerce is True if
+      -- standalong deriving (with a wildcard constraint) is being used. This
+      -- is used to inform error messages on how to recommended fixes (e.g., if
+      -- the argument is True, then don't recommend "use standalone deriving",
+      -- but rather "fill in the wildcard constraint yourself").
+      -- See Note [Inferring the instance context] in TcDerivInfer
+  | DerivOriginCoerce Id Type Type Bool
                         -- DerivOriginCoerce id ty1 ty2: Trying to coerce class method `id` from
                         -- `ty1` to `ty2`.
-  | StandAloneDerivOrigin -- Typechecking stand-alone deriving
+  | StandAloneDerivOrigin -- Typechecking stand-alone deriving. Useful for
+                          -- constraints coming from a wildcard constraint,
+                          -- e.g., deriving instance _ => Eq (Foo a)
+                          -- See Note [Inferring the instance context]
+                          -- in TcDerivInfer
   | DefaultOrigin       -- Typechecking a default decl
   | DoOrigin            -- Arising from a do expression
   | DoPatOrigin (LPat GhcRn) -- Arising from a failable pattern in
@@ -3558,14 +3558,14 @@ pprCtOrigin (KindEqOrigin t1 Nothing _ _)
 pprCtOrigin (UnboundOccurrenceOf name)
   = ctoHerald <+> text "an undeclared identifier" <+> quotes (ppr name)
 
-pprCtOrigin (DerivOriginDC dc n)
+pprCtOrigin (DerivOriginDC dc n _)
   = hang (ctoHerald <+> text "the" <+> speakNth n
           <+> text "field of" <+> quotes (ppr dc))
        2 (parens (text "type" <+> quotes (ppr ty)))
   where
     ty = dataConOrigArgTys dc !! (n-1)
 
-pprCtOrigin (DerivOriginCoerce meth ty1 ty2)
+pprCtOrigin (DerivOriginCoerce meth ty1 ty2 _)
   = hang (ctoHerald <+> text "the coercion of the method" <+> quotes (ppr meth))
        2 (sep [ text "from type" <+> quotes (ppr ty1)
               , nest 2 $ text "to type" <+> quotes (ppr ty2) ])
@@ -3627,7 +3627,7 @@ pprCtO TupleOrigin           = text "a tuple"
 pprCtO NegateOrigin          = text "a use of syntactic negation"
 pprCtO (ScOrigin n)          = text "the superclasses of an instance declaration"
                                <> whenPprDebug (parens (ppr n))
-pprCtO DerivOrigin           = text "the 'deriving' clause of a data type declaration"
+pprCtO DerivClauseOrigin     = text "the 'deriving' clause of a data type declaration"
 pprCtO StandAloneDerivOrigin = text "a 'deriving' declaration"
 pprCtO DefaultOrigin         = text "a 'default' declaration"
 pprCtO DoOrigin              = text "a do statement"
