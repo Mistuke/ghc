@@ -352,6 +352,7 @@ hwndWrite hwnd ptr offset bytes
        return ()
   where
     startCB outBuf lpOverlapped = do
+      debugIO ":: hwndWrite"
       ret <- c_WriteFile (toHANDLE hwnd) (castPtr outBuf)
                          (fromIntegral bytes) nullPtr lpOverlapped
       when (not ret) $
@@ -370,6 +371,7 @@ hwndWriteNonBlocking hwnd ptr offset bytes
        return $ fromIntegral $ ioValue val
   where
     startCB outBuf lpOverlapped = do
+      debugIO ":: hwndWriteNonBlocking"
       ret <- c_WriteFile (toHANDLE hwnd) (castPtr outBuf)
                          (fromIntegral bytes) nullPtr lpOverlapped
       err <- fmap fromIntegral Win32.getLastError
@@ -387,7 +389,8 @@ hwndWriteNonBlocking hwnd ptr offset bytes
 consoleWrite :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int -> IO ()
 consoleWrite hwnd ptr _offset bytes
   = alloca $ \res ->
-      do throwErrnoIf_ not "GHC.IO.Handle.consoleWrite" $
+      do throwErrnoIf_ not "GHC.IO.Handle.consoleWrite" $ do
+           debugIO ":: consoleWrite"
            withGhcInternalToUTF16 ptr bytes $ \(w_ptr, w_len) -> do
               success <- c_write_console (toHANDLE hwnd) w_ptr
                                          (fromIntegral w_len) res nullPtr
@@ -399,7 +402,8 @@ consoleWrite hwnd ptr _offset bytes
 consoleWriteNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int -> IO Int
 consoleWriteNonBlocking hwnd ptr _offset bytes
   = alloca $ \res ->
-      do throwErrnoIf_ not "GHC.IO.Handle.consoleWriteNonBlocking" $
+      do throwErrnoIf_ not "GHC.IO.Handle.consoleWriteNonBlocking" $ do
+            debugIO ":: consoleWriteNonBlocking"
             withGhcInternalToUTF16 ptr bytes $ \(w_ptr, w_len) -> do
               c_write_console (toHANDLE hwnd) w_ptr (fromIntegral w_len)
                               res nullPtr

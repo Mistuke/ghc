@@ -31,7 +31,7 @@ module GHC.IO.Handle.Internals (
   wantWritableHandle, wantReadableHandle, wantReadableHandle_,
   wantSeekableHandle,
 
-  mkHandle, mkFileHandle, mkDuplexHandle,
+  mkHandle, mkHandleEx, mkFileHandle, mkDuplexHandle,
   openTextEncoding, closeTextCodecs, initBufferState,
   dEFAULT_CHAR_BUFFER_SIZE,
 
@@ -613,16 +613,30 @@ flushByteReadBuffer h_@Handle__{..} = do
 -- Making Handles
 
 mkHandle :: (IODevice dev, BufferedIO dev, Typeable dev) => dev
-            -> FilePath
-            -> HandleType
-            -> Bool                     -- buffered?
-            -> Maybe TextEncoding
-            -> NewlineMode
-            -> Maybe HandleFinalizer
-            -> Maybe (MVar Handle__)
-            -> IO Handle
+         -> FilePath
+         -> HandleType
+         -> Bool                     -- buffered?
+         -> Maybe TextEncoding
+         -> NewlineMode
+         -> Maybe HandleFinalizer
+         -> Maybe (MVar Handle__)
+         -> IO Handle
+mkHandle dev filepath ha_type buffered mb_codec nl finalizer other_side =
+  mkHandleEx dev filepath ha_type buffered mb_codec nl finalizer other_side id
 
-mkHandle dev filepath ha_type buffered mb_codec nl finalizer other_side = do
+mkHandleEx :: (IODevice dev, BufferedIO dev, Typeable dev) => dev
+           -> FilePath
+           -> HandleType
+           -> Bool                     -- buffered?
+           -> Maybe TextEncoding
+           -> NewlineMode
+           -> Maybe HandleFinalizer
+           -> Maybe (MVar Handle__)
+           -> (Handle__ -> Handle__)
+           -> IO Handle
+
+mkHandleEx dev filepath ha_type buffered mb_codec nl finalizer other_side
+           updateHandle = do
    openTextEncoding mb_codec ha_type $ \ mb_encoder mb_decoder -> do
 
    let buf_state = initBufferState ha_type
@@ -635,7 +649,7 @@ mkHandle dev filepath ha_type buffered mb_codec nl finalizer other_side = do
                      else mkUnBuffer buf_state
 
    spares <- newIORef BufferListNil
-   newFileHandle filepath finalizer
+   newFileHandle filepath finalizer $ updateHandle
             (Handle__ { haDevice = dev,
                         haType = ha_type,
                         haBufferMode = bmode,
