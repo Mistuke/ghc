@@ -15,5 +15,5 @@
 
 #include "Stg.h"
 
-int  lockFile(int fd, StgWord64 dev, StgWord64 ino, int for_writing);
-int  unlockFile(int fd);
+int  lockFile(StgWord id, StgWord64 dev, StgWord64 ino, int for_writing);
+int  unlockFile(StgWord id);

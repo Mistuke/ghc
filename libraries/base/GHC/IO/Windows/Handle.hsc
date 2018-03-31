@@ -39,7 +39,8 @@ module GHC.IO.Windows.Handle
    stderr,
 
    -- * File utilities
-   openFile
+   openFile,
+   release
  ) where
 
 #include <windows.h>
@@ -61,6 +62,7 @@ import GHC.IO.Buffer
 import GHC.IO.BufferedIO
 import qualified GHC.IO.Device
 import GHC.IO.Device (SeekMode(..), IODeviceType(..), IODevice(), devType, setSize)
+import GHC.IO.Exception
 import GHC.IO.Unsafe
 import GHC.IO.IOMode
 import GHC.IO.Windows.Encoding (withGhcInternalToUTF16, withUTF16ToGhcInternal)
@@ -69,8 +71,10 @@ import GHC.IO.Handle.Internals (debugIO)
 import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
 import Foreign.Ptr
 import Foreign.C
+import Foreign.C.Types
 import Foreign.C.String
 import Foreign.Marshal.Alloc (alloca)
+import Foreign.Marshal.Utils (with, fromBool)
 import Foreign.Storable (peek)
 import qualified GHC.Event.Windows as Mgr
 
@@ -122,14 +126,17 @@ instance GHC.IO.Device.RawIO (Io ConsoleHandle) where
 class (IODevice a, BufferedIO a, Typeable a) => RawHandle a where
   toHANDLE   :: a -> HANDLE
   fromHANDLE :: HANDLE -> a
+  isLockable :: a -> Bool
 
 instance RawHandle (Io NativeHandle) where
-  toHANDLE   = getNativeHandle
-  fromHANDLE = NativeHandle
+  toHANDLE     = getNativeHandle
+  fromHANDLE   = NativeHandle
+  isLockable _ = True
 
 instance RawHandle (Io ConsoleHandle) where
-  toHANDLE   = getConsoleHandle
-  fromHANDLE = ConsoleHandle
+  toHANDLE     = getConsoleHandle
+  fromHANDLE   = ConsoleHandle
+  isLockable _ = False
 
 -- -----------------------------------------------------------------------------
 -- The Windows IO device implementation
@@ -437,7 +444,7 @@ handle_is_console :: RawHandle a => a -> IO Bool
 handle_is_console = c_is_console . toHANDLE
 
 handle_close :: RawHandle a => a -> IO ()
-handle_close = c_close_handle . toHANDLE
+handle_close h = release h >> c_close_handle (toHANDLE h)
 
 handle_dev_type :: RawHandle a => a -> IO IODeviceType
 handle_dev_type hwnd = do _type <- c_handle_type $ toHANDLE hwnd
@@ -542,7 +549,25 @@ openFile filepath iomode non_blocking =
       Mgr.associateHandle' h
       let hwnd = fromHANDLE h
       _type <- devType hwnd
-      -- we want to truncate() if this is an open in WriteMode, but only
+
+      -- Use the rts to enforce any file locking we may need.
+      let write_lock = iomode /= ReadMode
+
+      case _type of
+        -- Regular files need to be locked.
+        RegularFile -> do
+          (unique_dev, unique_ino) <- getUniqueFileInfo hwnd
+          r <- lockFile (fromIntegral $ ptrToWordPtr h) unique_dev unique_ino
+                        (fromBool write_lock)
+          when (r == -1)  $
+               ioException (IOError Nothing ResourceBusy "openFile"
+                                  "file is locked" Nothing Nothing)
+
+        -- I don't see a reason for blocking directories.  So unlike the FD
+        -- implementation I'll allow it.
+        _ -> return ()
+
+      -- We want to truncate() if this is an open in WriteMode, but only
       -- if the target is a RegularFile.  but TRUNCATE_EXISTING would fail if
       -- the file didn't exit.  So just set the size afterwards.
       when (iomode == WriteMode && _type == RegularFile) $
@@ -550,9 +575,9 @@ openFile filepath iomode non_blocking =
 
       return (hwnd, _type)
         where
-          -- Base doesn't currently support file shares and assumes that files
-          -- opened can be removed? TODO: Check if this is correct. I remember
-          -- lazy I/O keeping file handles opened in the past preventing deletes
+          -- We have to use in-process locking (e.g. use the locking mechanism
+          -- in the rts) so we're consistent with the linux behaviour and the
+          -- rts knows about the lock.  See #4363 for more.
           file_share_mode =  #{const FILE_SHARE_READ}
                          .|. #{const FILE_SHARE_WRITE}
                          .|. #{const FILE_SHARE_DELETE}
@@ -585,3 +610,29 @@ openFile filepath iomode non_blocking =
                                       file_open_mode
                                       file_create_flags
                                       nullPtr
+
+release :: RawHandle a => a -> IO ()
+release h = if isLockable h
+               then do let handle = fromIntegral $ ptrToWordPtr $ toHANDLE h
+                       _ <- unlockFile handle
+                       return ()
+               else return ()
+
+-- -----------------------------------------------------------------------------
+-- Locking/unlocking
+
+foreign import ccall unsafe "lockFile"
+  lockFile :: CUIntPtr -> Word64 -> Word64 -> CInt -> IO CInt
+
+foreign import ccall unsafe "unlockFile"
+  unlockFile :: CUIntPtr -> IO CInt
+
+foreign import ccall unsafe "get_unique_file_info_hwnd"
+  c_getUniqueFileInfo :: HANDLE -> Ptr Word64 -> Ptr Word64 -> IO ()
+
+getUniqueFileInfo :: RawHandle a => a -> IO (Word64, Word64)
+getUniqueFileInfo handle = do
+  with 0 $ \devptr -> do
+    with 0 $ \inoptr -> do
+      c_getUniqueFileInfo (toHANDLE handle) devptr inoptr
+      liftM2 (,) (peek devptr) (peek inoptr)

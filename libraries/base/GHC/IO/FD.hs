@@ -250,7 +250,8 @@ mkFD fd iomode mb_stat is_socket is_nonblock = do
            -- On Windows we need an additional call to get a unique device id
            -- and inode, since fstat just returns 0 for both.
            (unique_dev, unique_ino) <- getUniqueFileInfo fd dev ino
-           r <- lockFile fd unique_dev unique_ino (fromBool write)
+           r <- lockFile (fromIntegral fd) unique_dev unique_ino
+                         (fromBool write)
            when (r == -1)  $
                 ioException (IOError Nothing ResourceBusy "openFile"
                                    "file is locked" Nothing Nothing)
@@ -328,7 +329,7 @@ close fd =
      closeFdWith closer (fromIntegral (fdFD fd))
 
 release :: FD -> IO ()
-release fd = do _ <- unlockFile (fdFD fd)
+release fd = do _ <- unlockFile (fromIntegral $ fdFD fd)
                 return ()
 
 #if defined(mingw32_HOST_OS)
@@ -665,10 +666,10 @@ throwErrnoIfMinus1RetryOnBlock loc f on_block  =
 -- Locking/unlocking
 
 foreign import ccall unsafe "lockFile"
-  lockFile :: CInt -> Word64 -> Word64 -> CInt -> IO CInt
+  lockFile :: Word64 -> Word64 -> Word64 -> CInt -> IO CInt
 
 foreign import ccall unsafe "unlockFile"
-  unlockFile :: CInt -> IO CInt
+  unlockFile :: Word64 -> IO CInt
 
 #if defined(mingw32_HOST_OS)
 foreign import ccall unsafe "get_unique_file_info"

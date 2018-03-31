@@ -205,7 +205,7 @@ openFile' filepath iomode binary non_blocking = do
 -- Converting file descriptors from/to Handles
 
 mkHandleFromHANDLE
-   :: (IODevice.IODevice dev, BufferedIO dev, Typeable dev) => dev
+   :: (RawIO dev, IODevice.IODevice dev, BufferedIO dev, Typeable dev) => dev
    -> IODeviceType
    -> FilePath  -- a string describing this file descriptor (e.g. the filename)
    -> IOMode

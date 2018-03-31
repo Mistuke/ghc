@@ -645,7 +645,7 @@ dupHandle filepath h other_side h_@Handle__{..} mb_finalizer = do
        withHandle_' "dupHandle" h r $ \Handle__{haDevice=dev} -> do
          dupHandle_ dev filepath other_side h_ mb_finalizer
 
-dupHandle_ :: (IODevice dev, BufferedIO dev, Typeable dev) => dev
+dupHandle_ :: (RawIO dev, IODevice dev, BufferedIO dev, Typeable dev) => dev
            -> FilePath
            -> Maybe (MVar Handle__)
            -> Handle__

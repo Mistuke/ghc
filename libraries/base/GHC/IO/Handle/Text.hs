@@ -32,7 +32,7 @@ module GHC.IO.Handle.Text (
     ) where
 
 import GHC.IO
-import GHC.IO.FD
+import GHC.IO.SmartHandles
 import GHC.IO.Buffer
 import qualified GHC.IO.BufferedIO as Buffered
 import GHC.IO.Exception
@@ -781,13 +781,11 @@ bufWrite h_@Handle__{..} ptr count can_block =
 
 writeChunk :: Handle__ -> Ptr Word8 -> Word64 -> Int -> IO ()
 writeChunk h_@Handle__{..} ptr offset bytes
-  | Just fd <- cast haDevice  =  RawIO.write (fd::FD) ptr offset bytes
-  | otherwise = error "Todo: hPutBuf"
+  = RawIO.write haDevice ptr offset bytes
 
 writeChunkNonBlocking :: Handle__ -> Ptr Word8 -> Word64 -> Int -> IO Int
 writeChunkNonBlocking h_@Handle__{..} ptr offset bytes
-  | Just fd <- cast haDevice  =  RawIO.writeNonBlocking (fd::FD) ptr offset bytes
-  | otherwise = error "Todo: hPutBuf"
+  = RawIO.writeNonBlocking haDevice ptr offset bytes
 
 -- ---------------------------------------------------------------------------
 -- hGetBuf
@@ -853,7 +851,7 @@ bufReadEmpty :: Handle__ -> Buffer Word8 -> Ptr Word8 -> Int -> Int -> IO Int
 bufReadEmpty h_@Handle__{..}
              buf@Buffer{ bufRaw=raw, bufR=w, bufL=r, bufSize=sz }
              ptr so_far count
- | count > sz, Just fd <- cast haDevice = loop fd 0 count
+ | count > sz = loop haDevice 0 count
  | otherwise = do
      (r,buf') <- Buffered.fillReadBuffer haDevice buf
      if r == 0
@@ -861,13 +859,13 @@ bufReadEmpty h_@Handle__{..}
         else do writeIORef haByteBuffer buf'
                 bufReadNonEmpty h_ buf' ptr so_far count
  where
-  loop :: FD -> Int -> Int -> IO Int
-  loop fd off bytes | bytes <= 0 = return (so_far + off)
-  loop fd off bytes = do
-    r <- RawIO.read (fd::FD) (ptr `plusPtr` off) (fromIntegral off) bytes
+  loop :: RawIO.RawIO dev => dev -> Int -> Int -> IO Int
+  loop dev off bytes | bytes <= 0 = return (so_far + off)
+  loop dev off bytes = do
+    r <- RawIO.read dev (ptr `plusPtr` off) (fromIntegral off) bytes
     if r == 0
         then return (so_far + off)
-        else loop fd (off + r) (bytes - r)
+        else loop dev (off + r) (bytes - r)
 
 -- ---------------------------------------------------------------------------
 -- hGetBufSome
@@ -899,7 +897,7 @@ hGetBufSome h ptr count
          buf@Buffer{ bufSize=sz } <- readIORef haByteBuffer
          if isEmptyBuffer buf
             then case count > sz of  -- large read? optimize it with a little special case:
-                    True | Just fd <- haFD h_ -> do RawIO.read fd (castPtr ptr) 0 count
+                    True -> RawIO.read haDevice (castPtr ptr) 0 count
                     _ -> do (r,buf') <- Buffered.fillReadBuffer haDevice buf
                             if r == 0
                                then return 0
@@ -911,9 +909,6 @@ hGetBufSome h ptr count
             else
               let count' = min count (bufferElems buf)
               in bufReadNBNonEmpty h_ buf (castPtr ptr) 0 count'
-
-haFD :: Handle__ -> Maybe FD
-haFD h_@Handle__{..} = cast haDevice
 
 -- | 'hGetBufNonBlocking' @hdl buf count@ reads data from the handle @hdl@
 -- into the buffer @buf@ until either EOF is reached, or
@@ -952,9 +947,8 @@ bufReadNBEmpty   h_@Handle__{..}
                  buf@Buffer{ bufRaw=raw, bufR=w, bufL=r, bufSize=sz
                            , bufOffset=offset }
                  ptr so_far count
-  | count > sz,
-    Just fd <- cast haDevice = do
-       m <- RawIO.readNonBlocking (fd::FD) ptr offset count
+  | count > sz = do
+       m <- RawIO.readNonBlocking haDevice ptr offset count
        case m of
          Nothing -> return so_far
          Just n  -> return (so_far + n)

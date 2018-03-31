@@ -61,7 +61,7 @@ import GHC.IO.Handle.Types
 import GHC.IO.Buffer
 import GHC.IO.BufferedIO (BufferedIO)
 import GHC.IO.Exception
-import GHC.IO.Device (IODevice, SeekMode(..))
+import GHC.IO.Device (IODevice, RawIO, SeekMode(..))
 import qualified GHC.IO.Device as IODevice
 import qualified GHC.IO.BufferedIO as Buffered
 
@@ -612,7 +612,7 @@ flushByteReadBuffer h_@Handle__{..} = do
 -- ----------------------------------------------------------------------------
 -- Making Handles
 
-mkHandle :: (IODevice dev, BufferedIO dev, Typeable dev) => dev
+mkHandle :: (RawIO dev, IODevice dev, BufferedIO dev, Typeable dev) => dev
          -> FilePath
          -> HandleType
          -> Bool                     -- buffered?
@@ -624,7 +624,7 @@ mkHandle :: (IODevice dev, BufferedIO dev, Typeable dev) => dev
 mkHandle dev filepath ha_type buffered mb_codec nl finalizer other_side =
   mkHandleEx dev filepath ha_type buffered mb_codec nl finalizer other_side id
 
-mkHandleEx :: (IODevice dev, BufferedIO dev, Typeable dev) => dev
+mkHandleEx :: (RawIO dev, IODevice dev, BufferedIO dev, Typeable dev) => dev
            -> FilePath
            -> HandleType
            -> Bool                     -- buffered?
@@ -666,7 +666,7 @@ mkHandleEx dev filepath ha_type buffered mb_codec nl finalizer other_side
                       })
 
 -- | makes a new 'Handle'
-mkFileHandle :: (IODevice dev, BufferedIO dev, Typeable dev)
+mkFileHandle :: (RawIO dev, IODevice dev, BufferedIO dev, Typeable dev)
              => dev -- ^ the underlying IO device, which must support
                     -- 'IODevice', 'BufferedIO' and 'Typeable'
              -> FilePath
@@ -687,7 +687,7 @@ mkFileHandle dev filepath iomode mb_codec tr_newlines = do
 -- | like 'mkFileHandle', except that a 'Handle' is created with two
 -- independent buffers, one for reading and one for writing.  Used for
 -- full-duplex streams, such as network sockets.
-mkDuplexHandle :: (IODevice dev, BufferedIO dev, Typeable dev) => dev
+mkDuplexHandle :: (RawIO dev, IODevice dev, BufferedIO dev, Typeable dev) => dev
                -> FilePath -> Maybe TextEncoding -> NewlineMode -> IO Handle
 mkDuplexHandle dev filepath mb_codec tr_newlines = do
 
