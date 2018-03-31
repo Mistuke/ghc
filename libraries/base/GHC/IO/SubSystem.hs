@@ -20,8 +20,11 @@ module GHC.IO.SubSystem (
   getIoSubSystem,
   withIoSubSystem,
   withIoSubSystem',
+  whenIoSubSystem,
   IoSubSystem(..)
  ) where
+
+import GHC.Base
 
 import GHC.IO.Unsafe
 import GHC.IO
@@ -50,3 +53,7 @@ withIoSubSystem' :: (IoSubSystem -> a) -> a
 withIoSubSystem' f = unsafePerformIO inner
   where inner = do sub <- getIoSubSystem
                    return (f sub)
+
+whenIoSubSystem :: IoSubSystem -> IO () -> IO ()
+whenIoSubSystem m f = do sub <- getIoSubSystem
+                         when (sub == m) f

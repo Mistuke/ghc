@@ -607,7 +607,7 @@ flushByteReadBuffer h_@Handle__{..} = do
   debugIO ("flushByteReadBuffer: new file offset = " ++ show seek)
   IODevice.seek haDevice RelativeSeek (fromIntegral seek)
 
-  writeIORef haByteBuffer bbuf{ bufL=0, bufR=0 }
+  writeIORef haByteBuffer bbuf{ bufL=0, bufR=0, bufOffset=0 }
 
 -- ----------------------------------------------------------------------------
 -- Making Handles

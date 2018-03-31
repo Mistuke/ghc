@@ -397,7 +397,7 @@ hwndWriteNonBlocking hwnd ptr offset bytes
 consoleWrite :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int -> IO ()
 consoleWrite hwnd ptr _offset bytes
   = alloca $ \res ->
-      do throwErrnoIf_ not "GHC.IO.Handle.consoleWrite" $ do
+      do failIfFalse_ "GHC.IO.Handle.consoleWrite" $ do
            debugIO ":: consoleWrite"
            withGhcInternalToUTF16 ptr bytes $ \(w_ptr, w_len) -> do
               success <- c_write_console (toHANDLE hwnd) w_ptr
@@ -410,7 +410,7 @@ consoleWrite hwnd ptr _offset bytes
 consoleWriteNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int -> IO Int
 consoleWriteNonBlocking hwnd ptr _offset bytes
   = alloca $ \res ->
-      do throwErrnoIf_ not "GHC.IO.Handle.consoleWriteNonBlocking" $ do
+      do failIfFalse_ "GHC.IO.Handle.consoleWriteNonBlocking" $ do
             debugIO ":: consoleWriteNonBlocking"
             withGhcInternalToUTF16 ptr bytes $ \(w_ptr, w_len) -> do
               c_write_console (toHANDLE hwnd) w_ptr (fromIntegral w_len)
@@ -422,7 +422,7 @@ consoleRead :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int -> IO Int
 consoleRead hwnd ptr _offset bytes
   = withUTF16ToGhcInternal ptr bytes $ \reqBytes w_ptr ->
       alloca $ \res ->
-        do throwErrnoIf_ not "GHC.IO.Handle.consoleRead" $
+        do failIfFalse_ "GHC.IO.Handle.consoleRead" $
              c_read_console (toHANDLE hwnd) w_ptr (fromIntegral reqBytes) res
                             nullPtr
            fromIntegral <$> peek res
@@ -462,7 +462,7 @@ handle_is_seekable hwnd = do
 
 handle_seek :: RawHandle a => a -> SeekMode -> Integer -> IO ()
 handle_seek hwnd mode off =
-  throwErrnoIf_ not "GHC.IO.Handle.handle_seek" $
+  failIfFalse_ "GHC.IO.Handle.handle_seek" $
       c_set_file_pointer (toHANDLE hwnd) (fromIntegral off) seektype
  where
     seektype :: DWORD
@@ -479,7 +479,7 @@ handle_tell hwnd =
 
 handle_set_size :: RawHandle a => a -> Integer -> IO ()
 handle_set_size hwnd size =
-  throwErrnoIf_ not "GHC.IO.Handle.handle_set_size" $
+  failIfFalse_ "GHC.IO.Handle.handle_set_size" $
       c_set_file_size (toHANDLE hwnd) (fromIntegral size)
 
 handle_get_size :: RawHandle a => a -> IO Integer
@@ -490,7 +490,7 @@ handle_get_size hwnd =
 
 handle_set_echo :: RawHandle a => a -> Bool -> IO ()
 handle_set_echo hwnd value =
-  throwErrnoIf_ not "GHC.IO.Handle.handle_set_echo" $
+  failIfFalse_ "GHC.IO.Handle.handle_set_echo" $
       c_set_console_echo (toHANDLE hwnd) value
 
 handle_get_echo :: RawHandle a => a -> IO Bool
@@ -498,18 +498,18 @@ handle_get_echo = c_get_console_echo . toHANDLE
 
 handle_duplicate :: RawHandle a => a -> IO a
 handle_duplicate hwnd = alloca $ \ptr -> do
-  throwErrnoIf_ not "GHC.IO.Handle.handle_duplicate" $
+  failIfFalse_ "GHC.IO.Handle.handle_duplicate" $
       c_duplicate_handle (toHANDLE hwnd) ptr
   fromHANDLE <$> peek ptr
 
 handle_set_buffering :: RawHandle a => a -> Bool -> IO ()
 handle_set_buffering hwnd value =
-  throwErrnoIf_ not "GHC.IO.Handle.handle_set_buffering" $
+  failIfFalse_ "GHC.IO.Handle.handle_set_buffering" $
       c_set_console_buffering (toHANDLE hwnd) value
 
 handle_console_seek :: RawHandle a => a -> SeekMode -> Integer -> IO ()
 handle_console_seek hwnd mode off =
-  throwErrnoIf_ not "GHC.IO.Handle.handle_console_seek" $
+  failIfFalse_ "GHC.IO.Handle.handle_console_seek" $
       c_set_console_pointer (toHANDLE hwnd) (fromIntegral off) seektype
  where
     seektype :: DWORD
@@ -526,7 +526,7 @@ handle_console_tell hwnd =
 
 handle_set_console_size :: RawHandle a => a -> Integer -> IO ()
 handle_set_console_size hwnd size =
-  throwErrnoIf_ not "GHC.IO.Handle.handle_set_console_size" $
+  failIfFalse_ "GHC.IO.Handle.handle_set_console_size" $
       c_set_console_buffer_size (toHANDLE hwnd) (fromIntegral size)
 
 handle_get_console_size :: RawHandle a => a -> IO Integer

@@ -57,6 +57,7 @@ import GHC.IO.Buffer
 import GHC.IO.BufferedIO ( BufferedIO )
 import GHC.IO.Device as IODevice
 import GHC.IO.SmartHandles
+import GHC.IO.SubSystem
 import GHC.IO.Handle.Lock
 import GHC.IO.Handle.Types
 import GHC.IO.Handle.Internals
@@ -410,7 +411,8 @@ hSeek handle mode offset =
     let r = bufL buf; w = bufR buf
     if mode == RelativeSeek && isNothing haDecoder &&
        offset >= 0 && offset < fromIntegral (w - r)
-        then writeIORef haCharBuffer buf{ bufL = r + fromIntegral offset }
+        then writeIORef haCharBuffer buf{ bufL = r + fromIntegral offset,
+                                          bufOffset = fromIntegral offset }
         else do
 
     flushCharReadBuffer handle_
@@ -439,9 +441,23 @@ hTell handle =
 
       bbuf <- readIORef haByteBuffer
 
-      let real_posn
+      let real_posn_raw
            | isWriteBuffer bbuf = posn + fromIntegral (bufferElems bbuf)
            | otherwise          = posn - fromIntegral (bufferElems bbuf)
+
+#if !defined(mingw32_HOST_OS)
+      let real_posn = real_posn_raw
+#else
+      -- Adjust for the fact that the cursor may have been moved much more
+      -- than we have actually consumed data from. E.g. in the case of IOCP
+      -- reads in Windows.  But only count this when using the new I/O manager
+      -- as the "posix" one interfaces directly with the c runtime which does
+      -- file offset bookkeeping already.
+      sub <- getIoSubSystem
+      let real_posn = if sub == IoNative
+                         then real_posn_raw + fromIntegral (bufferOffset bbuf)
+                         else real_posn_raw
+#endif
 
       cbuf <- readIORef haCharBuffer
       debugIO ("\nhGetPosn: (posn, real_posn) = " ++ show (posn, real_posn))

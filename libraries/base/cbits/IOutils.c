@@ -334,7 +334,8 @@ bool __set_file_pointer (HANDLE hFile, int64_t pos, DWORD moveMethod)
 {
     LARGE_INTEGER li;
     li.QuadPart = pos;
-    return SetFilePointerEx (hFile, li, NULL, moveMethod);
+    return SetFilePointerEx (hFile, li, NULL, moveMethod)
+           != INVALID_SET_FILE_POINTER;
 }
 
 int64_t __get_file_pointer (HANDLE hFile)
@@ -342,7 +343,8 @@ int64_t __get_file_pointer (HANDLE hFile)
     LARGE_INTEGER ret;
     LARGE_INTEGER pos;
     pos.QuadPart = 0;
-    if (!SetFilePointerEx(hFile, pos, &ret, FILE_CURRENT))
+    if (SetFilePointerEx(hFile, pos, &ret, FILE_CURRENT)
+        == INVALID_SET_FILE_POINTER)
       return -1;
 
     return ret.QuadPart;

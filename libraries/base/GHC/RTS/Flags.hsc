@@ -92,7 +92,7 @@ data IoSubSystem
   | IoNative  -- ^ Use platform native Sub-System. For unix OSes this is the
               --   same as IoPOSIX, but on Windows this means use the Windows
               --   native APIs for I/O, including IOCP and RIO.
-  deriving (Show)
+  deriving (Eq, Show)
 
 -- | @since 4.9.0.0
 instance Enum IoSubSystem where
