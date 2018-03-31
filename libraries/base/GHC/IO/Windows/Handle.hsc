@@ -79,7 +79,8 @@ import Foreign.Storable (peek)
 import qualified GHC.Event.Windows as Mgr
 
 import GHC.Windows (LPVOID, LPDWORD, DWORD, HANDLE, BOOL, LPCTSTR,
-                    failIf, iNVALID_HANDLE_VALUE, failIf_, failWith)
+                    failIf, iNVALID_HANDLE_VALUE, failIf_, failWith,
+                    failIfFalse_)
 import qualified GHC.Windows as Win32
 import Text.Show
 
@@ -253,7 +254,7 @@ foreign import ccall safe "__get_console_echo"
     c_get_console_echo :: HANDLE -> IO BOOL
 
 foreign import ccall safe "__close_handle"
-    c_close_handle :: HANDLE -> IO ()
+    c_close_handle :: HANDLE -> IO Bool
 
 foreign import ccall safe "__handle_type"
     c_handle_type :: HANDLE -> IO Int
@@ -444,7 +445,8 @@ handle_is_console :: RawHandle a => a -> IO Bool
 handle_is_console = c_is_console . toHANDLE
 
 handle_close :: RawHandle a => a -> IO ()
-handle_close h = release h >> c_close_handle (toHANDLE h)
+handle_close h = do release h
+                    failIfFalse_ "handle_close" $ c_close_handle (toHANDLE h)
 
 handle_dev_type :: RawHandle a => a -> IO IODeviceType
 handle_dev_type hwnd = do _type <- c_handle_type $ toHANDLE hwnd

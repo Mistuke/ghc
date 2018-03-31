@@ -318,21 +318,15 @@ __handle_type (HANDLE hFile)
       }
 }
 
-void
+bool
 __close_handle (HANDLE hFile)
 {
     switch (__handle_type (hFile))
       {
         case TYPE_SOCKET:
-          {
-            closesocket ((SOCKET)hFile);
-            return;
-          }
+            return closesocket ((SOCKET)hFile) == 0;
         default:
-          {
-            CloseHandle (hFile);
-            return;
-          }
+            return CloseHandle (hFile);
       }
 }
 
