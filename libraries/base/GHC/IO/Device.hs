@@ -81,7 +81,7 @@ class IODevice a where
   isSeekable _ = return False
 
   -- | seek to the specified position in the data.
-  seek :: a -> SeekMode -> Integer -> IO ()
+  seek :: a -> SeekMode -> Integer -> IO Integer
   seek _ _ _ = ioe_unsupportedOperation
 
   -- | return the current position in the data.

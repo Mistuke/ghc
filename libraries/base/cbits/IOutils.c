@@ -330,12 +330,16 @@ __close_handle (HANDLE hFile)
       }
 }
 
-bool __set_file_pointer (HANDLE hFile, int64_t pos, DWORD moveMethod)
+bool __set_file_pointer (HANDLE hFile, int64_t pos, DWORD moveMethod,
+                         int64_t* outPos)
 {
+    LARGE_INTEGER ret;
     LARGE_INTEGER li;
     li.QuadPart = pos;
-    return SetFilePointerEx (hFile, li, NULL, moveMethod)
-           != INVALID_SET_FILE_POINTER;
+    bool success = SetFilePointerEx (hFile, li, &ret, moveMethod)
+                    != INVALID_SET_FILE_POINTER;
+    *outPos = ret.QuadPart;
+    return success;
 }
 
 int64_t __get_file_pointer (HANDLE hFile)
@@ -387,7 +391,8 @@ bool __duplicate_handle (HANDLE hFile, HANDLE* hFileDup)
     }
 }
 
-bool __set_console_pointer (HANDLE hFile, int64_t pos, DWORD moveMethod)
+bool __set_console_pointer (HANDLE hFile, int64_t pos, DWORD moveMethod,
+                            int64_t* outPos)
 {
     CONSOLE_SCREEN_BUFFER_INFO info;
     if(!GetConsoleScreenBufferInfo (hFile, &info))
@@ -417,6 +422,7 @@ bool __set_console_pointer (HANDLE hFile, int64_t pos, DWORD moveMethod)
           break;
     }
 
+    *outPos = pos;
     return SetConsoleCursorPosition (hFile, point);
 }
 

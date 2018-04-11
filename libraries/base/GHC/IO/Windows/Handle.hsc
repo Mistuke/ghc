@@ -260,7 +260,7 @@ foreign import ccall safe "__handle_type"
     c_handle_type :: HANDLE -> IO Int
 
 foreign import ccall safe "__set_file_pointer"
-  c_set_file_pointer :: HANDLE -> CLong -> DWORD -> IO BOOL
+  c_set_file_pointer :: HANDLE -> CLong -> DWORD -> Ptr CLong -> IO BOOL
 
 foreign import ccall safe "__get_file_pointer"
   c_get_file_pointer :: HANDLE -> IO CLong
@@ -275,7 +275,7 @@ foreign import ccall safe "__duplicate_handle"
   c_duplicate_handle :: HANDLE -> Ptr HANDLE -> IO BOOL
 
 foreign import ccall safe "__set_console_pointer"
-  c_set_console_pointer :: HANDLE -> CLong -> DWORD -> IO BOOL
+  c_set_console_pointer :: HANDLE -> CLong -> DWORD -> Ptr CLong -> IO BOOL
 
 foreign import ccall safe "__get_console_pointer"
   c_get_console_pointer :: HANDLE -> IO CLong
@@ -460,10 +460,12 @@ handle_is_seekable hwnd = do
   t <- handle_dev_type hwnd
   return (t == RegularFile || t == RawDevice)
 
-handle_seek :: RawHandle a => a -> SeekMode -> Integer -> IO ()
+handle_seek :: RawHandle a => a -> SeekMode -> Integer -> IO Integer
 handle_seek hwnd mode off =
-  failIfFalse_ "GHC.IO.Handle.handle_seek" $
-      c_set_file_pointer (toHANDLE hwnd) (fromIntegral off) seektype
+  with 0 $ \off_rel -> do
+    failIfFalse_ "GHC.IO.Handle.handle_seek" $
+        c_set_file_pointer (toHANDLE hwnd) (fromIntegral off) seektype off_rel
+    fromIntegral <$> peek off_rel
  where
     seektype :: DWORD
     seektype = case mode of
@@ -507,10 +509,12 @@ handle_set_buffering hwnd value =
   failIfFalse_ "GHC.IO.Handle.handle_set_buffering" $
       c_set_console_buffering (toHANDLE hwnd) value
 
-handle_console_seek :: RawHandle a => a -> SeekMode -> Integer -> IO ()
+handle_console_seek :: RawHandle a => a -> SeekMode -> Integer -> IO Integer
 handle_console_seek hwnd mode off =
-  failIfFalse_ "GHC.IO.Handle.handle_console_seek" $
-      c_set_console_pointer (toHANDLE hwnd) (fromIntegral off) seektype
+  with 0 $ \loc_ptr -> do
+    failIfFalse_ "GHC.IO.Handle.handle_console_seek" $
+      c_set_console_pointer (toHANDLE hwnd) (fromIntegral off) seektype loc_ptr
+    fromIntegral <$> peek loc_ptr
  where
     seektype :: DWORD
     seektype = case mode of

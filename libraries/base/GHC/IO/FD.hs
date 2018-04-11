@@ -342,10 +342,10 @@ isSeekable fd = do
   t <- devType fd
   return (t == RegularFile || t == RawDevice)
 
-seek :: FD -> SeekMode -> Integer -> IO ()
-seek fd mode off = do
-  throwErrnoIfMinus1Retry_ "seek" $
-     c_lseek (fdFD fd) (fromIntegral off) seektype
+seek :: FD -> SeekMode -> Integer -> IO Integer
+seek fd mode off = fromIntegral `fmap`
+  (throwErrnoIfMinus1Retry "seek" $
+     c_lseek (fdFD fd) (fromIntegral off) seektype)
  where
     seektype :: CInt
     seektype = case mode of

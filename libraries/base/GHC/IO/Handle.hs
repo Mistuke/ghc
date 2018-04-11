@@ -405,7 +405,8 @@ hSeek handle mode offset =
 
     if isWriteBuffer buf
         then do flushWriteBuffer handle_
-                IODevice.seek haDevice mode offset
+                new_offset <- IODevice.seek haDevice mode offset
+                writeIORef haCharBuffer buf{ bufOffset = fromIntegral new_offset }
         else do
 
     let r = bufL buf; w = bufR buf
@@ -417,7 +418,8 @@ hSeek handle mode offset =
 
     flushCharReadBuffer handle_
     flushByteReadBuffer handle_
-    IODevice.seek haDevice mode offset
+    new_offset <- IODevice.seek haDevice mode offset
+    writeIORef haCharBuffer buf{ bufOffset = fromIntegral new_offset }
 
 
 -- | Computation 'hTell' @hdl@ returns the current position of the
