@@ -48,7 +48,12 @@ extern char *ctime_r(const time_t *, char *);
 #endif
 
 
-#if defined(_WIN32) && 0 /* Not enabled yet.  */
+#if defined(_WIN32) && 0
+/* Not enabled yet because when you do it'll point out that GHC has a memory
+   corruption. Something is writing outside the allocated memory it requested.
+   This ends up corrupting the book keeping for the new memory manager.
+   Unfortunately I haven't been able to track it down yet. So I've disabled
+   this for now.  */
 #  include <windows.h>
 #  include "win32/WinMem.h"
 #  define MALLOC(N) winmem_malloc(WriteAccess, N)

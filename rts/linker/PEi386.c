@@ -1091,6 +1091,9 @@ lookupSymbolInDLLs ( const SymbolName* lbl )
              If C/C++ compiler sees __declspec(dllimport) ... foo ...
              it generates call *__imp_foo, and __imp_foo here has exactly
              the same semantics as in __imp_foo = GetProcAddress(..., "foo")
+             except that __imp_foo is guaranteed to be within a 32 bit offset.
+             e.g. __imp_foo is a PLT stub and has almost the same semantics as
+             the SystemV PLT stubs.
          */
         if (sym == NULL && strncmp (lbl, "__imp_", 6) == 0) {
             sym = GetProcAddress(o_dll->instance,
@@ -1726,6 +1729,9 @@ ocGetNames_PEi386 ( ObjectCode* oc )
           snprintf (sname, size, "_head_%s", tmp+start);
           sname[size-start]='\0';
           stgFree(tmp);
+
+          /* TODO: Technically we need to create a jump island here.  To ensure the
+             function is addressable within the small code model.  */
           if (!ghciInsertSymbolTable(oc->fileName, symhash, sname,
                                      addr, false, oc))
                return false;
