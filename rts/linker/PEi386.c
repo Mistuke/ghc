@@ -432,23 +432,26 @@ static void releaseOcInfo(ObjectCode* oc) {
     if (!oc) return;
 
     if (oc->info) {
+        if (oc->info->i_trampoline) {
+            winmem_free (ExecuteAccess, oc->info->i_trampoline);
+            oc->info->i_trampoline = NULL;
+        }
         stgFree (oc->info->ch_info);
         stgFree (oc->info->str_tab);
         stgFree (oc->info->symbols);
         stgFree (oc->info);
-
-        winmem_free (ReadAccess | WriteAccess, oc->info->image);
-        oc->info->image = NULL;
         oc->info = NULL;
     }
 
     for (int i = 0; i < oc->n_sections; i++){
         Section *section = &oc->sections[i];
-        if (oc->sections[i].alloc == SECTION_MALLOC)
-            winmem_free (WriteAccess, oc->sections[i].start);
-        else
-            winmem_free (getMemProtectionForKind (oc->sections[i]->info->kind),
-                                                  oc->sections[i].start);
+        if (section->size != 0) {
+            if (oc->sections[i].alloc == SECTION_MALLOC)
+              winmem_free (WriteAccess, oc->sections[i].start);
+            else
+              winmem_free (getMemProtectionForKind (oc->sections[i].info->kind),
+                                                    oc->sections[i].start);
+        }
         oc->sections[i].start = NULL;
         if (section->info) {
             stgFree (section->info->name);
@@ -1193,11 +1196,12 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
    oc->n_sections = info->numberOfSections + 1;
    oc->info       = stgCallocBytes (sizeof(struct ObjectCodeFormatInfo), 1,
                                     "ocVerifyImage_PEi386(info)");
-   oc->info->secBytesTotal = 0;
-   oc->info->secBytesUsed  = 0;
    oc->info->init          = NULL;
    oc->info->finit         = NULL;
    oc->info->ch_info       = info;
+   oc->info->i_trampoline  = NULL;
+   oc->info->symbols       = NULL;
+   oc->info->s_trampoline  = 0;
 
    /* Copy the tables over from object-file. Copying these allows us to
       simplify the indexing and to release the object file immediately after
@@ -1264,30 +1268,17 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
         memcpy (section->info->relocs, reltab + startReloc,
                 noRelocs * sizeof (COFF_reloc));
       }
-
-      oc->info->secBytesTotal += getAlignedValue (section->size, *section);
    }
 
    /* Initialize the last section's info field which contains the .bss
       section, it doesn't need an info so set it to NULL.  */
   sections[info->numberOfSections].info = NULL;
 
-   /* Calculate space for trampolines nearby.
-      We get back 8-byte aligned memory (is that guaranteed?), but
-      the offsets to the sections within the file are all 4 mod 8
-      (is that guaranteed?). We therefore need to offset the image
-      by 4, so that all the pointers are 8-byte aligned, so that
-      pointer tagging works. */
-    /* For 32-bit case we don't need this, hence we use macro
-       PEi386_IMAGE_OFFSET, which equals to 4 for 64-bit case and 0 for
-       32-bit case. */
-    /* We allocate trampolines area for all symbols right behind
-       image data, aligned on 8. */
-    oc->info->trampoline
-      = ((PEi386_IMAGE_OFFSET + oc->info->secBytesTotal + 0x7) & ~0x7);
-    oc->info->secBytesTotal
-      = oc->info->trampoline
-      + info->numberOfSymbols * sizeof(SymbolExtra);
+    /* We allocate trampolines area for all symbols, we don't care where as long
+       as it's 8 bytes aligned and within the 32gb range. */
+    oc->info->s_trampoline = info->numberOfSymbols * sizeof(SymbolExtra);
+    oc->info->i_trampoline
+      = winmem_aligned_malloc (ExecuteAccess, oc->info->s_trampoline, 8);
 
    /* No further verification after this point; only debug printing.  */
    bool is_debug = false;
@@ -1557,33 +1548,22 @@ ocGetNames_PEi386 ( ObjectCode* oc )
             Allocate zeroed space for it */
         bss_sz = section.info->virtualSize;
         if (bss_sz < section.size) { bss_sz = section.size; }
-        bss_sz = section.info->alignment;
-        zspace = stgCallocBytes(1, bss_sz, "ocGetNames_PEi386(anonymous bss)");
-        oc->sections[i].start = getAlignedMemory(zspace, section);
+        zspace = winmem_aligned_malloc (getMemProtectionForKind (kind), bss_sz,
+                                        section.info->alignment);
+        oc->sections[i].start = zspace;
         oc->sections[i].size  = bss_sz;
         addProddableBlock(oc, zspace, bss_sz);
         /* debugBelch("BSS anon section at 0x%x\n", zspace); */
       }
 
-      /* Allocate space for the sections since we have a real oc.
-         We initially mark it the region as non-accessible. But will adjust
-         as we go along.  */
-      if (!oc->info->image) {
-        /* See Note [Memory allocation].  */
-        /* See Note [Pooled Memory Manager].  */
-        oc->info->image
-          = winmem_malloc (ReadAccess | WriteAccess, oc->info->secBytesTotal);
-        if (!oc->info->image)
-          barf ("Could not allocate any memory from pool.");
-      }
-
       ASSERT(section.size == 0 || section.info->virtualSize == 0);
       sz = section.size;
-      if (sz < section.info->virtualSize) sz = section.info->virtualSize;
+      if (sz < section.info->virtualSize)
+        sz = section.info->virtualSize;
 
       start = section.start;
       end   = start + sz - 1;
-      oc->sections[i]->info->kind = kind;
+      oc->sections[i].info->kind = kind;
 
       if (kind != SECTIONKIND_OTHER && end >= start) {
           /* See Note [Section alignment].  */
@@ -1773,21 +1753,22 @@ ocGetNames_PEi386 ( ObjectCode* oc )
 bool
 ocAllocateSymbolExtras_PEi386 ( ObjectCode* oc )
 {
-   /* If the ObjectCode was unloaded we don't need a trampoline, it's likely
-      an import library so we're discarding it earlier.  */
-   if (!oc->info)
-     return false;
+    /* If the ObjectCode was unloaded we don't need a trampoline, it's likely
+       an import library so we're discarding it earlier.  */
+    if (!oc->info)
+      return false;
 
-   const int mask = default_alignment - 1;
-   size_t origin  = oc->info->trampoline;
-   oc->symbol_extras
-     = (SymbolExtra*)(oc->info->image - PEi386_IMAGE_OFFSET
-                   + ((PEi386_IMAGE_OFFSET + origin + mask) & ~mask));
-   oc->first_symbol_extra = 0;
-   COFF_HEADER_INFO *info = oc->info->ch_info;
-   oc->n_symbol_extras    = info->numberOfSymbols;
+    oc->symbol_extras      = (SymbolExtra*)oc->info->i_trampoline;
+    oc->first_symbol_extra = 0;
+    COFF_HEADER_INFO *info = oc->info->ch_info;
+    oc->n_symbol_extras    = info->numberOfSymbols;
 
-   return true;
+#if defined(x86_64_HOST_ARCH)
+    /* Check that memory is within a 32 bit range.  */
+    assert (((uintptr_t)oc->symbol_extras & 0xFFFFFFFF00000000) == 0);
+#endif
+
+    return true;
 }
 
 static size_t
@@ -1808,7 +1789,10 @@ makeSymbolExtra_PEi386( ObjectCode* oc, uint64_t index, size_t s, char* symbol )
         // jmp *-14(%rip)
         static uint8_t jmp[] = { 0xFF, 0x25, 0xF2, 0xFF, 0xFF, 0xFF };
         extra->addr = (uint64_t)s;
+        AccessType_t access = ExecuteAccess;
+        winmem_memory_unprotect (&access);
         memcpy(extra->jumpIsland, jmp, 6);
+        winmem_memory_protect (&access);
     }
 
     return (size_t)extra->jumpIsland;
@@ -2097,19 +2081,14 @@ SymbolAddr *lookupSymbol_PEi386(SymbolName *lbl)
 static void
 addCopySection (ObjectCode *oc, Section *s, SectionKind kind,
                 SectionAlloc alloc, void* start, StgWord size) {
-  char* pos      = oc->info->image + oc->info->secBytesUsed;
-  char* newStart = (char*)getAlignedMemory ((uint8_t*)pos, *s);
-
    /* Disable memory protection while we load code, we'll need WRITE access.  */
   AccessType_t type = getMemProtectionForKind (kind);
+  char* ptr = winmem_aligned_malloc (type, size, getSectionAlignment (*s));
   winmem_memory_unprotect (&type);
-  memcpy (newStart, start, size);
+  memcpy (ptr, start, size);
   winmem_memory_protect (&type);
-  uintptr_t offset = (uintptr_t)newStart - (uintptr_t)oc->info->image;
-  oc->info->secBytesUsed = (size_t)offset + size;
-  start = newStart;
 
-  addSection (s, kind, alloc, start, size, 0, 0, 0);
+  addSection (s, kind, alloc, ptr, size, 0, 0, 0);
 }
 
 /* -----------------------------------------------------------------------------

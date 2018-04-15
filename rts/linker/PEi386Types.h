@@ -22,10 +22,8 @@ struct SectionFormatInfo {
     SectionKind kind;
  };
 struct ObjectCodeFormatInfo {
-    size_t secBytesTotal;
-    size_t secBytesUsed;
-    char* image;
-    size_t trampoline;
+    char* i_trampoline;
+    size_t s_trampoline;
     Section* init;
     Section* finit;
     COFF_HEADER_INFO* ch_info;

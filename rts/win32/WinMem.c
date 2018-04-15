@@ -221,7 +221,7 @@ void winmem_deinit ()
 #endif
 }
 
-void* winmem_malloc (AccessType_t type, size_t n)
+void* winmem_aligned_malloc (AccessType_t type, size_t n, size_t alignment)
 {
   if (!initialized)
     return NULL;
@@ -245,7 +245,7 @@ void* winmem_malloc (AccessType_t type, size_t n)
     }
 
   winmem_memory_unprotect (&type);
-  void* result = tlsf_malloc (manager->m_alloc, n);
+  void* result = tlsf_malloc (manager->m_alloc, n, alignment);
   winmem_memory_protect (&type);
 
   RELEASE_LOCK(&winmem_mutex);
@@ -253,7 +253,8 @@ void* winmem_malloc (AccessType_t type, size_t n)
   return result;
 }
 
-void* winmem_realloc (AccessType_t type, void* p, size_t n)
+void* winmem_aligned_realloc (AccessType_t type, void* p, size_t n,
+                              size_t alignment)
 {
   if (!initialized)
     return NULL;
@@ -275,7 +276,7 @@ void* winmem_realloc (AccessType_t type, void* p, size_t n)
     }
 
   winmem_memory_unprotect (&type);
-  void* result = tlsf_realloc (manager->m_alloc, p, n);
+  void* result = tlsf_realloc (manager->m_alloc, p, n, alignment);
   winmem_memory_protect (&type);
 
   RELEASE_LOCK(&winmem_mutex);
@@ -283,7 +284,8 @@ void* winmem_realloc (AccessType_t type, void* p, size_t n)
   return result;
 }
 
-void* winmem_calloc (AccessType_t type, size_t n, size_t m)
+void* winmem_aligned_calloc (AccessType_t type, size_t n, size_t m,
+                             size_t alignment)
 {
   (void)n;
   if (!initialized)
@@ -306,12 +308,30 @@ void* winmem_calloc (AccessType_t type, size_t n, size_t m)
     }
 
   winmem_memory_unprotect (&type);
-  void* result = tlsf_calloc (manager->m_alloc, m);
+  void* result = tlsf_calloc (manager->m_alloc, m, alignment);
   winmem_memory_protect (&type);
 
   RELEASE_LOCK(&winmem_mutex);
 
   return result;
+}
+
+/* Allocate N bytes of TYPE protected memory.  */
+void* winmem_malloc (AccessType_t type, size_t n)
+{
+  return winmem_aligned_malloc (type, n, 0);
+}
+
+/* Reallocate N bytes of TYPE protected memory at P.  */
+void* winmem_realloc (AccessType_t type, void* p, size_t n)
+{
+  return winmem_aligned_realloc (type, p, n, 0);
+}
+
+/* Allocate N bytes of TYPE protected memory.  */
+void* winmem_calloc (AccessType_t type, size_t n, size_t m)
+{
+  return winmem_aligned_calloc (type, n, m, 0);
 }
 
 void winmem_free (AccessType_t type, void* memptr)

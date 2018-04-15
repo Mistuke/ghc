@@ -95,22 +95,26 @@ typedef struct tlsf_s* tlsf_t;
 typedef void* (*tlsf_map_t)(size_t* size, void* user);
 typedef void  (*tlsf_unmap_t)(void* mem, size_t size, void* user);
 
-tlsf_t tlsf_create(tlsf_map_t map, tlsf_unmap_t unmap, void* user);
-void   tlsf_destroy(tlsf_t t);
-void   tlsf_free(tlsf_t t, void* mem);
-void*  tlsf_mallocx(tlsf_t t, size_t size, int flags);
-void*  tlsf_reallocx(tlsf_t t, void* mem, size_t size, int flags);
+tlsf_t tlsf_create (tlsf_map_t map, tlsf_unmap_t unmap, void* user);
+void   tlsf_destroy (tlsf_t t);
+void   tlsf_free (tlsf_t t, void* mem);
+void*  tlsf_mallocx (tlsf_t t, size_t size, size_t alignment, int flags);
+void*  tlsf_reallocx (tlsf_t t, void* mem, size_t size, size_t alignment,
+                      int flags);
 
-static inline void* tlsf_malloc(tlsf_t t, size_t size) {
-  return tlsf_mallocx(t, size, TLSF_DEFAULT);
+static inline void*
+tlsf_malloc (tlsf_t t, size_t size, size_t alignment) {
+  return tlsf_mallocx (t, size, alignment, TLSF_DEFAULT);
 }
 
-static inline void* tlsf_calloc(tlsf_t t, size_t size) {
-  return tlsf_mallocx(t, size, TLSF_ZERO);
+static inline void*
+tlsf_calloc (tlsf_t t, size_t size, size_t alignment) {
+  return tlsf_mallocx (t, size, alignment, TLSF_ZERO);
 }
 
-static inline void* tlsf_realloc(tlsf_t t, void* mem, size_t size) {
-  return tlsf_reallocx(t, mem, size, TLSF_DEFAULT);
+static inline void*
+tlsf_realloc (tlsf_t t, void* mem, size_t size, size_t alignment) {
+  return tlsf_reallocx (t, mem, size, alignment, TLSF_DEFAULT);
 }
 
 #ifdef TLSF_STATS
@@ -123,12 +127,12 @@ typedef struct {
   size_t free_count;
 } tlsf_stats_t;
 
-const tlsf_stats_t* tlsf_stats(tlsf_t t);
-void tlsf_printstats(tlsf_t t);
+const tlsf_stats_t* tlsf_stats (tlsf_t t);
+void tlsf_printstats (tlsf_t t);
 #endif
 
 #ifdef TLSF_DEBUG
-void tlsf_check(tlsf_t t);
+void tlsf_check (tlsf_t t);
 #endif
 
 #ifdef __cplusplus

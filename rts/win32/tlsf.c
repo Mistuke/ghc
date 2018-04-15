@@ -236,6 +236,14 @@ static inline unsigned int tlsf_fls(size_t x) {
     (x ? 8 * sizeof (size_t) - (uint32_t)__builtin_clzll(x) - 1 : 0);
 }
 
+static inline uintptr_t align_to_ptr (uintptr_t value, size_t alignment) {
+  if (0 == alignment)
+    return value;
+
+  uintptr_t mask = (uintptr_t)alignment - 1;
+  return ((uintptr_t)value + mask) & ~mask;
+}
+
 /*
  * block_t member functions.
 */
@@ -472,23 +480,24 @@ static void block_insert(tlsf_t t, block_t block) {
 }
 
 // Split a block into two, the second of which is free.
-static block_t block_split(block_t block, size_t size) {
+static block_t block_split(block_t block, size_t size, size_t offset) {
   // Calculate the amount of space left in the remaining block.
+  size_t n_size = size + offset;
   const block_t remaining
-      = OFFSET_TO_BLOCK(block_to_ptr(block), size - BLOCK_OVERHEAD);
+      = OFFSET_TO_BLOCK(block_to_ptr(block), n_size - BLOCK_OVERHEAD);
 
-  const size_t remain_size = block_size(block) - (size + BLOCK_OVERHEAD);
+  const size_t remain_size = block_size(block) - (n_size + BLOCK_OVERHEAD);
 
   TL_ASSERT(block_to_ptr(remaining) == align_ptr(block_to_ptr(remaining)),
          "remaining block not aligned properly");
-  TL_ASSERT(block_size(block) == remain_size + size + BLOCK_OVERHEAD,
+  TL_ASSERT(block_size(block) == remain_size + n_size + BLOCK_OVERHEAD,
          "remaining block size is wrong");
   TL_ASSERT(remain_size >= BLOCK_SIZE_MIN, "block split with invalid size");
 
   remaining->header = remain_size;
 
   block_set_free(remaining, true);
-  block_set_size(block, size);
+  block_set_size(block, n_size);
 
   return remaining;
 }
@@ -530,10 +539,15 @@ static block_t block_merge_next(tlsf_t t, block_t block) {
 }
 
 // Trim any trailing block space off the end of a block, return to pool.
-static void block_trim_free(tlsf_t t, block_t block, size_t size) {
+static void
+block_trim_free(tlsf_t t, block_t block, size_t size, size_t alignment) {
+  size_t n_size = size + alignment;
   TL_ASSERT(block_is_free(block), "block must be free");
-  if (block_can_split(block, size)) {
-    block_t remaining = block_split(block, size);
+  if (block_can_split(block, n_size)) {
+    uintptr_t old_ptr = (uintptr_t)block_to_ptr (block);
+    uintptr_t new_ptr = align_to_ptr (old_ptr, alignment);
+    size_t offset     = (size_t)(new_ptr - old_ptr);
+    block_t remaining = block_split(block, size, offset);
     block_link_next(block);
     block_set_prev_free(remaining, true);
     block_insert(t, remaining);
@@ -545,7 +559,7 @@ static void block_trim_used(tlsf_t t, block_t block, size_t size) {
   TL_ASSERT(!block_is_free(block), "block must be used");
   if (block_can_split(block, size)) {
     // If the next block is free, we must coalesce.
-    block_t remaining = block_split(block, size);
+    block_t remaining = block_split(block, size, 0);
     block_set_prev_free(remaining, false);
 
     remaining = block_merge_next(t, remaining);
@@ -675,23 +689,27 @@ void tlsf_destroy(tlsf_t t) {
   }
 }
 
-void* tlsf_mallocx(tlsf_t t, size_t size, int flags) {
+void* tlsf_mallocx(tlsf_t t, size_t size, size_t alignment, int flags) {
   TL_ASSERT((flags & ~(TLSF_ZERO | TLSF_NOMAP)) == 0, "Invalid flags");
 
+  /* In order to align the pointer we need at least N bytes, where N is the
+     alignment.  */
+  size_t n_size = size + alignment;
+  n_size = adjust_size(n_size);
   size = adjust_size(size);
 
-  block_t block = block_locate_free(t, size);
+  block_t block = block_locate_free(t, n_size);
   if (!block) {
     if (flags & TLSF_NOMAP)
       return 0;
-    size_t minsize = POOL_OVERHEAD + BLOCK_OVERHEAD + round_block_size(size);
+    size_t minsize = POOL_OVERHEAD + BLOCK_OVERHEAD + round_block_size(n_size);
     size_t memsize = minsize;
     void* mem = t->map(&memsize, t->user);
     if (!mem)
       return 0;
     TL_ASSERT(memsize >= minsize, "not enough memory allocated");
     add_pool(t, (char*)mem, memsize)->header |= BLOCK_POOL_BIT;
-    block = block_locate_free(t, size);
+    block = block_locate_free(t, n_size);
   }
   TL_ASSERT(block, "No block found");
 
@@ -699,7 +717,7 @@ void* tlsf_mallocx(tlsf_t t, size_t size, int flags) {
   ++t->stats.malloc_count;
 #endif
 
-  block_trim_free(t, block, size);
+  block_trim_free(t, block, size, alignment);
   block_set_free(block, false);
 
   void* p = block_to_ptr(block);
@@ -750,7 +768,8 @@ void tlsf_free(tlsf_t t, void* mem) {
  * - an extended buffer size will leave the newly-allocated area with
  *   contents undefined
  */
-void* tlsf_reallocx(tlsf_t t, void* mem, size_t size, int flags) {
+void* tlsf_reallocx(tlsf_t t, void* mem, size_t size, size_t alignment,
+                    int flags) {
   TL_ASSERT((flags & ~(TLSF_ZERO | TLSF_NOMAP | TLSF_INPLACE)) == 0,
          "Invalid flags");
 
@@ -762,7 +781,7 @@ void* tlsf_reallocx(tlsf_t t, void* mem, size_t size, int flags) {
 
   // Requests with NULL pointers are treated as malloc.
   if (!mem)
-    return tlsf_mallocx(t, size, flags & (TLSF_ZERO | TLSF_NOMAP));
+    return tlsf_mallocx(t, size, alignment, flags & (TLSF_ZERO | TLSF_NOMAP));
 
   block_t block = block_from_ptr(mem);
   block_t next = block_next(block);
@@ -780,7 +799,8 @@ void* tlsf_reallocx(tlsf_t t, void* mem, size_t size, int flags) {
   if (size > cursize && (!block_is_free(next) || size > combined)) {
     if (flags & TLSF_INPLACE)
       return 0;
-    char* p = (char*)tlsf_mallocx(t, size, flags & (TLSF_NOMAP | TLSF_NOMAP));
+    char* p = (char*)tlsf_mallocx(t, size, alignment,
+                                  flags & (TLSF_NOMAP | TLSF_NOMAP));
     if (p) {
       memcpy(p, mem, cursize);
       if (flags & TLSF_ZERO)
