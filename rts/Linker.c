@@ -1253,7 +1253,7 @@ mkOc( pathchar *path, char *image, int imageSize,
    ObjectCode* oc;
 
    IF_DEBUG(linker, debugBelch("mkOc: start\n"));
-   oc = stgMallocBytes(sizeof(ObjectCode), "mkOc(oc)");
+   oc = stgCallocBytes(1, sizeof(ObjectCode), "mkOc(oc)");
 
    oc->info = NULL;
 
@@ -1281,22 +1281,24 @@ mkOc( pathchar *path, char *image, int imageSize,
 
    setOcInitialStatus( oc );
 
-   oc->fileSize          = imageSize;
-   oc->symbols           = NULL;
-   oc->n_sections        = 0;
-   oc->sections          = NULL;
-   oc->proddables        = NULL;
-   oc->stable_ptrs       = NULL;
+   oc->fileSize           = imageSize;
+   oc->symbols            = NULL;
+   oc->n_sections         = 0;
+   oc->sections           = NULL;
+   oc->proddables         = NULL;
+   oc->stable_ptrs        = NULL;
 #if defined(NEED_SYMBOL_EXTRAS)
-   oc->symbol_extras     = NULL;
+   oc->symbol_extras      = NULL;
 #endif
-   oc->imageMapped       = mapped;
+   oc->imageMapped        = mapped;
 
-   oc->misalignment      = misalignment;
-   oc->extraInfos        = NULL;
+   oc->misalignment       = misalignment;
+   oc->extraInfos         = NULL;
+   oc->n_symbol_extras    = 0;
+   oc->first_symbol_extra = 0;
 
    /* chain it onto the list of objects */
-   oc->next              = NULL;
+   oc->next               = NULL;
 
    IF_DEBUG(linker, debugBelch("mkOc: done\n"));
    return oc;

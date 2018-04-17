@@ -445,7 +445,7 @@ static void releaseOcInfo(ObjectCode* oc) {
 
     for (int i = 0; i < oc->n_sections; i++){
         Section *section = &oc->sections[i];
-        if (section->size != 0) {
+        if (section->size != 0 && !oc->image) {
             if (oc->sections[i].alloc == SECTION_MALLOC)
               winmem_free (WriteAccess, oc->sections[i].start);
             else
