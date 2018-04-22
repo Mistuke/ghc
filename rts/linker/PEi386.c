@@ -446,11 +446,11 @@ static void releaseOcInfo(ObjectCode* oc) {
     for (int i = 0; i < oc->n_sections; i++){
         Section *section = &oc->sections[i];
         if (section->size != 0 && !oc->image) {
-            if (oc->sections[i].alloc == SECTION_MALLOC)
-              winmem_free (WriteAccess, oc->sections[i].start);
-            else
-              winmem_free (getMemProtectionForKind (oc->sections[i].info->kind),
-                                                    oc->sections[i].start);
+            //if (oc->sections[i].alloc == SECTION_MALLOC)
+            //  winmem_free (WriteAccess, oc->sections[i].start);
+            //else
+            //  winmem_free (getMemProtectionForKind (oc->sections[i].info->kind),
+            //                                        oc->sections[i].start);
         }
         oc->sections[i].start = NULL;
         if (section->info) {
@@ -1823,8 +1823,8 @@ ocResolve_PEi386 ( ObjectCode* oc )
    for (uint32_t i = 0; i < numberOfSections; i++) {
       Section section = oc->sections[i];
 
-      /* Ignore sections called which contain stabs debugging information. */
-      if (section.kind == SECTIONKIND_DEBUG)
+      /* We only have relocations in executable sections. */
+      if (getMemProtectionForKind (section.kind) & ExecuteAccess)
            continue;
 
       noRelocs = section.info->noRelocs;
@@ -1968,9 +1968,17 @@ ocResolve_PEi386 ( ObjectCode* oc )
          }
 
       }
+
+    /* Flush the instruction cache because we've changed executable memory.  We
+       need to ensure cache coherency.  Memory with the NX bit needs to be
+       manually kept current.  This call is not optional.  */
+    if (!FlushInstructionCache (GetCurrentProcess (),
+                                section.start, section.size))
+        barf ("Could not flush instruction cache. Instructions may be stale, "
+              "aborting because I'm not sure.");
    }
 
-   /* Relock pages.  */
+   /* Re-lock pages.  */
    winmem_memory_protect (NULL);
    IF_DEBUG(linker, debugBelch("completed %" PATH_FMT "\n", oc->fileName));
    return true;
@@ -2086,6 +2094,7 @@ addCopySection (ObjectCode *oc, Section *s, SectionKind kind,
   char* ptr = winmem_aligned_malloc (type, size, getSectionAlignment (*s));
   winmem_memory_unprotect (&type);
   memcpy (ptr, start, size);
+  printf ("new: %p => %p, size: %llu, type: %d, alignment: %u (==%d)\n", start, ptr, size, (int)type, getSectionAlignment (*s), ((uintptr_t)ptr) % getSectionAlignment (*s));
   winmem_memory_protect (&type);
 
   addSection (s, kind, alloc, ptr, size, 0, 0, 0);

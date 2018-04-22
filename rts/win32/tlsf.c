@@ -717,6 +717,7 @@ void* tlsf_mallocx(tlsf_t t, size_t size, size_t alignment, int flags) {
   ++t->stats.malloc_count;
 #endif
 
+  /* This returns a pointer that's alignable.  */
   block_trim_free(t, block, size, alignment);
   block_set_free(block, false);
 
@@ -726,6 +727,9 @@ void* tlsf_mallocx(tlsf_t t, size_t size, size_t alignment, int flags) {
 
   //printf ("malloc >>\n");
   //printBlocks (t);
+  /* So align it before we return it, though free would be broken now depending
+     on how we convert from ptr to blocks.  But one problem at a time please..  */
+  p = (void*) align_to_ptr ((uintptr_t)p, alignment);
   return p;
 }
 

@@ -163,8 +163,8 @@ static void* winmem_cback_map (size_t* size, void* user)
 
   if (info->m_alloc)
     {
-      //tlsf_check (info->m_alloc);
-      //tlsf_printstats (info->m_alloc);
+      tlsf_check (info->m_alloc);
+      tlsf_printstats (info->m_alloc);
     }
   return cache;
 }
@@ -173,9 +173,9 @@ static void winmem_cback_unmap (void* mem, size_t size, void* user)
 {
   (void)user;
   VirtualFree (mem, 0, (uint32_t)size);
-  //userInfo_t* info   = (userInfo_t*)user;
-  //tlsf_check (info->m_alloc);
-  //tlsf_printstats (info->m_alloc);
+  userInfo_t* info   = (userInfo_t*)user;
+  tlsf_check (info->m_alloc);
+  tlsf_printstats (info->m_alloc);
 }
 
 void winmem_init (void)
