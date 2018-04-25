@@ -1824,8 +1824,12 @@ ocResolve_PEi386 ( ObjectCode* oc )
       Section section = oc->sections[i];
 
       /* We only have relocations in executable sections. */
-      if (getMemProtectionForKind (section.kind) & ExecuteAccess)
-           continue;
+      if ((getMemProtectionForKind (section.kind) & ExecuteAccess)
+          != ExecuteAccess)
+        continue;
+
+     if (SECTIONKIND_INIT_ARRAY == section.kind)
+       DebugBreak ();
 
       noRelocs = section.info->noRelocs;
       for (uint32_t j = 0; j < noRelocs; j++) {
@@ -1969,9 +1973,11 @@ ocResolve_PEi386 ( ObjectCode* oc )
 
       }
 
-    /* Flush the instruction cache because we've changed executable memory.  We
-       need to ensure cache coherency.  Memory with the NX bit needs to be
-       manually kept current.  This call is not optional.  */
+    /* Flush the instruction cache because we've changed executable memory and
+       are tryng to execute it.  Due to the lazy loading nature of the lazy
+       linker we might really actually be just about to execute the code, so we
+       need to flush the cache to ensure cache coherency.
+       This call is not optional.  */
     if (!FlushInstructionCache (GetCurrentProcess (),
                                 section.start, section.size))
         barf ("Could not flush instruction cache. Instructions may be stale, "
@@ -2094,7 +2100,6 @@ addCopySection (ObjectCode *oc, Section *s, SectionKind kind,
   char* ptr = winmem_aligned_malloc (type, size, getSectionAlignment (*s));
   winmem_memory_unprotect (&type);
   memcpy (ptr, start, size);
-  printf ("new: %p => %p, size: %llu, type: %d, alignment: %u (==%d)\n", start, ptr, size, (int)type, getSectionAlignment (*s), ((uintptr_t)ptr) % getSectionAlignment (*s));
   winmem_memory_protect (&type);
 
   addSection (s, kind, alloc, ptr, size, 0, 0, 0);
