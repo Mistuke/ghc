@@ -1828,9 +1828,6 @@ ocResolve_PEi386 ( ObjectCode* oc )
           != ExecuteAccess)
         continue;
 
-     if (SECTIONKIND_INIT_ARRAY == section.kind)
-       DebugBreak ();
-
       noRelocs = section.info->noRelocs;
       for (uint32_t j = 0; j < noRelocs; j++) {
          COFF_symbol* sym;
