@@ -422,16 +422,7 @@ hSeek handle mode offset =
     flushByteReadBuffer handle_
     -- read the updated values
     bbuf2 <- readIORef haByteBuffer
-    --posn <- IODevice.tell haDevice
-    --debugIO $ "hSeek before: " ++ show posn
-    new_offset <-
-      case mode of
-        RelativeSeek -> do let val = fromIntegral (bufOffset bbuf2) + offset
-                           if val >= 0
-                             then return val
-                             else IODevice.seek haDevice SeekFromEnd val
-        AbsoluteSeek -> return $ fromIntegral offset
-        _            -> IODevice.seek haDevice mode offset
+    new_offset <- IODevice.seek haDevice mode offset
     debugIO $ "hSeek after: " ++ show new_offset
     writeIORef haByteBuffer bbuf2{ bufOffset = fromIntegral new_offset }
 
@@ -456,6 +447,8 @@ hTell handle =
       flushCharBuffer handle_
 
       bbuf <- readIORef haByteBuffer
+      debugIO ("hTell bbuf (elems=" ++ show (bufferElems bbuf) ++ ")"
+               ++ summaryBuffer bbuf)
 
       let real_posn_raw
            | isWriteBuffer bbuf = posn + fromIntegral (bufferElems bbuf)
@@ -471,7 +464,7 @@ hTell handle =
       -- file offset bookkeeping already.
       sub <- getIoSubSystem
       let real_posn = if sub == IoNative
-                         then real_posn_raw + fromIntegral (bufferOffset bbuf)
+                         then fromIntegral $ bufOffset bbuf - fromIntegral (bufR bbuf - bufL bbuf)
                          else real_posn_raw
 #endif
 
