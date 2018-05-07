@@ -73,6 +73,7 @@ import GHC.Ptr
 import GHC.Word
 import GHC.Show
 import GHC.Real
+import GHC.List
 import Foreign.C.Types
 import Foreign.ForeignPtr
 import Foreign.Storable
@@ -289,9 +290,13 @@ foreign import ccall unsafe "memmove"
 
 summaryBuffer :: Buffer a -> String
 summaryBuffer !buf  -- Strict => slightly better code
-   = "buf" ++ show (bufSize buf)
+   = ppr (show $ bufRaw buf) ++ "@buf" ++ show (bufSize buf)
    ++ "(" ++ show (bufL buf) ++ "-" ++ show (bufR buf) ++ ")"
    ++ " (>=" ++ show (bufOffset buf) ++ ")"
+  where ppr :: String -> String
+        ppr ('0':'x':xs) = let p = dropWhile (=='0') xs
+                           in if null p then "0x0" else '0':'x':p
+        ppr x = x
 
 -- INVARIANTS on Buffers:
 --   * r <= w

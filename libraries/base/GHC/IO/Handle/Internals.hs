@@ -62,6 +62,7 @@ import GHC.IO.Buffer
 import GHC.IO.BufferedIO (BufferedIO)
 import GHC.IO.Exception
 import GHC.IO.Device (IODevice, RawIO, SeekMode(..))
+import GHC.IO.SubSystem (IoSubSystem(..), withIoSubSystem)
 import qualified GHC.IO.Device as IODevice
 import qualified GHC.IO.BufferedIO as Buffered
 
@@ -582,10 +583,11 @@ flushCharReadBuffer Handle__{..} = do
       (bbuf1,cbuf1) <- (streamEncode decoder) bbuf0
                                cbuf0{ bufL=0, bufR=0, bufSize = bufL cbuf0 }
 
-      debugIO ("finished, bbuf=" ++ summaryBuffer bbuf1 ++
+      let bbuf2 = bbuf1 -- {bufOffset = bufOffset bbuf1 - fromIntegral (bufL bbuf1)}
+      debugIO ("finished, bbuf=" ++ summaryBuffer bbuf2 ++
                " cbuf=" ++ summaryBuffer cbuf1)
 
-      writeIORef haByteBuffer bbuf1
+      writeIORef haByteBuffer bbuf2
 
 
 -- When flushing the byte read buffer, we seek backwards by the number
@@ -603,11 +605,18 @@ flushByteReadBuffer h_@Handle__{..} = do
   when (not seekable) $ ioe_cannotFlushNotSeekable
 
   let seek = negate (bufR bbuf - bufL bbuf)
+  let offset = bufOffset bbuf - fromIntegral (bufR bbuf - bufL bbuf)
 
   debugIO ("flushByteReadBuffer: new file offset = " ++ show seek)
-  IODevice.seek haDevice RelativeSeek (fromIntegral seek)
+  debugIO ("flushByteReadBuffer: " ++ summaryBuffer bbuf)
 
-  writeIORef haByteBuffer bbuf{ bufL=0, bufR=0, bufOffset=0 }
+  let mIOSeek   = IODevice.seek haDevice RelativeSeek (fromIntegral seek)
+  -- win-io doesn't need this, but it allows us to error out on invalid offsets
+  let winIOSeek = IODevice.seek haDevice AbsoluteSeek (fromIntegral offset)
+
+  mIOSeek <!> winIOSeek  -- execute one of these two seek functions
+
+  writeIORef haByteBuffer bbuf{ bufL=0, bufR=0, bufOffset=offset }
 
 -- ----------------------------------------------------------------------------
 -- Making Handles
@@ -853,7 +862,9 @@ readTextDevice h_@Handle__{..} cbuf = do
   bbuf1 <- if not (isEmptyBuffer bbuf0)
               then return bbuf0
               else do
+                   debugIO $ "readBuf at " ++ show (bufferOffset bbuf0)
                    (r,bbuf1) <- Buffered.fillReadBuffer haDevice bbuf0
+                   debugIO $ "readBuf after " ++ show (bufferOffset bbuf1)
                    if r == 0 then ioe_EOF else do  -- raise EOF
                    return bbuf1
 

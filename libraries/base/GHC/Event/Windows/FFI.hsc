@@ -190,7 +190,7 @@ zeroOverlapped lpol = fillBytes lpol 0 #{size OVERLAPPED}
 -- | Set the offset field in an OVERLAPPED structure.
 pokeOffsetOverlapped :: LPOVERLAPPED -> Word64 -> IO ()
 pokeOffsetOverlapped lpol offset = do
-  let (offsetLow, offsetHigh) = Win32.ddwordToDwords offset
+  let (offsetHigh, offsetLow) = Win32.ddwordToDwords offset
   #{poke OVERLAPPED, Offset} lpol offsetLow
   #{poke OVERLAPPED, OffsetHigh} lpol offsetHigh
 {-# INLINE pokeOffsetOverlapped #-}

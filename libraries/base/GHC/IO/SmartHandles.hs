@@ -1,6 +1,5 @@
-{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE Trustworthy       #-}
 {-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE CPP #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -32,22 +31,6 @@ import qualified GHC.IO.Handle.FD as POSIX
 #if defined(mingw32_HOST_OS)
 import qualified GHC.IO.Handle.Windows as Win
 #endif
-
-infixl 7 <!>
-
-conditional :: a -> a -> a
-conditional posix windows = withIoSubSystem' sub
-  where
-    sub = \s -> case s of
-                  IoPOSIX -> posix
-#if defined(mingw32_HOST_OS)
-                  IoNative -> windows
-#else
-                  IoNative -> posix
-#endif
-
-(<!>) :: a -> a -> a
-(<!>) = conditional
 
 stdin :: Handle
 stdin = POSIX.stdin <!> Win.stdin

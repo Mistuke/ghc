@@ -1,5 +1,6 @@
-{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE Trustworthy       #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE CPP               #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -21,7 +22,9 @@ module GHC.IO.SubSystem (
   withIoSubSystem,
   withIoSubSystem',
   whenIoSubSystem,
-  IoSubSystem(..)
+  IoSubSystem(..),
+  conditional,
+  (<!>)
  ) where
 
 import GHC.Base
@@ -32,6 +35,22 @@ import GHC.IORef
 import GHC.RTS.Flags
 
 import Control.Monad
+
+infixl 7 <!>
+
+conditional :: a -> a -> a
+conditional posix windows = withIoSubSystem' sub
+  where
+    sub = \s -> case s of
+                  IoPOSIX -> posix
+#if defined(mingw32_HOST_OS)
+                  IoNative -> windows
+#else
+                  IoNative -> posix
+#endif
+
+(<!>) :: a -> a -> a
+(<!>) = conditional
 
 ioSubSystem :: IORef IoSubSystem
 ioSubSystem = unsafePerformIO sub

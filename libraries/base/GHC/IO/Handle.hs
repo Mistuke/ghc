@@ -401,25 +401,39 @@ hSeek :: Handle -> SeekMode -> Integer -> IO ()
 hSeek handle mode offset =
     wantSeekableHandle "hSeek" handle $ \ handle_@Handle__{..} -> do
     debugIO ("hSeek " ++ show (mode,offset))
-    buf <- readIORef haCharBuffer
+    cbuf <- readIORef haCharBuffer
+    bbuf <- readIORef haByteBuffer
+    debugIO $ "hSeek - bbuf:" ++ summaryBuffer bbuf
+    debugIO $ "hSeek - cbuf:" ++ summaryBuffer cbuf
 
-    if isWriteBuffer buf
+    if isWriteBuffer cbuf
         then do flushWriteBuffer handle_
                 new_offset <- IODevice.seek haDevice mode offset
-                writeIORef haCharBuffer buf{ bufOffset = fromIntegral new_offset }
+                writeIORef haByteBuffer bbuf{ bufOffset = fromIntegral new_offset }
         else do
 
-    let r = bufL buf; w = bufR buf
+    let r = bufL cbuf; w = bufR cbuf
     if mode == RelativeSeek && isNothing haDecoder &&
        offset >= 0 && offset < fromIntegral (w - r)
-        then writeIORef haCharBuffer buf{ bufL = r + fromIntegral offset,
-                                          bufOffset = fromIntegral offset }
+        then writeIORef haCharBuffer cbuf{ bufL = r + fromIntegral offset }
         else do
 
     flushCharReadBuffer handle_
     flushByteReadBuffer handle_
-    new_offset <- IODevice.seek haDevice mode offset
-    writeIORef haCharBuffer buf{ bufOffset = fromIntegral new_offset }
+    -- read the updated values
+    bbuf2 <- readIORef haByteBuffer
+    --posn <- IODevice.tell haDevice
+    --debugIO $ "hSeek before: " ++ show posn
+    new_offset <-
+      case mode of
+        RelativeSeek -> do let val = fromIntegral (bufOffset bbuf2) + offset
+                           if val >= 0
+                             then return val
+                             else IODevice.seek haDevice SeekFromEnd val
+        AbsoluteSeek -> return $ fromIntegral offset
+        _            -> IODevice.seek haDevice mode offset
+    debugIO $ "hSeek after: " ++ show new_offset
+    writeIORef haByteBuffer bbuf2{ bufOffset = fromIntegral new_offset }
 
 
 -- | Computation 'hTell' @hdl@ returns the current position of the
