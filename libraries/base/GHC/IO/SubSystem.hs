@@ -12,7 +12,8 @@
 -- Stability   :  internal
 -- Portability :  non-portable
 --
--- The SubSystem control
+-- The SubSystem control interface.  These methods can be used to disambiguate
+-- between the two operations.
 --
 -----------------------------------------------------------------------------
 

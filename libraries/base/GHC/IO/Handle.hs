@@ -478,7 +478,7 @@ hTell handle =
       cbuf <- readIORef haCharBuffer
       debugIO ("\nhGetPosn: (posn, real_posn) = " ++ show (posn, real_posn))
       debugIO ("   cbuf: " ++ summaryBuffer cbuf ++
-            "   bbuf: " ++ summaryBuffer bbuf)
+               "   bbuf: " ++ summaryBuffer bbuf)
 
       return real_posn
 

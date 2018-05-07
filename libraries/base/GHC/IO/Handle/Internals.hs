@@ -62,7 +62,7 @@ import GHC.IO.Buffer
 import GHC.IO.BufferedIO (BufferedIO)
 import GHC.IO.Exception
 import GHC.IO.Device (IODevice, RawIO, SeekMode(..))
-import GHC.IO.SubSystem (IoSubSystem(..), withIoSubSystem)
+import GHC.IO.SubSystem ((<!>))
 import qualified GHC.IO.Device as IODevice
 import qualified GHC.IO.BufferedIO as Buffered
 
