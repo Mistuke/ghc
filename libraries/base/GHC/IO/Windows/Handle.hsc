@@ -69,6 +69,7 @@ import GHC.IO.Windows.Encoding (withGhcInternalToUTF16, withUTF16ToGhcInternal)
 import GHC.IO.Windows.Paths (getDevicePath)
 import GHC.IO.Handle.Internals (debugIO)
 import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
+import GHC.Event.Windows.FFI (overlappedIOStatus)
 import Foreign.Ptr
 import Foreign.C
 import Foreign.C.Types
@@ -317,7 +318,13 @@ hwndRead hwnd ptr offset bytes
           do err <- Win32.getLastError
              case () of
               _ | err == #{const ERROR_IO_PENDING} -> return Nothing
-                | otherwise -> failWith "ReadFile failed" err
+                | otherwise -> do
+                    success <- overlappedIOStatus lpOverlapped
+                -- Check to see if the operation was completed on a
+                -- non-overlapping handle. e.g. stdio redirection or similar.
+                    if success == #{const ERROR_SUCCESS}
+                       then return Nothing
+                       else failWith "ReadFile failed" err
 
     completionCB err dwBytes
       | err == 0                           = Mgr.ioSuccess $ fromIntegral dwBytes
