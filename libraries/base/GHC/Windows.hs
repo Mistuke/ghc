@@ -28,6 +28,7 @@ module GHC.Windows (
         DWORD,
         DDWORD,
         UINT,
+        ULONG,
         ErrCode,
         HANDLE,
         LPWSTR,
@@ -104,6 +105,7 @@ type LPBOOL  = Ptr BOOL
 type BYTE    = Word8
 type DWORD   = Word32
 type UINT    = Word32
+type ULONG   = Word32
 type ErrCode = DWORD
 type HANDLE  = Ptr ()
 type LPWSTR  = Ptr CWchar

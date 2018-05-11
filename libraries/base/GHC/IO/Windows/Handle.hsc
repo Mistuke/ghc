@@ -47,7 +47,7 @@ module GHC.IO.Windows.Handle
 #include <ntstatus.h>
 ##include "windows_cconv.h"
 
-import Data.Bits ((.|.))
+import Data.Bits ((.|.), shiftL)
 import Data.Word (Word8, Word16, Word64)
 import Data.Functor ((<$>))
 import Data.Typeable
@@ -76,10 +76,10 @@ import Foreign.C.Types
 import Foreign.C.String
 import Foreign.Marshal.Alloc (alloca)
 import Foreign.Marshal.Utils (with, fromBool)
-import Foreign.Storable (peek)
+import Foreign.Storable (Storable (..))
 import qualified GHC.Event.Windows as Mgr
 
-import GHC.Windows (LPVOID, LPDWORD, DWORD, HANDLE, BOOL, LPCTSTR,
+import GHC.Windows (LPVOID, LPDWORD, DWORD, HANDLE, BOOL, LPCTSTR, ULONG,
                     failIf, iNVALID_HANDLE_VALUE, failIf_, failWith,
                     failIfFalse_)
 import qualified GHC.Windows as Win32
@@ -220,6 +220,69 @@ stdout = unsafePerformIO $ ConsoleHandle <$> getStdHandle sTD_OUTPUT_HANDLE
 stderr = unsafePerformIO $ ConsoleHandle <$> getStdHandle sTD_ERROR_HANDLE
 
 -- -----------------------------------------------------------------------------
+-- Some console internal types to detect EOF.
+
+-- ASCII Ctrl+D (EOT) character.  Typically used by Unix consoles.
+-- use for cross platform compatibility and to adhere to the ASCII standard.
+acCtrlD = 0x04
+-- ASCII Ctrl+Z (SUB) character. Typically used by Windows consoles to denote
+-- EOT.  Use for compatibility with user expectations.
+acCtrlZ = 0x1A
+
+-- Mask to use to trigger ReadConsole input processing end.
+acEotMask = (1 `shiftL` acCtrlD) .|. (1 `shiftL` acCtrlZ)
+
+-- Structure to hold the control character masks
+type PCONSOLE_READCONSOLE_CONTROL = Ptr CONSOLE_READCONSOLE_CONTROL
+data CONSOLE_READCONSOLE_CONTROL = CONSOLE_READCONSOLE_CONTROL
+  { crcNLength           :: ULONG
+  , crcNInitialChars     :: ULONG
+  , crcDwCtrlWakeupMask  :: ULONG
+  , crcDwControlKeyState :: ULONG
+  } deriving Show
+
+instance Storable CONSOLE_READCONSOLE_CONTROL where
+  sizeOf = const #size CONSOLE_READCONSOLE_CONTROL
+  alignment = const #alignment CONSOLE_READCONSOLE_CONTROL
+  poke buf crc = do
+    (#poke CONSOLE_READCONSOLE_CONTROL, nLength)           buf
+        (crcNLength           crc)
+    (#poke CONSOLE_READCONSOLE_CONTROL, nInitialChars)     buf
+        (crcNInitialChars     crc)
+    (#poke CONSOLE_READCONSOLE_CONTROL, dwCtrlWakeupMask)  buf
+        (crcDwCtrlWakeupMask  crc)
+    (#poke CONSOLE_READCONSOLE_CONTROL, dwControlKeyState) buf
+        (crcDwControlKeyState crc)
+
+  peek buf = do
+    vNLength           <-
+      (#peek CONSOLE_READCONSOLE_CONTROL, nLength)           buf
+    vNInitialChars     <-
+      (#peek CONSOLE_READCONSOLE_CONTROL, nInitialChars)     buf
+    vDwCtrlWakeupMask  <-
+      (#peek CONSOLE_READCONSOLE_CONTROL, dwCtrlWakeupMask)  buf
+    vDwControlKeyState <-
+      (#peek CONSOLE_READCONSOLE_CONTROL, dwControlKeyState) buf
+    return $ CONSOLE_READCONSOLE_CONTROL {
+        crcNLength           = vNLength,
+        crcNInitialChars     = vNInitialChars,
+        crcDwCtrlWakeupMask  = vDwCtrlWakeupMask,
+        crcDwControlKeyState = vDwControlKeyState
+      }
+
+-- Create CONSOLE_READCONSOLE_CONTROL for breaking on control characters
+-- specified by acEotMask
+eotControl :: CONSOLE_READCONSOLE_CONTROL
+eotControl =
+  CONSOLE_READCONSOLE_CONTROL
+    { crcNLength           = fromIntegral $
+                               sizeOf (undefined :: CONSOLE_READCONSOLE_CONTROL)
+    , crcNInitialChars     = 0
+    , crcDwCtrlWakeupMask  = acEotMask
+    , crcDwControlKeyState = 0
+    }
+
+-- -----------------------------------------------------------------------------
 -- Foreign imports
 
 
@@ -288,8 +351,8 @@ foreign import ccall safe "__set_console_buffer_size"
   c_set_console_buffer_size :: HANDLE -> CLong -> IO BOOL
 
 foreign import WINDOWS_CCONV unsafe "windows.h ReadConsoleW"
-  c_read_console :: HANDLE -> Ptr Word16 -> DWORD -> Ptr DWORD -> Ptr ()
-                 -> IO BOOL
+  c_read_console :: HANDLE -> Ptr Word16 -> DWORD -> Ptr DWORD
+                 -> PCONSOLE_READCONSOLE_CONTROL -> IO BOOL
 
 foreign import WINDOWS_CCONV unsafe "windows.h WriteConsoleW"
   c_write_console :: HANDLE -> Ptr Word16 -> DWORD -> Ptr DWORD -> Ptr ()
@@ -430,9 +493,18 @@ consoleRead hwnd ptr _offset bytes
   = withUTF16ToGhcInternal ptr bytes $ \reqBytes w_ptr ->
       alloca $ \res ->
         do failIfFalse_ "GHC.IO.Handle.consoleRead" $
-             c_read_console (toHANDLE hwnd) w_ptr (fromIntegral reqBytes) res
-                            nullPtr
-           fromIntegral <$> peek res
+              with eotControl $ \p_eotControl ->
+                c_read_console (toHANDLE hwnd) w_ptr (fromIntegral reqBytes) res
+                               p_eotControl
+           b_read <- fromIntegral <$> peek res
+           if b_read /= 1
+              then return b_read
+              else do w_first <- peekElemOff w_ptr 0
+                      case () of
+                        _ | w_first == fromIntegral acCtrlD -> return 0
+                          | w_first == fromIntegral acCtrlZ -> return 0
+                          | otherwise                       -> return b_read
+
 
 consoleReadNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int
                        -> IO (Maybe Int)

@@ -278,7 +278,6 @@ callQP qpfunc =
 ------------------------------------------------------------------------
 -- Miscellaneous
 
-type ULONG      = #type ULONG
 type ULONG_PTR  = #type ULONG_PTR
 
 throwWinErr :: String -> ErrCode -> IO a
