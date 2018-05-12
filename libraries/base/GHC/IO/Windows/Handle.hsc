@@ -81,7 +81,7 @@ import qualified GHC.Event.Windows as Mgr
 
 import GHC.Windows (LPVOID, LPDWORD, DWORD, HANDLE, BOOL, LPCTSTR, ULONG,
                     failIf, iNVALID_HANDLE_VALUE, failIf_, failWith,
-                    failIfFalse_)
+                    failIfFalse_, getLastError)
 import qualified GHC.Windows as Win32
 import Text.Show
 
@@ -492,15 +492,30 @@ consoleRead :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int -> IO Int
 consoleRead hwnd ptr _offset bytes
   = withUTF16ToGhcInternal ptr bytes $ \reqBytes w_ptr ->
       alloca $ \res ->
-        do failIfFalse_ "GHC.IO.Handle.consoleRead" $
-              with eotControl $ \p_eotControl ->
+       do -- eotControl allows us to handle control characters like EOL
+          -- without needing a newline, which would sort of defeat the point
+          -- of an EOL.
+          res_code <- with eotControl $ \p_eotControl ->
                 c_read_console (toHANDLE hwnd) w_ptr (fromIntegral reqBytes) res
                                p_eotControl
-           b_read <- fromIntegral <$> peek res
-           if b_read /= 1
+
+          -- Restore a quirk of the POSIX read call, which only returns a fail
+          -- when the handle is invalid, e.g. closed or not a handle.  It how-
+          -- ever returns 0 when the handle is valid but unreadable, such as
+          -- passing a handle with no GENERIC_READ permission, like /dev/null
+          err <- getLastError
+          when (not res_code) $
+            case () of
+             _ | err == #{const ERROR_INVALID_FUNCTION} -> return ()
+               | otherwise -> failWith "GHC.IO.Handle.consoleRead" err
+          b_read <- fromIntegral <$> peek res
+          if b_read /= 1
               then return b_read
               else do w_first <- peekElemOff w_ptr 0
                       case () of
+                        -- Handle Ctrl+Z which is the actual EOL sequence on
+                        -- windows, but also hanlde Ctrl+D which is what the
+                        -- ASCII standard defines as EOL.
                         _ | w_first == fromIntegral acCtrlD -> return 0
                           | w_first == fromIntegral acCtrlZ -> return 0
                           | otherwise                       -> return b_read
@@ -671,19 +686,29 @@ openFile filepath iomode non_blocking =
             case iomode of
               ReadMode      -> #{const GENERIC_READ}
               WriteMode     -> #{const GENERIC_WRITE}
-              ReadWriteMode -> #{const GENERIC_READ} .|. #{const GENERIC_WRITE}
+              ReadWriteMode -> #{const GENERIC_READ}
+                            .|. #{const GENERIC_WRITE}
               AppendMode    -> #{const GENERIC_WRITE}
+                            .|. #{const FILE_APPEND_DATA}
 
           file_open_mode =
             case iomode of
               ReadMode      -> #{const OPEN_EXISTING} -- O_RDONLY
               WriteMode     -> #{const OPEN_ALWAYS}   -- O_CREAT | O_WRONLY | O_TRUNC
               ReadWriteMode -> #{const OPEN_ALWAYS}   -- O_CREAT | O_RDWR
-              AppendMode    -> #{const OPEN_EXISTING} -- O_APPEND
+              AppendMode    -> #{const OPEN_ALWAYS}   -- O_APPEND
 
           file_create_flags =
             if non_blocking
-               then #{const FILE_FLAG_OVERLAPPED} -- .|. #{const FILE_FLAG_SEQUENTIAL_SCAN
+               then #{const FILE_FLAG_OVERLAPPED}
+                    -- I beleive most haskell programs do sequential scans, so
+                    -- optimize for the common case.  Though ideally, this would
+                    -- be parameterized by openFile.  This will absolutely trash
+                    -- the cache on reverse scans.
+                    -- TODO: make a parameter to openFile and specify only for
+                    -- operations we know are sequential.  This parameter should
+                    -- be usable by madvise too.
+                    .|. #{const FILE_FLAG_SEQUENTIAL_SCAN}
                else #{const FILE_ATTRIBUTE_NORMAL}
 
           createFile devicepath =
