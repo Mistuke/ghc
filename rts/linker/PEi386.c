@@ -89,7 +89,7 @@
    have created their own format. This format is either named using the suffix
    .dll.a or .a depending on the tool that makes them. This format is
    undocumented. However the source of dlltool.c in binutils is pretty handy to
-   understant it.
+   understand it.
 
    To understand the implementation in GHC, this is what is important:
 
@@ -1278,7 +1278,7 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
        as it's 8 bytes aligned and within the 32gb range. */
     oc->info->s_trampoline = info->numberOfSymbols * sizeof(SymbolExtra);
     oc->info->i_trampoline
-      = winmem_aligned_malloc (ExecuteAccess, oc->info->s_trampoline, 8);
+      = winmem_aligned_calloc (ExecuteAccess, oc->info->s_trampoline, 8);
 
    /* No further verification after this point; only debug printing.  */
    bool is_debug = false;
@@ -1761,7 +1761,7 @@ ocAllocateSymbolExtras_PEi386 ( ObjectCode* oc )
     oc->symbol_extras      = (SymbolExtra*)oc->info->i_trampoline;
     oc->first_symbol_extra = 0;
     COFF_HEADER_INFO *info = oc->info->ch_info;
-    oc->n_symbol_extras    = info->numberOfSymbols;
+    oc->n_symbol_extras    = info->numberOfSymbols;;
 
 #if defined(x86_64_HOST_ARCH)
     /* Check that memory is within a 32 bit range.  */
@@ -1784,15 +1784,36 @@ makeSymbolExtra_PEi386( ObjectCode* oc, uint64_t index, size_t s, char* symbol )
 
     extra = oc->symbol_extras + curr_thunk;
 
-    if (!extra->addr)
+    if (!extra->inst[0])
     {
-        // jmp *-14(%rip)
-        static uint8_t jmp[] = { 0xFF, 0x25, 0xF2, 0xFF, 0xFF, 0xFF };
-        extra->addr = (uint64_t)s;
+        /* Because the jump islands are no longer %rip relative, since they can
+           be loaded far away, easiest way is to use a full 64 bit addressing
+           jump here.  We do have a guarantee that the jump islands are within a
+           32 bit range, just not sure where relative to the code currently
+           being executed.
+
+           movq $addr, %rax
+           jmpq *%rax
+
+           Technically, we need to be 16 bytes aligned here, but since the
+           location we are jumping to is guaranteed to be, we can ignore the
+           remaining 4 byte paddings here.  The callee *should* then preserve
+           the calling convention requirements.
+        */
+        static uint8_t movq[] = { 0x48, 0xb8 };
+        static uint8_t jmpq[] = { 0xff, 0xe0, 0x90, 0x90, 0x90, 0x90 };
+
         AccessType_t access = ExecuteAccess;
         winmem_memory_unprotect (&access);
-        memcpy(extra->jumpIsland, jmp, 6);
+        memcpy(extra->addr, &s, sizeof(s));
+        memcpy(extra->inst, movq, sizeof(movq));
+        memcpy(extra->jumpIsland, jmpq, sizeof(jmpq));
         winmem_memory_protect (&access);
+
+        if (!FlushInstructionCache (GetCurrentProcess (),
+                                    extra, sizeof (SymbolExtra)))
+            barf ("Could not flush symbol extras instruction cache. "
+                  "Instructions may be stale, aborting because I'm not sure.");
     }
 
     return (size_t)extra->jumpIsland;
@@ -1930,6 +1951,7 @@ ocResolve_PEi386 ( ObjectCode* oc )
                        copyName (getSymShortName (info, sym), oc,
                                  symbol, 1000-1);
                        S = makeSymbolExtra_PEi386(oc, symIndex, S, (char *)symbol);
+                       printf ("overflowed.\n");
                        /* And retry */
                        v = S + A;
                        if (v >> 32) {
@@ -1967,11 +1989,10 @@ ocResolve_PEi386 ( ObjectCode* oc )
                winmem_memory_protect (NULL);
                return false;
          }
-
       }
 
     /* Flush the instruction cache because we've changed executable memory and
-       are tryng to execute it.  Due to the lazy loading nature of the lazy
+       are trying to execute it.  Due to the lazy loading nature of the lazy
        linker we might really actually be just about to execute the code, so we
        need to flush the cache to ensure cache coherency.
        This call is not optional.  */
@@ -2046,7 +2067,6 @@ SymbolAddr *lookupSymbol_PEi386(SymbolName *lbl)
         sym = lookupSymbolInDLLs(lbl);
         return sym; // might be NULL if not found
     } else {
-#if defined(mingw32_HOST_OS)
         // If Windows, perform initialization of uninitialized
         // Symbols from the C runtime which was loaded above.
         // We do this on lookup to prevent the hit when
@@ -2079,7 +2099,6 @@ SymbolAddr *lookupSymbol_PEi386(SymbolName *lbl)
             clearImportSymbol (pinfo->owner, lbl);
             return pinfo->value;
         }
-#endif
         return loadSymbol(lbl, pinfo);
     }
 }

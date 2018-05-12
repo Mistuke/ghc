@@ -81,7 +81,7 @@ void* winmem_malloc (AccessType_t type, size_t n);
 void* winmem_realloc (AccessType_t type, void* p, size_t n);
 
 /* Allocate N bytes of TYPE protected memory.  */
-void* winmem_calloc (AccessType_t type, size_t n, size_t m);
+void* winmem_calloc (AccessType_t type, size_t n);
 
 /* Alignment respecting functions.  */
 
@@ -93,8 +93,7 @@ void* winmem_aligned_realloc (AccessType_t type, void* p, size_t n,
                               size_t alignment);
 
 /* Allocate N bytes of TYPE protected memory.  */
-void* winmem_aligned_calloc (AccessType_t type, size_t n, size_t m,
-                             size_t alignment);
+void* winmem_aligned_calloc (AccessType_t type, size_t n, size_t alignment);
 
 /* Other management functions.  */
 
