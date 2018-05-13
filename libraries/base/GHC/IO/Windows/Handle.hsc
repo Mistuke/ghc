@@ -125,7 +125,8 @@ instance GHC.IO.Device.RawIO (Io ConsoleHandle) where
   writeNonBlocking = consoleWriteNonBlocking
 
 -- | Generalize a way to get and create handles.
-class (IODevice a, BufferedIO a, Typeable a) => RawHandle a where
+class (GHC.IO.Device.RawIO a, IODevice a, BufferedIO a, Typeable a)
+      => RawHandle a where
   toHANDLE   :: a -> HANDLE
   fromHANDLE :: HANDLE -> a
   isLockable :: a -> Bool
@@ -185,19 +186,34 @@ dEFAULT_BUFFER_SIZE = 8192
 -- See libraries/base/GHC/IO/BufferedIO.hs
 instance BufferedIO (Io NativeHandle) where
   newBuffer _dev state = newByteBuffer dEFAULT_BUFFER_SIZE state
-  fillReadBuffer       = readBuf
+  fillReadBuffer       = readBuf'
   fillReadBuffer0      = readBufNonBlocking
-  flushWriteBuffer     = writeBuf
+  flushWriteBuffer     = writeBuf'
   flushWriteBuffer0    = writeBufNonBlocking
 
 -- | @since 4.11.0.0
 -- See libraries/base/GHC/IO/BufferedIO.hs
 instance BufferedIO (Io ConsoleHandle) where
   newBuffer _dev state = newByteBuffer dEFAULT_BUFFER_SIZE state
-  fillReadBuffer       = readBuf
+  fillReadBuffer       = readBuf'
   fillReadBuffer0      = readBufNonBlocking
-  flushWriteBuffer     = writeBuf
+  flushWriteBuffer     = writeBuf'
   flushWriteBuffer0    = writeBufNonBlocking
+
+
+readBuf' :: RawHandle a => a -> Buffer Word8 -> IO (Int, Buffer Word8)
+readBuf' hnd buf = do
+  debugIO ("readBuf handle=" ++ show (toHANDLE hnd) ++ " " ++
+           summaryBuffer buf ++ "\n")
+  (r,buf') <- readBuf hnd buf
+  debugIO ("after: " ++ summaryBuffer buf' ++ "\n")
+  return (r,buf')
+
+writeBuf' :: RawHandle a => a -> Buffer Word8 -> IO (Buffer Word8)
+writeBuf' hnd buf = do
+  debugIO ("writeBuf handle=" ++ show (toHANDLE hnd) ++ " " ++
+           summaryBuffer buf ++ "\n")
+  writeBuf hnd buf
 
 -- -----------------------------------------------------------------------------
 -- Standard I/O handles
@@ -705,6 +721,7 @@ openFile filepath iomode non_blocking =
                     -- optimize for the common case.  Though ideally, this would
                     -- be parameterized by openFile.  This will absolutely trash
                     -- the cache on reverse scans.
+                    --
                     -- TODO: make a parameter to openFile and specify only for
                     -- operations we know are sequential.  This parameter should
                     -- be usable by madvise too.
