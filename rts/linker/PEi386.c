@@ -433,7 +433,7 @@ static void releaseOcInfo(ObjectCode* oc) {
 
     if (oc->info) {
         if (oc->info->i_trampoline) {
-            winmem_free (ExecuteAccess, oc->info->i_trampoline);
+            //winmem_free (ExecuteAccess, oc->info->i_trampoline);
             oc->info->i_trampoline = NULL;
         }
         stgFree (oc->info->ch_info);
@@ -1278,7 +1278,7 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
        as it's 8 bytes aligned and within the 32gb range. */
     oc->info->s_trampoline = info->numberOfSymbols * sizeof(SymbolExtra);
     oc->info->i_trampoline
-      = winmem_aligned_calloc (ExecuteAccess, oc->info->s_trampoline, 8);
+      = winmem_aligned_calloc (ExecuteAccess, oc->info->s_trampoline, 16);
 
    /* No further verification after this point; only debug printing.  */
    bool is_debug = false;

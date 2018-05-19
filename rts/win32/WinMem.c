@@ -250,6 +250,8 @@ void* winmem_aligned_malloc (AccessType_t type, size_t n, size_t alignment)
 
   RELEASE_LOCK(&winmem_mutex);
 
+  ASSERT (!alignment || ((uintptr_t)result % alignment == 0));
+
   return result;
 }
 
