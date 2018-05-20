@@ -14,6 +14,7 @@
 -- Portability :  non-portable (GHC extensions)
 --
 -- Windows I/O manager
+-- TODO: Switch this to use new I/O manager.
 --
 -----------------------------------------------------------------------------
 

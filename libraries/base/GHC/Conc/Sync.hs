@@ -104,7 +104,7 @@ import Data.Maybe
 
 import GHC.Base
 import {-# SOURCE #-} GHC.IO.Handle ( hFlush )
-import {-# SOURCE #-} GHC.IO.Handle.FD ( stdout )
+import {-# SOURCE #-} GHC.IO.SmartHandles ( stdout )
 import GHC.Int
 import GHC.IO
 import GHC.IO.Encoding.UTF8

@@ -93,8 +93,10 @@ newFileHandle :: FilePath -> Maybe HandleFinalizer -> Handle__ -> IO Handle
 newFileHandle filepath mb_finalizer hc = do
   m <- newMVar hc
   case mb_finalizer of
-    Just finalizer -> addMVarFinalizer m (finalizer filepath m)
-    Nothing        -> return ()
+    Just finalizer -> do debugIO $ "Registering finalizer: " ++ show filepath
+                         addMVarFinalizer m (finalizer filepath m)
+    Nothing        -> do debugIO $ "No finalizer: " ++ show filepath
+                         return ()
   return (FileHandle filepath m)
 
 -- ---------------------------------------------------------------------------
@@ -659,6 +661,7 @@ mkHandleEx dev filepath ha_type buffered mb_codec nl finalizer other_side
                      else mkUnBuffer buf_state
 
    spares <- newIORef BufferListNil
+   debugIO $ "making handle for " ++ filepath
    newFileHandle filepath finalizer $ updateHandle
             (Handle__ { haDevice = dev,
                         haType = ha_type,
