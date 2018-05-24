@@ -506,7 +506,7 @@ flushByteWriteBuffer h_@Handle__{..} = do
   bbuf <- readIORef haByteBuffer
   when (not (isEmptyBuffer bbuf)) $ do
     bbuf' <- Buffered.flushWriteBuffer haDevice bbuf
-    debugIO ("flushByteWriteBuffer: bbuf=" ++ summaryBuffer bbuf)
+    debugIO ("flushByteWriteBuffer: bbuf=" ++ summaryBuffer bbuf')
     writeIORef haByteBuffer bbuf'
 
 -- write the contents of the CharBuffer to the Handle__.

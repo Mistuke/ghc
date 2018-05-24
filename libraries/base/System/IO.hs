@@ -510,7 +510,7 @@ openTempFile' loc tmp_dir template binary mode
       withCWString tmp_dir $ \c_tmp_dir ->
         withCWString label $ \c_template ->
           withCWString suffix $ \c_suffix ->
-            -- NOTE: revisit this when new I/O manager in place and use a UUID
+            -- FIXME: revisit this when new I/O manager in place and use a UUID
             --       based one when we are no longer MAX_PATH bound.
             allocaBytes (sizeOf (undefined :: CWchar) * 260) $ \c_str -> do
             res <- c_getTempFileNameErrorNo c_tmp_dir c_template c_suffix 0

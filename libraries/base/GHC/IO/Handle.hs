@@ -409,7 +409,11 @@ hSeek handle mode offset =
     if isWriteBuffer cbuf
         then do flushWriteBuffer handle_
                 new_offset <- IODevice.seek haDevice mode offset
-                writeIORef haByteBuffer bbuf{ bufOffset = fromIntegral new_offset }
+                -- buffer has been updated, need to re-read it
+                bbuf1 <- readIORef haByteBuffer
+                let bbuf2 = bbuf1{ bufOffset = fromIntegral new_offset }
+                debugIO $ "hSeek - wr flush bbuf1:" ++ summaryBuffer bbuf2
+                writeIORef haByteBuffer bbuf2
         else do
 
     let r = bufL cbuf; w = bufR cbuf
