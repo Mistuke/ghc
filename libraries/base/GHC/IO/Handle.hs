@@ -412,6 +412,8 @@ hSeek handle mode offset =
                 -- buffer has been updated, need to re-read it
                 bbuf1 <- readIORef haByteBuffer
                 let bbuf2 = bbuf1{ bufOffset = fromIntegral new_offset }
+                debugIO $ "hSeek - seek:: " ++ show offset ++
+                          " - " ++ show new_offset
                 debugIO $ "hSeek - wr flush bbuf1:" ++ summaryBuffer bbuf2
                 writeIORef haByteBuffer bbuf2
         else do
@@ -468,7 +470,7 @@ hTell handle =
       -- file offset bookkeeping already.
       sub <- getIoSubSystem
       let real_posn = if sub == IoNative
-                         then fromIntegral $ bufOffset bbuf - fromIntegral (bufR bbuf - bufL bbuf)
+                         then real_posn_raw -- fromIntegral $ bufOffset bbuf - fromIntegral (bufR bbuf - bufL bbuf)
                          else real_posn_raw
 #endif
 
