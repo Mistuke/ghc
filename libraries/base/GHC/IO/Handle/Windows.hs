@@ -63,24 +63,8 @@ mkConsoleHandle dev filepath ha_type buffered mb_codec nl finalizer other_side
       case isTerm of
         True  -> mkHandle dev filepath ha_type buffered mb_codec nl finalizer
                           other_side
-        False -> mkHandleEx (Win.convertHandle dev) filepath ha_type buffered
-                            mb_codec nl finalizer other_side adjustBuffering
-
--- | If we've been redirected to a pipe we don't control the closing of the
---   handle, and so you'd need an explicit flush.  However we must default to a
---   reasonable default.  So default std redirections pipes to line buffering
---   as if they were regular console handles.  Two reasons for this.
---
---   1) redirected std handles are handled by WriteFile not WriteConsole so you
---      have to flush eventually.  The user may not realise this and expect a
---      write to by default always write out something.
---
---   2) The I/O system by default seems to generate a new buffer for every
---      console write.  So the criterias for flushing will never be met.
---
---
-adjustBuffering :: Handle__ -> Handle__
-adjustBuffering handle = handle{haBufferMode=LineBuffering}
+        False -> mkHandle (Win.convertHandle dev) filepath ha_type buffered
+                            mb_codec nl finalizer other_side
 
 -- | A handle managing input from the Haskell program's standard input channel.
 stdin :: Handle

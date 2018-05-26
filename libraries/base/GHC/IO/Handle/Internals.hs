@@ -31,7 +31,7 @@ module GHC.IO.Handle.Internals (
   wantWritableHandle, wantReadableHandle, wantReadableHandle_,
   wantSeekableHandle,
 
-  mkHandle, mkHandleEx, mkFileHandle, mkDuplexHandle,
+  mkHandle, mkFileHandle, mkDuplexHandle,
   openTextEncoding, closeTextCodecs, initBufferState,
   dEFAULT_CHAR_BUFFER_SIZE,
 
@@ -634,21 +634,6 @@ mkHandle :: (RawIO dev, IODevice dev, BufferedIO dev, Typeable dev) => dev
          -> Maybe (MVar Handle__)
          -> IO Handle
 mkHandle dev filepath ha_type buffered mb_codec nl finalizer other_side =
-  mkHandleEx dev filepath ha_type buffered mb_codec nl finalizer other_side id
-
-mkHandleEx :: (RawIO dev, IODevice dev, BufferedIO dev, Typeable dev) => dev
-           -> FilePath
-           -> HandleType
-           -> Bool                     -- buffered?
-           -> Maybe TextEncoding
-           -> NewlineMode
-           -> Maybe HandleFinalizer
-           -> Maybe (MVar Handle__)
-           -> (Handle__ -> Handle__)
-           -> IO Handle
-
-mkHandleEx dev filepath ha_type buffered mb_codec nl finalizer other_side
-           updateHandle = do
    openTextEncoding mb_codec ha_type $ \ mb_encoder mb_decoder -> do
 
    let buf_state = initBufferState ha_type
@@ -662,7 +647,7 @@ mkHandleEx dev filepath ha_type buffered mb_codec nl finalizer other_side
 
    spares <- newIORef BufferListNil
    debugIO $ "making handle for " ++ filepath
-   newFileHandle filepath finalizer $ updateHandle
+   newFileHandle filepath finalizer
             (Handle__ { haDevice = dev,
                         haType = ha_type,
                         haBufferMode = bmode,
