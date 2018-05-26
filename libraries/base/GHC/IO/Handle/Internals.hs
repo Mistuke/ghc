@@ -82,7 +82,7 @@ import System.Posix.Internals hiding (FD)
 import Foreign.C
 
 c_DEBUG_DUMP :: Bool
-c_DEBUG_DUMP = True
+c_DEBUG_DUMP = False
 
 -- ---------------------------------------------------------------------------
 -- Creating a new handle
