@@ -31,6 +31,8 @@
 #include <sys/types.h>
 #endif
 
+#include <stdbool.h>
+
 // Flag Structure
 RTS_FLAGS RtsFlags;
 
@@ -233,7 +235,7 @@ void initRtsFlagsDefaults(void)
     RtsFlags.MiscFlags.generate_dump_file      = false;
     RtsFlags.MiscFlags.machineReadable         = false;
     RtsFlags.MiscFlags.linkerMemBase           = 0;
-    RtsFlags.MiscFlags.ioManager       = IO_MNGR_POSIX;
+    RtsFlags.MiscFlags.ioManager               = IO_MNGR_POSIX;
 
 #if defined(THREADED_RTS)
     RtsFlags.ParFlags.nCapabilities     = 1;
@@ -2271,3 +2273,16 @@ built in the -debug, -eventlog, -prof ways. And even if they do, the
 damage should be limited to DOS, information disclosure and writing
 files like <progname>.eventlog, not arbitrary files.
 */
+
+/* ----------------------------------------------------------------------------
+   Helper utilities to query state.
+   ------------------------------------------------------------------------- */
+
+bool is_io_mng_Native_p (void)
+{
+#if defined (mingw32_HOST_OS)
+  return RtsFlags.MiscFlags.ioManager == IO_MNGR_NATIVE;
+#else
+  return false;
+#endif
+}

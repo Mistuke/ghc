@@ -3,6 +3,9 @@
  * Integrating Win32 asynchronous I/O with the GHC RTS.
  *
  * (c) sof, 2002-2003.
+ *
+ * NOTE: This is the MIO manager, only used for --io-manager=posix.
+ *       For the WINIO manager see base in the GHC.Event modules.
  */
 
 #pragma once

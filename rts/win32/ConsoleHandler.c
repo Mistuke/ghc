@@ -1,6 +1,8 @@
 /*
  * Console control handler support.
  *
+ * NOTE: This is the MIO manager, only used for --io-manager=posix.
+ *       For the WINIO manager see base in the GHC.Event modules.
  */
 #include "Rts.h"
 #include <windows.h>

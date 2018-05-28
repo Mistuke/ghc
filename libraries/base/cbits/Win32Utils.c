@@ -5,12 +5,14 @@
    ------------------------------------------------------------------------- */
 
 #if defined(_WIN32)
+/* Use Mingw's C99 print functions.  */
+#define __USE_MINGW_ANSI_STDIO 1
+/* Using Secure APIs */
+#define MINGW_HAS_SECURE_API 1
 
 #include "HsBase.h"
 #include <stdbool.h>
 #include <stdint.h>
-/* Using Secure APIs */
-#define MINGW_HAS_SECURE_API 1
 #include <wchar.h>
 #include <windows.h>
 #include <io.h>

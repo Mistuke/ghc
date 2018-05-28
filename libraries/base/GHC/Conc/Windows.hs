@@ -39,6 +39,9 @@ module GHC.Conc.Windows
        , toWin32ConsoleEvent
        ) where
 
+
+#include "windows_cconv.h"
+
 import Data.Bits (shiftR)
 import GHC.Base
 import GHC.Conc.Sync
@@ -53,16 +56,6 @@ import GHC.Real (div, fromIntegral)
 import GHC.Show (Show)
 import GHC.Word (Word32, Word64)
 import GHC.Windows
-
-#if defined(mingw32_HOST_OS)
-# if defined(i386_HOST_ARCH)
-#  define WINDOWS_CCONV stdcall
-# elif defined(x86_64_HOST_ARCH)
-#  define WINDOWS_CCONV ccall
-# else
-#  error Unknown mingw32 arch
-# endif
-#endif
 
 -- ----------------------------------------------------------------------------
 -- Thread waiting
