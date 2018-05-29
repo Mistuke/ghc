@@ -40,7 +40,6 @@ import GHC.Event.Windows.FFI     (OVERLAPPED, LPOVERLAPPED, OVERLAPPED_ENTRY(..)
 import qualified GHC.Event.Windows.FFI    as FFI
 import qualified GHC.Event.PSQ            as Q
 import qualified GHC.Event.IntTable       as IT
-import GHC.IO.Handle.Internals (debugIO)
 
 import {-# SOURCE #-} Control.Concurrent
 import Control.Concurrent.MVar
@@ -50,20 +49,26 @@ import Data.Foldable (mapM_)
 import Data.Maybe
 import Data.Word
 import Foreign       hiding (new)
+import Foreign.C
 import Foreign.ForeignPtr.Unsafe
 import qualified GHC.Event.Array    as A
 import GHC.Arr (Array, (!), listArray)
 import GHC.Base
-import GHC.Conc (forkIO)
-import GHC.List (replicate)
+import {-# SOURCE #-} GHC.Conc.Sync (forkIO)
+import GHC.List (replicate, length)
 import GHC.Event.Unique
 import GHC.Num
 import GHC.Real
 import GHC.Windows
 import System.IO.Unsafe     (unsafePerformIO)
 import Text.Show
+import System.Posix.Internals (c_write)
+import GHC.RTS.Flags
 
 import qualified GHC.Windows as Win32
+
+c_DEBUG_DUMP :: IO Bool
+c_DEBUG_DUMP = scheduler `fmap` getDebugFlags
 
 ------------------------------------------------------------------------
 -- Manager
@@ -112,7 +117,7 @@ managerRef :: IORef (Maybe Manager)
 managerRef = unsafePerformIO $
     if rtsSupportsBoundThreads
         then new >>= newIORef . Just
-        else newIORef Nothing
+        else new >>= newIORef . Just -- newIORef Nothing: TODO: remove Maybe
 {-# NOINLINE managerRef #-}
 
 -- must be power of 2
@@ -359,6 +364,7 @@ runExpiredTimeouts Manager{..} = do
     (expired, delay) <- atomicModifyIORef' mgrTimeouts (mkTimeout now)
     -- Execute timeout callbacks.
     mapM_ Q.value expired
+    debugIO $ "expired calls: " ++ show (length expired)
     return delay
       where
         mkTimeout :: Seconds -> TimeoutQueue ->
@@ -391,8 +397,12 @@ fromTimeout (Just sec) | sec > 120  = 120000
 step :: Manager -> IO ()
 step mgr@Manager{..} = do
     delay <- runExpiredTimeouts mgr
-    n <- FFI.getQueuedCompletionStatusEx mgrIOCP mgrOverlappedEntries
-         (fromTimeout delay)
+    debugIO $ "next timeout: " ++ show delay
+    n <- case delay of
+          Nothing -> return 0
+          _ -> FFI.getQueuedCompletionStatusEx mgrIOCP mgrOverlappedEntries
+                                              (fromTimeout delay)
+    debugIO $ "queued completions: " ++ show n
     when (n > 0) $ do
       A.forM_ mgrOverlappedEntries $ \oe -> do
           mCD <- withMVar (callbackTableVar mgr (lpOverlapped oe)) $ \tbl ->
@@ -409,4 +419,18 @@ loop :: Manager -> IO ()
 loop mgr = go
     where
       go = do step mgr
+              debugIO "step IO mngr"
               go
+
+-- ---------------------------------------------------------------------------
+-- debugging
+
+debugIO :: String -> IO ()
+debugIO s
+  = do debug <- c_DEBUG_DUMP
+       if debug
+          then do _ <- withCStringLen ("winio: " ++ s ++ "\n") $
+                         \(p, len) -> c_write 1 (castPtr p) (fromIntegral len)
+                  return ()
+          else do return ()
+

@@ -7,11 +7,13 @@ module GHC.Event.Windows.Thread (
 
 import Data.Maybe
 import GHC.Conc.Sync
-import GHC.Event.Windows
 import GHC.Base
 import GHC.IO
 import GHC.MVar
 import GHC.Real
+
+import GHC.Event.Windows.Clock
+import GHC.Event.Windows
 
 ensureIOManagerIsRunning :: IO ()
 ensureIOManagerIsRunning = do _ <- getSystemManager

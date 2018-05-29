@@ -109,9 +109,8 @@
       /* see Note [Symbols for MinGW's printf] */        \
       SymI_HasProto(_lock_file)                          \
       SymI_HasProto(_unlock_file)                        \
-      /* Need to figure out why this is needed, it shouldn't be but not
-         providing it kills ghci.  */
       SymI_HasProto(__mingw_vsnwprintf)
+      /* ^^ Need to figure out why this is needed.  */
 
 #define RTS_MINGW_COMPAT_SYMBOLS                         \
       SymI_HasProto_deprecated(access)                   \

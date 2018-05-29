@@ -46,6 +46,7 @@ module GHC.Event.Windows.FFI (
 
 ##include "windows_cconv.h"
 
+import {-# SOURCE #-} Control.Concurrent
 import Data.Maybe
 import Foreign
 import Foreign.C.Types
@@ -106,8 +107,10 @@ getQueuedCompletionStatusEx :: IOCP
 getQueuedCompletionStatusEx iocp arr timeout =
     alloca $ \num_removed_ptr ->do
         A.unsafeLoad arr $ \oes cap -> do
+            -- don't block the call if the rts is not supporting threads.
+            -- this would block the entire program.
             ok <- c_GetQueuedCompletionStatusEx iocp oes (fromIntegral cap)
-                  num_removed_ptr timeout False
+                  num_removed_ptr timeout (not rtsSupportsBoundThreads)
             if ok then fromEnum `fmap` peek num_removed_ptr
             else do err <- getLastError
                     if err == #{const WAIT_TIMEOUT} then return 0

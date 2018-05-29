@@ -371,6 +371,8 @@ Library
             GHC.IO.Encoding.CodePage.API
             GHC.IO.Encoding.CodePage.Table
             GHC.Conc.Windows
+            GHC.Conc.IOCP
+            GHC.Conc.POSIX
             GHC.Windows
             GHC.Event.Windows
             GHC.Event.Windows.Clock

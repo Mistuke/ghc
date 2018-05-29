@@ -25,7 +25,8 @@ module GHC.IO.SubSystem (
   whenIoSubSystem,
   IoSubSystem(..),
   conditional,
-  (<!>)
+  (<!>),
+  isWindowsNativeIO
  ) where
 
 import GHC.Base
@@ -52,6 +53,9 @@ conditional posix windows = withIoSubSystem' sub
 
 (<!>) :: a -> a -> a
 (<!>) = conditional
+
+isWindowsNativeIO :: Bool
+isWindowsNativeIO = False <!> True
 
 ioSubSystem :: IORef IoSubSystem
 ioSubSystem = unsafePerformIO sub

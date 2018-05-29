@@ -61,6 +61,7 @@ import System.Posix.Types
 
 #if defined(mingw32_HOST_OS)
 import qualified GHC.Conc.Windows as Windows
+import GHC.IO.SubSystem
 import GHC.Conc.Windows (asyncRead, asyncWrite, asyncDoProc, asyncReadBA,
                          asyncWriteBA, ConsoleEvent(..), win32ConsoleHandler,
                          toWin32ConsoleEvent)
@@ -179,11 +180,12 @@ closeFdWith close fd
 threadDelay :: Int -> IO ()
 threadDelay time
 #if defined(mingw32_HOST_OS)
-  | threaded  = Windows.threadDelay time
+  | isWindowsNativeIO = Windows.threadDelay time
+  | threaded          = Windows.threadDelay time
 #else
-  | threaded  = Event.threadDelay time
+  | threaded          = Event.threadDelay time
 #endif
-  | otherwise = IO $ \s ->
+  | otherwise         = IO $ \s ->
         case time of { I# time# ->
         case delay# time# s of { s' -> (# s', () #)
         }}
@@ -194,10 +196,11 @@ threadDelay time
 registerDelay :: Int -> IO (TVar Bool)
 registerDelay usecs
 #if defined(mingw32_HOST_OS)
-  | threaded = Windows.registerDelay usecs
+  | isWindowsNativeIO = Windows.registerDelay usecs
+  | threaded          = Windows.registerDelay usecs
 #else
-  | threaded = Event.registerDelay usecs
+  | threaded          = Event.registerDelay usecs
 #endif
-  | otherwise = errorWithoutStackTrace "registerDelay: requires -threaded"
+  | otherwise         = errorWithoutStackTrace "registerDelay: requires -threaded"
 
 foreign import ccall unsafe "rtsSupportsBoundThreads" threaded :: Bool
