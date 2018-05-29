@@ -96,6 +96,7 @@ data Manager = Manager
 
 new :: IO Manager
 new = do
+    debugIO "Starting io-manager..."
     mgrIOCP         <- FFI.newIOCP
     mgrClock        <- getClock
     mgrUniqueSource <- newSource
@@ -104,7 +105,9 @@ new = do
            replicateM callbackArraySize (newMVar =<< IT.new 8)
     mgrOverlappedEntries <- A.new 64
     let !mgr = Manager{..}
+    debugIO "spawning thread.."
     _tid <- forkIO $ loop mgr
+    debugIO $ "created io-manager thread."
     return mgr
       where
         replicateM n x = sequence (replicate n x)
@@ -114,10 +117,7 @@ getSystemManager :: IO (Maybe Manager)
 getSystemManager = readIORef managerRef
 
 managerRef :: IORef (Maybe Manager)
-managerRef = unsafePerformIO $
-    if rtsSupportsBoundThreads
-        then new >>= newIORef . Just
-        else new >>= newIORef . Just -- newIORef Nothing: TODO: remove Maybe
+managerRef = unsafePerformIO $ new >>= newIORef . Just
 {-# NOINLINE managerRef #-}
 
 -- must be power of 2
