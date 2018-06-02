@@ -54,7 +54,7 @@ import Foreign.ForeignPtr.Unsafe
 import qualified GHC.Event.Array    as A
 import GHC.Arr (Array, (!), listArray)
 import GHC.Base
-import {-# SOURCE #-} GHC.Conc.Sync (forkIO)
+import {-# SOURCE #-} GHC.Conc.Sync (forkIO, myThreadId, showThreadId)
 import GHC.List (replicate, length)
 import GHC.Event.Unique
 import GHC.Num
@@ -429,7 +429,8 @@ debugIO :: String -> IO ()
 debugIO s
   = do debug <- c_DEBUG_DUMP
        if debug
-          then do _ <- withCStringLen ("winio: " ++ s ++ "\n") $
+          then do tid <- myThreadId
+                  _   <- withCStringLen ("\twinio: " ++ s ++ " (" ++ showThreadId tid ++ ")\n") $
                          \(p, len) -> c_write 1 (castPtr p) (fromIntegral len)
                   return ()
           else do return ()

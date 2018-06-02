@@ -18,8 +18,13 @@
 module Control.Concurrent (
         -- * Bound Threads
         rtsSupportsBoundThreads,
+        forkOS
     ) where
 
 import Data.Bool
 
+import GHC.IO
+import GHC.Conc.Sync
+
 rtsSupportsBoundThreads :: Bool
+forkOS :: IO () -> IO ThreadId

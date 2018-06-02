@@ -302,20 +302,20 @@ eotControl =
 -- Foreign imports
 
 
-foreign import WINDOWS_CCONV unsafe "windows.h CreateFileW"
+foreign import WINDOWS_CCONV safe "windows.h CreateFileW"
     c_CreateFile :: LPCTSTR -> DWORD -> DWORD -> LPSECURITY_ATTRIBUTES
                  -> DWORD -> DWORD -> HANDLE
                  -> IO HANDLE
 
-foreign import WINDOWS_CCONV unsafe "windows.h ReadFile"
+foreign import WINDOWS_CCONV safe "windows.h ReadFile"
     c_ReadFile :: HANDLE -> LPVOID -> DWORD -> LPDWORD -> LPOVERLAPPED
                -> IO BOOL
 
-foreign import WINDOWS_CCONV unsafe "windows.h WriteFile"
+foreign import WINDOWS_CCONV safe "windows.h WriteFile"
     c_WriteFile :: HANDLE -> LPVOID -> DWORD -> LPDWORD -> LPOVERLAPPED
                 -> IO BOOL
 
-foreign import WINDOWS_CCONV unsafe "windows.h GetStdHandle"
+foreign import WINDOWS_CCONV safe "windows.h GetStdHandle"
     c_GetStdHandle :: StdHandleId -> IO HANDLE
 
 foreign import ccall safe "__handle_ready"
@@ -366,11 +366,11 @@ foreign import ccall safe "__get_console_buffer_size"
 foreign import ccall safe "__set_console_buffer_size"
   c_set_console_buffer_size :: HANDLE -> CLong -> IO BOOL
 
-foreign import WINDOWS_CCONV unsafe "windows.h ReadConsoleW"
+foreign import WINDOWS_CCONV safe "windows.h ReadConsoleW"
   c_read_console :: HANDLE -> Ptr Word16 -> DWORD -> Ptr DWORD
                  -> PCONSOLE_READCONSOLE_CONTROL -> IO BOOL
 
-foreign import WINDOWS_CCONV unsafe "windows.h WriteConsoleW"
+foreign import WINDOWS_CCONV safe "windows.h WriteConsoleW"
   c_write_console :: HANDLE -> Ptr Word16 -> DWORD -> Ptr DWORD -> Ptr ()
                   -> IO BOOL
 

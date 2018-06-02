@@ -17,11 +17,20 @@
 -----------------------------------------------------------------------------
 
 module GHC.Conc.Sync
-        ( forkIO, TVar(..) ) where
+        ( forkIO,
+          TVar(..),
+          ThreadId(..),
+          myThreadId,
+          showThreadId
+        ) where
 
 import GHC.Base
+import GHC.Show
 
 forkIO :: IO () -> IO ThreadId
 
 data ThreadId = ThreadId ThreadId#
 data TVar a = TVar (TVar# RealWorld a)
+
+myThreadId :: IO ThreadId
+showThreadId :: ThreadId -> String

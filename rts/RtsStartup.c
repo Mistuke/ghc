@@ -304,8 +304,7 @@ hs_init_ghc(int *argc, char **argv[], RtsConfig rts_config)
 #endif
 
 #if defined(mingw32_HOST_OS) && !defined(THREADED_RTS)
-    if (!is_io_mng_Native_p ())
-        startupAsyncIO();
+    startupAsyncIO();
 #endif
 
     x86_init_fpu();
@@ -314,8 +313,7 @@ hs_init_ghc(int *argc, char **argv[], RtsConfig rts_config)
 
     // ditto.
 #if defined(THREADED_RTS)
-    if (!is_io_mng_Native_p ())
-        ioManagerStart();
+    ioManagerStart();
 #endif
 
     /* Record initialization times */
@@ -375,8 +373,7 @@ hs_exit_(bool wait_foreign)
 #endif
 
 #if defined(THREADED_RTS)
-    if (!is_io_mng_Native_p ())
-        ioManagerDie();
+    ioManagerDie();
 #endif
 
     /* stop all running tasks */
@@ -480,8 +477,7 @@ hs_exit_(bool wait_foreign)
 #endif
 
 #if defined(mingw32_HOST_OS) && !defined(THREADED_RTS)
-    if (!is_io_mng_Native_p ())
-        shutdownAsyncIO(wait_foreign);
+    shutdownAsyncIO(wait_foreign);
 #endif
 
     /* free hash table storage */

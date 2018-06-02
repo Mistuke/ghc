@@ -33,6 +33,7 @@
 -- #not-home
 module GHC.Conc.Sync
         ( ThreadId(..)
+        , showThreadId
 
         -- * Forking and suchlike
         , forkIO
@@ -150,6 +151,9 @@ instance Show ThreadId where
    showsPrec d t =
         showString "ThreadId " .
         showsPrec d (getThreadId (id2TSO t))
+
+showThreadId :: ThreadId -> String
+showThreadId = show
 
 foreign import ccall unsafe "rts_getThreadId" getThreadId :: ThreadId# -> CInt
 
