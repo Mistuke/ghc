@@ -362,7 +362,7 @@ registerTimeout mgr@Manager{..} relTime cb = do
       now <- getTime mgrClock
       let !expTime = secondsToNanoSeconds $ now + relTime
       editTimeouts mgr (Q.insert key expTime cb)
-      -- TODO: wakeManager mgr
+      wakeupIOManager
     return $ TK key
 
 -- | Update an active timeout to fire in the given number of seconds (from the
@@ -373,7 +373,7 @@ updateTimeout mgr (TK key) relTime = do
     now <- getTime (mgrClock mgr)
     let !expTime = secondsToNanoSeconds $ now + relTime
     editTimeouts mgr (Q.adjust (const expTime) key)
-    -- TODO: wakeManager mgr
+    wakeupIOManager
 
 -- | Unregister an active timeout.  This is a harmless no-op if the timeout is
 -- already unregistered or has already fired.
@@ -381,9 +381,9 @@ updateTimeout mgr (TK key) relTime = do
 -- Warning: the timeout callback may fire even after
 -- 'unregisterTimeout' completes.
 unregisterTimeout :: Manager -> TimeoutKey -> IO ()
-unregisterTimeout mgr (TK key) =
+unregisterTimeout mgr (TK key) = do
     editTimeouts mgr (Q.delete key)
-    -- TODO: wakeManager mgr
+    wakeupIOManager
 
 editTimeouts :: Manager -> TimeoutEdit -> IO ()
 editTimeouts mgr g = atomicModifyIORef' (mgrTimeouts mgr) $ \tq -> (g tq, ())
@@ -429,7 +429,7 @@ fromTimeout (Just sec) | sec > 120  = 120000
                        | sec > 0    = ceiling (sec * 1000)
                        | otherwise  = 0
 
-step :: Manager -> IO ()
+step :: Manager -> IO Bool
 step mgr@Manager{..} = do
     delay <- runExpiredTimeouts mgr
     debugIO $ "next timeout: " ++ show delay
@@ -450,10 +450,12 @@ step mgr@Manager{..} = do
       cap <- A.capacity mgrOverlappedEntries
       when (cap == n) $ A.ensureCapacity mgrOverlappedEntries (2*cap)
 
+    return $ n > 0 || isJust delay
+
 io_mngr_loop :: Manager -> IO ()
 io_mngr_loop mgr = go
     where
-      go = do step mgr
+      go = do more <- step mgr
               debugIO "step IO mngr"
               r2 <- c_readIOManagerEvent
               exit <-
@@ -463,7 +465,12 @@ io_mngr_loop mgr = go
                       0 -> return False -- spurious wakeup
                       _ -> do start_console_handler (r2 `shiftR` 1)
                               return False
-              when (not exit) go
+              -- If we have no more work to do, or something from the outside
+              -- told us to stop then we let the thread die and stop the I/O
+              -- manager.  It will be woken up again when there is more to do.
+              if not exit && more
+                 then go
+                 else debugIO "I/O manager going to sleep."
 
 -- TODO: Do some refactoring to share this between here and GHC.Conc.POSIX
 -- must agree with rts/win32/ThrIOManager.c
@@ -507,7 +514,14 @@ win32ConsoleHandler :: MVar (ConsoleEvent -> IO ())
 win32ConsoleHandler = unsafePerformIO (newMVar (errorWithoutStackTrace "win32ConsoleHandler"))
 
 wakeupIOManager :: IO ()
-wakeupIOManager = c_sendIOManagerEvent io_MANAGER_WAKEUP
+wakeupIOManager
+  = do c_sendIOManagerEvent io_MANAGER_WAKEUP
+       mngr <- getSystemManager
+       debugIO "waking up I/O manager."
+       case mngr of
+         Nothing  -> error "cannot happen."
+         Just mgr -> startIOManagerThread (io_mngr_loop mgr)
+
 
 foreign import ccall unsafe "getIOManagerEvent" -- in the RTS (ThrIOManager.c)
   c_getIOManagerEvent :: IO HANDLE
