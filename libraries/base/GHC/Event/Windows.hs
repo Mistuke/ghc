@@ -543,7 +543,7 @@ debugIO s
        if debug
           then do tid <- myThreadId
                   _   <- withCStringLen ("\twinio: " ++ s ++ " (" ++ showThreadId tid ++ ")\n") $
-                         \(p, len) -> c_write 1 (castPtr p) (fromIntegral len)
+                         \(p, len) -> c_write 2 (castPtr p) (fromIntegral len)
                   return ()
           else do return ()
 
