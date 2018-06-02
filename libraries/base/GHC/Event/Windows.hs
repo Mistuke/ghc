@@ -54,11 +54,15 @@ import Foreign.ForeignPtr.Unsafe
 import qualified GHC.Event.Array    as A
 import GHC.Arr (Array, (!), listArray)
 import GHC.Base
-import {-# SOURCE #-} GHC.Conc.Sync (forkIO, myThreadId, showThreadId)
+import {-# SOURCE #-} GHC.Conc.Sync (forkIO, myThreadId, showThreadId,
+                                     ThreadId(..), ThreadStatus(..),
+                                     threadStatus, sharedCAF)
 import GHC.List (replicate, length)
 import GHC.Event.Unique
 import GHC.Num
 import GHC.Real
+import GHC.Read
+import GHC.Enum (Enum)
 import GHC.Windows
 import System.IO.Unsafe     (unsafePerformIO)
 import Text.Show
@@ -69,6 +73,19 @@ import qualified GHC.Windows as Win32
 
 c_DEBUG_DUMP :: IO Bool
 c_DEBUG_DUMP = scheduler `fmap` getDebugFlags
+
+
+-- ---------------------------------------------------------------------------
+-- I/O manager resume/suspend code
+
+{-# NOINLINE ioManagerThread #-}
+ioManagerThread :: MVar (Maybe ThreadId)
+ioManagerThread = unsafePerformIO $ do
+   m <- newMVar Nothing
+   sharedCAF m getOrSetGHCConcWindowsIOManagerThreadStore
+
+foreign import ccall unsafe "getOrSetGHCConcWindowsIOManagerThreadStore"
+    getOrSetGHCConcWindowsIOManagerThreadStore :: Ptr a -> IO (Ptr a)
 
 ------------------------------------------------------------------------
 -- Manager
@@ -105,19 +122,37 @@ new = do
            replicateM callbackArraySize (newMVar =<< IT.new 8)
     mgrOverlappedEntries <- A.new 64
     let !mgr = Manager{..}
-    debugIO "spawning thread.."
-    _tid <- forkIO $ loop mgr
-    debugIO $ "created io-manager thread."
+    startIOManagerThread (io_mngr_loop mgr)
     return mgr
       where
         replicateM n x = sequence (replicate n x)
+
+{-# INLINE startIOManagerThread #-}
+startIOManagerThread :: IO () -> IO ()
+startIOManagerThread loop = do
+  modifyMVar_ ioManagerThread $ \old -> do
+    let create = do debugIO "spawning thread.."
+                    t <- forkIO loop
+                    debugIO $ "created io-manager thread."
+                    return (Just t)
+    case old of
+      Nothing -> create
+      Just t  -> do
+        s <- threadStatus t
+        case s of
+          ThreadFinished -> create
+          ThreadDied     -> create
+          _other         -> return (Just t)
 
 
 getSystemManager :: IO (Maybe Manager)
 getSystemManager = readIORef managerRef
 
 managerRef :: IORef (Maybe Manager)
-managerRef = unsafePerformIO $ new >>= newIORef . Just
+managerRef = unsafePerformIO $
+  if threaded
+     then new >>= newIORef . Just
+     else newIORef Nothing
 {-# NOINLINE managerRef #-}
 
 -- must be power of 2
@@ -415,12 +450,75 @@ step mgr@Manager{..} = do
       cap <- A.capacity mgrOverlappedEntries
       when (cap == n) $ A.ensureCapacity mgrOverlappedEntries (2*cap)
 
-loop :: Manager -> IO ()
-loop mgr = go
+io_mngr_loop :: Manager -> IO ()
+io_mngr_loop mgr = go
     where
       go = do step mgr
               debugIO "step IO mngr"
-              go
+              r2 <- c_readIOManagerEvent
+              exit <-
+                    case r2 of
+                      _ | r2 == io_MANAGER_WAKEUP -> return False
+                      _ | r2 == io_MANAGER_DIE    -> return True
+                      0 -> return False -- spurious wakeup
+                      _ -> do start_console_handler (r2 `shiftR` 1)
+                              return False
+              when (not exit) go
+
+-- TODO: Do some refactoring to share this between here and GHC.Conc.POSIX
+-- must agree with rts/win32/ThrIOManager.c
+io_MANAGER_WAKEUP, io_MANAGER_DIE :: Word32
+io_MANAGER_WAKEUP = 0xffffffff
+io_MANAGER_DIE    = 0xfffffffe
+
+data ConsoleEvent
+ = ControlC
+ | Break
+ | Close
+    -- these are sent to Services only.
+ | Logoff
+ | Shutdown
+ deriving ( Eq   -- ^ @since 4.3.0.0
+          , Ord  -- ^ @since 4.3.0.0
+          , Enum -- ^ @since 4.3.0.0
+          , Show -- ^ @since 4.3.0.0
+          , Read -- ^ @since 4.3.0.0
+          )
+
+start_console_handler :: Word32 -> IO ()
+start_console_handler r =
+  case toWin32ConsoleEvent r of
+     Just x  -> withMVar win32ConsoleHandler $ \handler -> do
+                    _ <- forkIO (handler x)
+                    return ()
+     Nothing -> return ()
+
+toWin32ConsoleEvent :: (Eq a, Num a) => a -> Maybe ConsoleEvent
+toWin32ConsoleEvent ev =
+   case ev of
+       0 {- CTRL_C_EVENT-}        -> Just ControlC
+       1 {- CTRL_BREAK_EVENT-}    -> Just Break
+       2 {- CTRL_CLOSE_EVENT-}    -> Just Close
+       5 {- CTRL_LOGOFF_EVENT-}   -> Just Logoff
+       6 {- CTRL_SHUTDOWN_EVENT-} -> Just Shutdown
+       _ -> Nothing
+
+win32ConsoleHandler :: MVar (ConsoleEvent -> IO ())
+win32ConsoleHandler = unsafePerformIO (newMVar (errorWithoutStackTrace "win32ConsoleHandler"))
+
+wakeupIOManager :: IO ()
+wakeupIOManager = c_sendIOManagerEvent io_MANAGER_WAKEUP
+
+foreign import ccall unsafe "getIOManagerEvent" -- in the RTS (ThrIOManager.c)
+  c_getIOManagerEvent :: IO HANDLE
+
+foreign import ccall unsafe "readIOManagerEvent" -- in the RTS (ThrIOManager.c)
+  c_readIOManagerEvent :: IO Word32
+
+foreign import ccall unsafe "sendIOManagerEvent" -- in the RTS (ThrIOManager.c)
+  c_sendIOManagerEvent :: Word32 -> IO ()
+
+foreign import ccall unsafe "rtsSupportsBoundThreads" threaded :: Bool
 
 -- ---------------------------------------------------------------------------
 -- debugging
