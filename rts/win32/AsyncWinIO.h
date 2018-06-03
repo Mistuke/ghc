@@ -1,8 +1,8 @@
 /* AsyncIO.h
  *
- * Integrating Win32 asynchronous I/O with the GHC RTS.
+ * Integrating Win32 asynchronous IOCP with the GHC RTS.
  *
- * (c) sof, 2002-2003.
+ * (c) Tamar Christina, 2018
  *
  * NOTE: This is the WinIO manager, only used for --io-manager=native.
  *       For the MIO manager see AsyncIO.h.

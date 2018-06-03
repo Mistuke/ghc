@@ -432,7 +432,8 @@ library
                -- I wish we had wildcards..., this would be:
                -- *.c hooks/**/*.c sm/**/*.c eventlog/**/*.c linker/**/*.c
     if os(windows)
-       c-sources: win32/AsyncIO.c
+       c-sources: win32/AsyncMIO.c
+                  win32/AsyncWinIO.c
                   win32/AwaitEvent.c
                   win32/ConsoleHandler.c
                   win32/GetEnv.c

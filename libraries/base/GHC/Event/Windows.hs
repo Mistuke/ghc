@@ -4,6 +4,7 @@
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE CPP #-}
 module GHC.Event.Windows (
     -- * Manager
     Manager,
@@ -34,6 +35,8 @@ module GHC.Event.Windows (
     -- * IO Result type
     IOResult(..)
 ) where
+
+#include "windows_cconv.h"
 
 import GHC.Event.Windows.Clock   (Clock, Seconds, getClock, getTime)
 import GHC.Event.Windows.FFI     (OVERLAPPED, LPOVERLAPPED, OVERLAPPED_ENTRY(..))
@@ -122,7 +125,8 @@ new = do
            replicateM callbackArraySize (newMVar =<< IT.new 8)
     mgrOverlappedEntries <- A.new 64
     let !mgr = Manager{..}
-    startIOManagerThread (io_mngr_loop mgr)
+    event <- c_getIOManagerEvent
+    startIOManagerThread (io_mngr_loop event mgr)
     return mgr
       where
         replicateM n x = sequence (replicate n x)
@@ -429,7 +433,7 @@ fromTimeout (Just sec) | sec > 120  = 120000
                        | sec > 0    = ceiling (sec * 1000)
                        | otherwise  = 0
 
-step :: Manager -> IO Bool
+step :: Manager -> IO (Bool, Maybe Seconds)
 step mgr@Manager{..} = do
     delay <- runExpiredTimeouts mgr
     debugIO $ "next timeout: " ++ show delay
@@ -450,13 +454,14 @@ step mgr@Manager{..} = do
       cap <- A.capacity mgrOverlappedEntries
       when (cap == n) $ A.ensureCapacity mgrOverlappedEntries (2*cap)
 
-    return $ n > 0 || isJust delay
+    -- Keep running if we just did some work or if we have a pending delay.
+    return (n > 0 || isJust delay, delay)
 
-io_mngr_loop :: Manager -> IO ()
-io_mngr_loop mgr = go
+io_mngr_loop :: HANDLE -> Manager -> IO ()
+io_mngr_loop event mgr = go
     where
-      go = do more <- step mgr
-              debugIO "step IO mngr"
+      go = do (more, delay) <- step mgr
+              debugIO "I/O manager stepping."
               r2 <- c_readIOManagerEvent
               exit <-
                     case r2 of
@@ -468,9 +473,21 @@ io_mngr_loop mgr = go
               -- If we have no more work to do, or something from the outside
               -- told us to stop then we let the thread die and stop the I/O
               -- manager.  It will be woken up again when there is more to do.
-              if not exit && more
-                 then go
-                 else debugIO "I/O manager going to sleep."
+              case () of
+                _ | exit -> debugIO "I/O manager shutting down."
+                _ | isJust delay -> do
+                      let timeout = fromTimeout delay
+                      debugIO "I/O manager pausing."
+                      r <- c_WaitForSingleObject event timeout
+                      when (r == 0xffffffff) $ throwGetLastError "io_mngr_loop"
+                      go
+                _ | more -> go -- We seem to have more work but no ETA for it.
+                               -- So just retry until we run out of work.
+                _ -> do
+                  debugIO "I/O manager deep sleep."
+                  r <- c_WaitForSingleObject event 0xFFFFFFFF
+                  when (r == 0xffffffff) $ throwGetLastError "io_mngr_loop"
+                  go
 
 -- TODO: Do some refactoring to share this between here and GHC.Conc.POSIX
 -- must agree with rts/win32/ThrIOManager.c
@@ -517,10 +534,11 @@ wakeupIOManager :: IO ()
 wakeupIOManager
   = do c_sendIOManagerEvent io_MANAGER_WAKEUP
        mngr <- getSystemManager
+       event <- c_getIOManagerEvent
        debugIO "waking up I/O manager."
        case mngr of
          Nothing  -> error "cannot happen."
-         Just mgr -> startIOManagerThread (io_mngr_loop mgr)
+         Just mgr -> startIOManagerThread (io_mngr_loop event mgr)
 
 
 foreign import ccall unsafe "getIOManagerEvent" -- in the RTS (ThrIOManager.c)
@@ -531,6 +549,9 @@ foreign import ccall unsafe "readIOManagerEvent" -- in the RTS (ThrIOManager.c)
 
 foreign import ccall unsafe "sendIOManagerEvent" -- in the RTS (ThrIOManager.c)
   c_sendIOManagerEvent :: Word32 -> IO ()
+
+foreign import WINDOWS_CCONV "WaitForSingleObject"
+   c_WaitForSingleObject :: HANDLE -> DWORD -> IO DWORD
 
 foreign import ccall unsafe "rtsSupportsBoundThreads" threaded :: Bool
 

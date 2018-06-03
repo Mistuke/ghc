@@ -305,7 +305,7 @@ hs_init_ghc(int *argc, char **argv[], RtsConfig rts_config)
 #endif
 
 #if defined(mingw32_HOST_OS) && !defined(THREADED_RTS)
-   if (is_io_mng_Native_p)
+   if (is_io_mng_native_p())
       startupAsyncWinIO();
     else
       startupAsyncIO();
@@ -481,7 +481,7 @@ hs_exit_(bool wait_foreign)
 #endif
 
 #if defined(mingw32_HOST_OS) && !defined(THREADED_RTS)
-    if (is_io_mng_Native_p)
+    if (is_io_mng_native_p())
       shutdownAsyncWinIO(wait_foreign);
     else
       shutdownAsyncIO(wait_foreign);
