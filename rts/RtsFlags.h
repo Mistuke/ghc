@@ -22,7 +22,7 @@ char** getUTF8Args(int* argc);
 void initRtsFlagsDefaults (void);
 void setupRtsFlags        (int *argc, char *argv[], RtsConfig rtsConfig);
 void freeRtsArgs          (void);
-bool is_io_mng_Native_p   (void);
+bool is_io_mng_native_p   (void);
 
 extern RtsConfig rtsConfig;
 

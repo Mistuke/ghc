@@ -17,7 +17,7 @@
 #include "Schedule.h"
 #include "AwaitEvent.h"
 #include <windows.h>
-#include "win32/AsyncIO.h"
+#include "win32/AsyncMIO.h"
 #include "win32/ConsoleHandler.h"
 
 // Used to avoid calling abandonRequestWait() if we don't need to.

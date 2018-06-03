@@ -152,7 +152,7 @@ managerRef :: IORef (Maybe Manager)
 managerRef = unsafePerformIO $
   if threaded
      then new >>= newIORef . Just
-     else newIORef Nothing
+     else new >>= newIORef . Just -- newIORef Nothing
 {-# NOINLINE managerRef #-}
 
 -- must be power of 2
@@ -542,7 +542,9 @@ debugIO s
   = do debug <- c_DEBUG_DUMP
        if debug
           then do tid <- myThreadId
-                  _   <- withCStringLen ("\twinio: " ++ s ++ " (" ++ showThreadId tid ++ ")\n") $
+                  let pref = if threaded then "\t" else ""
+                  _   <- withCStringLen (pref ++ "winio: " ++ s ++ " (" ++
+                                         showThreadId tid ++ ")\n") $
                          \(p, len) -> c_write 2 (castPtr p) (fromIntegral len)
                   return ()
           else do return ()

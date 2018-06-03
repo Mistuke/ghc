@@ -9,7 +9,7 @@
 #include "ConsoleHandler.h"
 #include "Schedule.h"
 #include "RtsUtils.h"
-#include "AsyncIO.h"
+#include "AsyncMIO.h"
 #include "RtsSignals.h"
 
 extern int stg_InstallConsoleEvent(int action, StgStablePtr *handler);

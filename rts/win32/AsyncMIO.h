@@ -5,10 +5,12 @@
  * (c) sof, 2002-2003.
  *
  * NOTE: This is the MIO manager, only used for --io-manager=posix.
- *       For the WINIO manager see base in the GHC.Event modules.
+ *       For the WINIO manager see AsyncWinIO.h.
  */
 
 #pragma once
+
+#include "Rts.h"
 
 extern unsigned int
 addIORequest(int   fd,

@@ -5,8 +5,9 @@
  * The IO manager thread in THREADED_RTS.
  * See also libraries/base/GHC/Conc.hs.
  *
- * NOTE: This is the MIO manager, only used for --io-manager=posix.
- *       For the WINIO manager see base in the GHC.Event modules.
+ * NOTE: This is used by both MIO and WINIO, though WINIO will ignore the
+ *       wake-up event.  This could be fixed if needed by calling
+ *       ensureIOManagerIsRunning_closure in the wake up event.
  * ---------------------------------------------------------------------------*/
 
 #include "Rts.h"

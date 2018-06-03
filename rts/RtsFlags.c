@@ -2278,7 +2278,7 @@ files like <progname>.eventlog, not arbitrary files.
    Helper utilities to query state.
    ------------------------------------------------------------------------- */
 
-bool is_io_mng_Native_p (void)
+bool is_io_mng_native_p (void)
 {
 #if defined (mingw32_HOST_OS)
   return RtsFlags.MiscFlags.ioManager == IO_MNGR_NATIVE;
