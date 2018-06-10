@@ -239,6 +239,7 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
         _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
              IT.insertWith (flip const) (lpoverlappedToInt lpol)
                (CompletionData fptr completionCB') tbl
+        wakeupIOManager -- TODO: Don't send the event if not needed.
 
         startCB lpol `onException` (Just `fmap` Win32.getLastError) >>= \result ->
           case result of
@@ -437,11 +438,18 @@ step :: Manager -> IO (Bool, Maybe Seconds)
 step mgr@Manager{..} = do
     delay <- runExpiredTimeouts mgr
     debugIO $ "next timeout: " ++ show delay
-    n <- case delay of
-          Nothing -> return 0
-          _ -> FFI.getQueuedCompletionStatusEx mgrIOCP mgrOverlappedEntries
-                                              (fromTimeout delay)
-    debugIO $ "queued completions: " ++ show n
+    -- The getQueuedCompletionStatusEx call will remove entries queud by the OS
+    -- and returns the finished ones in mgrOverlappedEntries and the number of
+    -- entries removed.
+    n <- FFI.getQueuedCompletionStatusEx mgrIOCP mgrOverlappedEntries
+                                         (fromTimeout delay)
+    queued <- A.length mgrOverlappedEntries
+    debugIO $ "completed completions: " ++ show n
+    debugIO $ "queued completions: " ++ show queued
+
+    -- If some completions are done, we need to process them and call their
+    -- callbacks.  We then remove the callbacks from the bookkeeping and resize
+    -- the index if required.
     when (n > 0) $ do
       A.forM_ mgrOverlappedEntries $ \oe -> do
           mCD <- withMVar (callbackTableVar mgr (lpOverlapped oe)) $ \tbl ->
@@ -451,11 +459,15 @@ step mgr@Manager{..} = do
             Just (CompletionData _fptr cb) -> do
                          status <- FFI.overlappedIOStatus (lpOverlapped oe)
                          cb status (dwNumberOfBytesTransferred oe)
+      -- Check to see if we received the maximum amount of entried we could
+      -- this likely indicates a high number of I/O requests have been queued.
+      -- In which case we should process more at a time.
       cap <- A.capacity mgrOverlappedEntries
       when (cap == n) $ A.ensureCapacity mgrOverlappedEntries (2*cap)
 
-    -- Keep running if we just did some work or if we have a pending delay.
-    return (n > 0 || isJust delay, delay)
+    -- Keep running if we have some outstanding completion equests
+    -- or if we have a pending delay.
+    return (queued > 0 || isJust delay, delay)
 
 io_mngr_loop :: HANDLE -> Manager -> IO ()
 io_mngr_loop event mgr = go

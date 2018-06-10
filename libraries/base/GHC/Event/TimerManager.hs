@@ -6,7 +6,7 @@
            , TypeSynonymInstances
            , FlexibleInstances
   #-}
-
+-- TODO: use the new Windows IO manager
 module GHC.Event.TimerManager
     ( -- * Types
       TimerManager
