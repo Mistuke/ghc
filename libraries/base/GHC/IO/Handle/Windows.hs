@@ -1,4 +1,4 @@
-{-# LANGUAGE Trustworthy #-}
+  {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE CPP, NoImplicitPrelude #-}
 
 -----------------------------------------------------------------------------
@@ -17,7 +17,8 @@
 
 module GHC.IO.Handle.Windows (
   stdin, stdout, stderr,
-  openFile, openBinaryFile, openFileBlocking
+  openFile, openBinaryFile, openFileBlocking,
+  handleToHANDLE
  ) where
 
 import Data.Maybe
@@ -186,12 +187,12 @@ openFile' filepath iomode binary non_blocking = do
         -- otherwise this Handle leaks.
 
 -- ---------------------------------------------------------------------------
--- Converting file descriptors from/to Handles
+-- Converting Windows Handles from/to Handles
 
 mkHandleFromHANDLE
    :: (RawIO dev, IODevice.IODevice dev, BufferedIO dev, Typeable dev) => dev
    -> IODeviceType
-   -> FilePath  -- a string describing this file descriptor (e.g. the filename)
+   -> FilePath  -- a string describing this Windows handle (e.g. the filename)
    -> IOMode
    -> Maybe TextEncoding
    -> IO Handle
@@ -215,6 +216,20 @@ mkHandleFromHANDLE dev hw_type filepath iomode mb_codec
 
         _other ->
            mkFileHandle dev filepath iomode mb_codec nl
+
+-- | Turn an existing Handle into a Win32 HANDLE. This function throws an
+-- IOError if the Handle does not reference a HANDLE
+handleToHANDLE :: Handle -> IO Win.HANDLE
+handleToHANDLE h = case h of
+  FileHandle _ mv -> do
+    Handle__{haDevice = dev} <- readMVar mv
+    case (cast dev :: Maybe (Win.Io Win.NativeHandle)) of
+      Just hwnd -> return $ Win.toHANDLE hwnd
+      Nothing   -> throwErr "not a file HANDLE"
+  DuplexHandle{} -> throwErr "not a file handle"
+  where
+    throwErr msg = ioException $ IOError (Just h)
+      InappropriateType "handleToHANDLE" msg Nothing Nothing
 
 -- ---------------------------------------------------------------------------
 -- Are files opened by default in text or binary mode, if the user doesn't

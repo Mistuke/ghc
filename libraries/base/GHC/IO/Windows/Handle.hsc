@@ -29,9 +29,11 @@ module GHC.IO.Windows.Handle
    ConsoleHandle(),
    IoHandle(),
    HANDLE,
+   Io(),
 
    -- * Utility functions
    convertHandle,
+   toHANDLE,
 
    -- * Standard Handles
    stdin,
