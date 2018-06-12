@@ -57,6 +57,7 @@ import GHC.Show
 import GHC.Windows
 import qualified GHC.Event.Array as A
 import qualified GHC.Windows     as Win32
+import GHC.IO.Handle.Internals (debugIO)
 
 ------------------------------------------------------------------------
 -- IOCP
@@ -107,12 +108,17 @@ getQueuedCompletionStatusEx :: IOCP
 getQueuedCompletionStatusEx iocp arr timeout =
     alloca $ \num_removed_ptr ->do
         A.unsafeLoad arr $ \oes cap -> do
+            debugIO $ "-- call getQueuedCompletionStatusEx "
             -- don't block the call if the rts is not supporting threads.
             -- this would block the entire program.
             ok <- c_GetQueuedCompletionStatusEx iocp oes (fromIntegral cap)
                   num_removed_ptr timeout (not rtsSupportsBoundThreads)
-            if ok then fromEnum `fmap` peek num_removed_ptr
+            debugIO $ "-- call getQueuedCompletionStatusEx: " ++ show ok
+            err <- getLastError
+            debugIO $ "-- getQueuedCompletionStatusEx: " ++ show err
+            if ok then fromIntegral `fmap` peek num_removed_ptr
             else do err <- getLastError
+                    debugIO $ "failed getQueuedCompletionStatusEx: " ++ show err
                     if err == #{const WAIT_TIMEOUT} then return 0
                     else failWith "GetQueuedCompletionStatusEx" err
 

@@ -459,6 +459,13 @@ step mgr@Manager{..} = do
             Just (CompletionData _fptr cb) -> do
                          status <- FFI.overlappedIOStatus (lpOverlapped oe)
                          cb status (dwNumberOfBytesTransferred oe)
+
+      -- clear the array so we don't erronously interpret the output, in
+      -- certain circumstances like lockFileEx the code could return 1 entry
+      -- removed but the file data not been filled in.
+      -- TODO: Maybe not needed..
+      A.clear mgrOverlappedEntries
+
       -- Check to see if we received the maximum amount of entried we could
       -- this likely indicates a high number of I/O requests have been queued.
       -- In which case we should process more at a time.

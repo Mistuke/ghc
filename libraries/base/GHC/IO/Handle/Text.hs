@@ -811,12 +811,16 @@ hGetBuf h ptr count
   | count <  0 = illegalBufferSize h "hGetBuf" count
   | otherwise =
       wantReadableHandle_ "hGetBuf" h $ \ h_@Handle__{..} -> do
-         flushCharReadBuffer h_
-         buf@Buffer{ bufRaw=raw, bufR=w, bufL=r, bufSize=sz }
+          debugIO $ ":: hGetBuf - " ++ show h
+          flushCharReadBuffer h_
+          buf@Buffer{ bufRaw=raw, bufR=w, bufL=r, bufSize=sz }
             <- readIORef haByteBuffer
-         if isEmptyBuffer buf
-            then bufReadEmpty    h_ buf (castPtr ptr) 0 count
-            else bufReadNonEmpty h_ buf (castPtr ptr) 0 count
+          debugIO ("hGetBuf: " ++ summaryBuffer buf)
+          res <- if isEmptyBuffer buf
+                    then bufReadEmpty    h_ buf (castPtr ptr) 0 count
+                    else bufReadNonEmpty h_ buf (castPtr ptr) 0 count
+          debugIO "** hGetBuf done."
+          return res
 
 -- small reads go through the buffer, large reads are satisfied by
 -- taking data first from the buffer and then direct from the file
@@ -827,8 +831,9 @@ bufReadNonEmpty h_@Handle__{..}
                 buf@Buffer{ bufRaw=raw, bufR=w, bufL=r, bufSize=sz }
                 ptr !so_far !count
  = do
+        debugIO ":: bufReadNonEmpty"
         let avail = w - r
-        if (count < avail)
+        if (count <= avail)
            then do
                 copyFromRawBuffer ptr raw r count
                 writeIORef haByteBuffer buf{ bufL = r + count }
@@ -842,6 +847,7 @@ bufReadNonEmpty h_@Handle__{..}
             so_far' = so_far + avail
             ptr' = ptr `plusPtr` avail
 
+        debugIO ("bufReadNonEmpty: " ++ summaryBuffer buf' ++ " s:" ++ show so_far' ++ " r:" ++ show remaining)
         if remaining == 0
            then return so_far'
            else bufReadEmpty h_ buf' ptr' so_far' remaining
@@ -849,9 +855,14 @@ bufReadNonEmpty h_@Handle__{..}
 
 bufReadEmpty :: Handle__ -> Buffer Word8 -> Ptr Word8 -> Int -> Int -> IO Int
 bufReadEmpty h_@Handle__{..}
-             buf@Buffer{ bufRaw=raw, bufR=w, bufL=r, bufSize=sz }
+             buf@Buffer{ bufRaw=raw, bufR=w, bufL=r, bufSize=sz, bufOffset=bff }
              ptr so_far count
- | count > sz = loop haDevice 0 count
+ | count > sz = do count <- loop haDevice 0 bff count
+                   let buf1 = bufferAddOffset (fromIntegral count) buf
+                   let buf2 = buf1 { bufR = count }
+                   writeIORef haByteBuffer buf2
+                   debugIO ("bufReadEmpty: " ++ summaryBuffer buf2)
+                   return count
  | otherwise = do
      (r,buf') <- Buffered.fillReadBuffer haDevice buf
      if r == 0
@@ -859,13 +870,15 @@ bufReadEmpty h_@Handle__{..}
         else do writeIORef haByteBuffer buf'
                 bufReadNonEmpty h_ buf' ptr so_far count
  where
-  loop :: RawIO.RawIO dev => dev -> Int -> Int -> IO Int
-  loop dev off bytes | bytes <= 0 = return (so_far + off)
-  loop dev off bytes = do
-    r <- RawIO.read dev (ptr `plusPtr` off) (fromIntegral off) bytes
+  loop :: RawIO.RawIO dev => dev -> Int -> Word64 -> Int -> IO Int
+  loop dev delta off bytes | bytes <= 0 = return (so_far + delta)
+  loop dev delta off bytes = do
+    r <- RawIO.read dev (ptr `plusPtr` delta) off bytes
+    debugIO $ show ptr ++ " - loop read@" ++ show delta ++ ": " ++ show r
+    debugIO $ "next:" ++ show (delta + r) ++ " - left:" ++ show (bytes - r)
     if r == 0
-        then return (so_far + off)
-        else loop dev (off + r) (bytes - r)
+        then return (so_far + delta)
+        else loop dev (delta + r) (off + fromIntegral r) (bytes - r)
 
 -- ---------------------------------------------------------------------------
 -- hGetBufSome

@@ -296,7 +296,7 @@ unlockImplWinIO h = do
         return Nothing
 
       completionCB err dwBytes
-        | err == 0  = Mgr.ioSuccess dwBytes
+        | err == 0  = Mgr.ioSuccess 0
         | otherwise = Mgr.ioFailed err
 
 unlockImplPOSIX :: Handle -> IO ()

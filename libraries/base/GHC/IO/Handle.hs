@@ -121,6 +121,7 @@ hFileSize handle =
       SemiClosedHandle          -> ioe_semiclosedHandle
       _ -> do flushWriteBuffer handle_
               r <- IODevice.getSize dev
+              debugIO $ "hFileSize: " ++ show r ++ " " ++ show handle
               if r /= -1
                  then return r
                  else ioException (IOError Nothing InappropriateType "hFileSize"

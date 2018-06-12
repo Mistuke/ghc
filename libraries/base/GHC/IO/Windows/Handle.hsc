@@ -392,12 +392,13 @@ hwndRead hwnd ptr offset bytes
       debugIO ":: hwndRead"
       ret <- c_ReadFile (toHANDLE hwnd) (castPtr outBuf)
                         (fromIntegral bytes) nullPtr lpOverlapped
+      err <- Win32.getLastError
 
       case ret of
-        False -> return Nothing
+        False | err == #{const ERROR_IO_PENDING} -> return Nothing
+              | otherwise -> failWith "ReadFile failed" err
         True  ->
-          do err <- Win32.getLastError
-             case () of
+          do case () of
               _ | err == #{const ERROR_IO_PENDING} -> return Nothing
                 | otherwise -> do
                     success <- overlappedIOStatus lpOverlapped
