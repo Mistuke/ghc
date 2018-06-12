@@ -66,7 +66,7 @@ import System.Posix.Types
 #endif
 
 c_DEBUG_DUMP :: Bool
-c_DEBUG_DUMP = True
+c_DEBUG_DUMP = False
 
 -- -----------------------------------------------------------------------------
 -- The file-descriptor IO device
