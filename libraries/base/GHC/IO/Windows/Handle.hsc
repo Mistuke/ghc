@@ -393,23 +393,21 @@ hwndRead hwnd ptr offset bytes
       ret <- c_ReadFile (toHANDLE hwnd) (castPtr outBuf)
                         (fromIntegral bytes) nullPtr lpOverlapped
       err <- Win32.getLastError
+      let err' = fromIntegral err
 
-      case ret of
-        False | err == #{const ERROR_IO_PENDING} -> return Nothing
-              | otherwise -> failWith "ReadFile failed" err
-        True  ->
-          do case () of
-              _ | err == #{const ERROR_IO_PENDING} -> return Nothing
-                | otherwise -> do
-                    success <- overlappedIOStatus lpOverlapped
-                -- Check to see if the operation was completed on a
-                -- non-overlapping handle. e.g. stdio redirection or similar.
-                    if success == #{const ERROR_SUCCESS}
-                       then return Nothing
-                       else failWith "ReadFile failed" err
+      case () of
+        _ | err == #{const ERROR_IO_PENDING} -> return Nothing
+          | not ret -> return (Just err')
+          | otherwise -> do
+              success <- overlappedIOStatus lpOverlapped
+          -- Check to see if the operation was completed on a
+          -- non-overlapping handle. e.g. stdio redirection or similar.
+              if success == #{const ERROR_SUCCESS}
+                  then return Nothing
+                  else return (Just err')
 
     completionCB err dwBytes
-      | err == 0                           = Mgr.ioSuccess $ fromIntegral dwBytes
+      | err == #{const ERROR_SUCCESS}      = Mgr.ioSuccess $ fromIntegral dwBytes
       | err == #{const ERROR_HANDLE_EOF}   = Mgr.ioSuccess 0
       | err == #{const STATUS_END_OF_FILE} = Mgr.ioSuccess 0
       | otherwise                          = Mgr.ioFailed err
@@ -436,7 +434,7 @@ hwndReadNonBlocking hwnd ptr offset bytes
         else return (Just err)
 
     completionCB err dwBytes
-      | err == 0                           = Mgr.ioSuccess $ fromIntegral dwBytes
+      | err == #{const ERROR_SUCCESS}      = Mgr.ioSuccess $ fromIntegral dwBytes
       | err == #{const ERROR_HANDLE_EOF}   = Mgr.ioSuccess 0
       | err == #{const STATUS_END_OF_FILE} = Mgr.ioSuccess 0
       | otherwise                          = Mgr.ioFailed err
@@ -458,8 +456,8 @@ hwndWrite hwnd ptr offset bytes
       return Nothing
 
     completionCB err dwBytes
-        | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
-        | otherwise = Mgr.ioFailed err
+        | err == #{const ERROR_SUCCESS}  = Mgr.ioSuccess $ fromIntegral dwBytes
+        | otherwise                      = Mgr.ioFailed err
 
 hwndWriteNonBlocking :: Io NativeHandle -> Ptr Word8 -> Word64 -> Int -> IO Int
 hwndWriteNonBlocking hwnd ptr offset bytes
@@ -480,8 +478,8 @@ hwndWriteNonBlocking hwnd ptr offset bytes
         else return (Just err)
 
     completionCB err dwBytes
-        | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
-        | otherwise = Mgr.ioFailed err
+        | err == #{const ERROR_SUCCESS} = Mgr.ioSuccess $ fromIntegral dwBytes
+        | otherwise                     = Mgr.ioFailed err
 
 consoleWrite :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int -> IO ()
 consoleWrite hwnd ptr _offset bytes

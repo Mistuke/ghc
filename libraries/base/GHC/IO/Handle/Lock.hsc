@@ -213,7 +213,7 @@ lockImplWinIO h ctx mode block = do
                           withOverlapped ctx wh 0 (startCB wh) completionCB
              case () of
               _ | retcode == #{const ERROR_OPERATION_ABORTED} -> retry
-                | retcode == 0 -> return True
+                | retcode == #{const ERROR_SUCCESS} -> return True
                 | retcode == #{const ERROR_LOCK_VIOLATION} && not block
                     -> return False
                 | otherwise -> failWith ctx retcode
@@ -229,27 +229,23 @@ lockImplWinIO h ctx mode block = do
         ret <- c_LockFileEx wh flags 0 #{const INFINITE} #{const INFINITE}
                               lpOverlapped
 
-        case ret of
-          False ->
-            do err <- getLastError
-               case () of
-                _ | err == #{const ERROR_IO_PENDING} -> return Nothing
-                  | otherwise -> return $ Just $ fromIntegral err
-          True  ->
-            do err <- getLastError
-               case () of
-                _ | err == #{const ERROR_IO_PENDING} -> return Nothing
-                  | otherwise -> do
-                      success <- overlappedIOStatus lpOverlapped
-                      -- Check to see if the operation was completed on a
-                      -- non-overlapping handle.
-                      if success == #{const ERROR_SUCCESS}
-                        then return Nothing
-                        else failWith "lockImpl failed" err
+        err <- getLastError
+        let err' = fromIntegral err
+        do case () of
+            _ | err == #{const ERROR_IO_PENDING} -> return Nothing
+              | ret -> return Nothing
+              | err == #{const ERROR_SUCCESS} -> do
+                  success <- overlappedIOStatus lpOverlapped
+                  -- Check to see if the operation was completed on a
+                  -- non-overlapping handle.
+                  if success == #{const ERROR_SUCCESS}
+                    then return Nothing
+                    else return $ Just err'
+              | otherwise -> return $ Just err'
 
       completionCB err dwBytes
-        | err == 0  = Mgr.ioSuccess 0
-        | otherwise = Mgr.ioFailed err
+        | err == #{const ERROR_SUCCESS} = Mgr.ioSuccess 0
+        | otherwise                     = Mgr.ioFailed err
 
 lockImplPOSIX :: Handle -> String -> LockMode -> Bool -> IO Bool
 lockImplPOSIX h ctx mode block = do
@@ -296,8 +292,8 @@ unlockImplWinIO h = do
         return Nothing
 
       completionCB err dwBytes
-        | err == 0  = Mgr.ioSuccess 0
-        | otherwise = Mgr.ioFailed err
+        | err == #{const ERROR_SUCCESS} = Mgr.ioSuccess 0
+        | otherwise                     = Mgr.ioFailed err
 
 unlockImplPOSIX :: Handle -> IO ()
 unlockImplPOSIX h = do

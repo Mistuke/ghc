@@ -146,7 +146,8 @@ startIOManagerThread loop = do
         case s of
           ThreadFinished -> create
           ThreadDied     -> create
-          _other         -> return (Just t)
+          _other         -> do c_sendIOManagerEvent io_MANAGER_WAKEUP
+                               return (Just t)
 
 
 getSystemManager :: IO (Maybe Manager)
@@ -208,7 +209,8 @@ associateHandle' hwnd
 -- done before using the handle with 'withOverlapped'.
 associateHandle :: Manager -> HANDLE -> IO ()
 associateHandle Manager{..} h =
-    FFI.associateHandleWithIOCP mgrIOCP h 0
+    -- Use as completion key the file handle itself, so we can track completion
+    FFI.associateHandleWithIOCP mgrIOCP h (fromIntegral $ ptrToWordPtr h)
 
 -- | Start an overlapped I/O operation, and wait for its completion.  If
 -- 'withOverlapped' is interrupted by an asynchronous exception, the operation
@@ -239,9 +241,11 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
         _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
              IT.insertWith (flip const) (lpoverlappedToInt lpol)
                (CompletionData fptr completionCB') tbl
-        wakeupIOManager -- TODO: Don't send the event if not needed.
 
-        startCB lpol `onException` (Just `fmap` Win32.getLastError) >>= \result ->
+        let execute = do res <- startCB lpol
+                         wakeupIOManager
+                         return res
+        execute `onException` (Just `fmap` Win32.getLastError) >>= \result ->
           case result of
             Nothing -> return ()
             Just err -> do
@@ -443,9 +447,7 @@ step mgr@Manager{..} = do
     -- entries removed.
     n <- FFI.getQueuedCompletionStatusEx mgrIOCP mgrOverlappedEntries
                                          (fromTimeout delay)
-    queued <- A.length mgrOverlappedEntries
     debugIO $ "completed completions: " ++ show n
-    debugIO $ "queued completions: " ++ show queued
 
     -- If some completions are done, we need to process them and call their
     -- callbacks.  We then remove the callbacks from the bookkeeping and resize
@@ -472,9 +474,8 @@ step mgr@Manager{..} = do
       cap <- A.capacity mgrOverlappedEntries
       when (cap == n) $ A.ensureCapacity mgrOverlappedEntries (2*cap)
 
-    -- Keep running if we have some outstanding completion equests
-    -- or if we have a pending delay.
-    return (queued > 0 || isJust delay, delay)
+    -- Keep running if we did some work just now or if we have a pending delay.
+    return (n > 0 || isJust delay, delay)
 
 io_mngr_loop :: HANDLE -> Manager -> IO ()
 io_mngr_loop event mgr = go
@@ -551,8 +552,7 @@ win32ConsoleHandler = unsafePerformIO (newMVar (errorWithoutStackTrace "win32Con
 
 wakeupIOManager :: IO ()
 wakeupIOManager
-  = do c_sendIOManagerEvent io_MANAGER_WAKEUP
-       mngr <- getSystemManager
+  = do mngr <- getSystemManager
        event <- c_getIOManagerEvent
        debugIO "waking up I/O manager."
        case mngr of
