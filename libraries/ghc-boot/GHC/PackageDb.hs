@@ -392,6 +392,10 @@ decodeFromFile file mode decoder = case mode of
   -- shared lock on non-Windows platform because we update the database with an
   -- atomic rename, so readers will always see the database in a consistent
   -- state.
+  -- Phyx: HUH, Why don't we do this on Windows too then? ReplaceFile is atomic
+  -- in the data move, it's only attributes that are not atomic.
+  -- https://msdn.microsoft.com/en-us/library/windows/desktop/hh802690.aspx
+  -- So why the extra complexity?
 #if defined(mingw32_HOST_OS)
     bracket (lockPackageDbWith SharedLock file) unlockPackageDb $ \_ -> do
 #endif
@@ -406,7 +410,9 @@ decodeFromFile file mode decoder = case mode of
     decodeFileContents = withBinaryFile file ReadMode $ \hnd ->
       feed hnd (runGetIncremental decoder)
 
-    feed hnd (Partial k)  = do chunk <- BS.hGet hnd BS.Lazy.defaultChunkSize
+    feed hnd (Partial k)  = do hPutStrLn stderr $ ":: decodeFromFile - start: " ++ file
+                               chunk <- BS.hGet hnd BS.Lazy.defaultChunkSize
+                               hPutStrLn stderr $ ":: decodeFromFile - chunked read: " ++ file
                                if BS.null chunk
                                  then feed hnd (k Nothing)
                                  else feed hnd (k (Just chunk))

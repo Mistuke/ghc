@@ -238,7 +238,7 @@ __set_console_buffering(HANDLE hFile, bool cooked)
     }
 
 	return GetConsoleMode(hFile, &st) &&
-	       SetConsoleMode(hFile, cooked ? (st | ENABLE_LINE_INPUT) : st & ~flgs);
+	       SetConsoleMode(hFile, cooked ? st & ~flgs : (st | ENABLE_LINE_INPUT));
 }
 
 bool
@@ -252,7 +252,7 @@ __set_console_echo(HANDLE hFile, bool on)
     }
 
 	return GetConsoleMode(hFile, &st) &&
-	       SetConsoleMode(hFile, ( on ? (st | flgs) : (st & ~ENABLE_ECHO_INPUT)));
+	       SetConsoleMode(hFile, ( on ? (st | flgs) : (st & ~flgs)));
 }
 
 bool

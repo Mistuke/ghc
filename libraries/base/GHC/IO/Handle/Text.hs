@@ -859,7 +859,7 @@ bufReadEmpty h_@Handle__{..}
              ptr so_far count
  | count > sz = do count <- loop haDevice 0 bff count
                    let buf1 = bufferAddOffset (fromIntegral count) buf
-                   -- let buf2 = buf1 { bufR = count }
+                   -- let buf2 = buf1 { bufR = w + count }
                    writeIORef haByteBuffer buf1
                    debugIO ("bufReadEmpty: " ++ summaryBuffer buf1)
                    return count
@@ -873,7 +873,7 @@ bufReadEmpty h_@Handle__{..}
   loop :: RawIO.RawIO dev => dev -> Int -> Word64 -> Int -> IO Int
   loop dev delta off bytes | bytes <= 0 = return (so_far + delta)
   loop dev delta off bytes = do
-    r <- RawIO.read dev (ptr `plusPtr` delta) (fromIntegral delta) bytes
+    r <- RawIO.read dev (ptr `plusPtr` delta) off bytes
     debugIO $ show ptr ++ " - loop read@" ++ show delta ++ ": " ++ show r
     debugIO $ "next:" ++ show (delta + r) ++ " - left:" ++ show (bytes - r)
     if r == 0

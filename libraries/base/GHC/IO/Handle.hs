@@ -239,7 +239,7 @@ hSetBuffering handle mode =
         -- for most common uses), so simply disable its use here.
                   NoBuffering -> IODevice.setRaw haDevice True
 #else
-                  NoBuffering -> return ()
+                  NoBuffering -> return () <!> IODevice.setRaw haDevice True
 #endif
                   _           -> IODevice.setRaw haDevice False
 
