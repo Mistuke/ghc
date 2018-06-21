@@ -16,6 +16,8 @@ module GHC.Event.Windows (
     withOverlapped,
     withOverlappedEx,
     StartCallback,
+    StartIOCallback,
+    CbResult(..),
     CompletionCallback,
     LPOVERLAPPED,
 
@@ -195,6 +197,16 @@ nanoSecondsToSeconds n = fromIntegral n / 1000000000.0
 -- will rethrow.
 type StartCallback a = LPOVERLAPPED -> IO a
 
+-- | Specialized callback type for I/O Completion Ports calls using
+-- withOverlapped.
+type StartIOCallback a = StartCallback (CbResult a)
+
+-- | CallBack result type to disambiguate between the different states
+-- an I/O Completion call could be in.
+data CbResult a = CbDone    -- ^ Request was handled immediately, no queue.
+                | CbPending -- ^ Queued and handled by I/O manager
+                | CbError a -- ^ I/O request abort, return failure immediately
+
 -- | Called when the completion is delivered.
 type CompletionCallback a = ErrCode   -- ^ 0 indicates success
                           -> DWORD     -- ^ Number of bytes transferred
@@ -224,7 +236,7 @@ withOverlappedThreaded_ :: Manager
                         -> HANDLE
                         -> Word64 -- ^ Value to use for the @OVERLAPPED@
                                   --   structure's Offset/OffsetHigh members.
-                        -> StartCallback (Maybe Int)
+                        -> StartIOCallback Int
                         -> CompletionCallback (IOResult a)
                         -> IO (IOResult a)
 withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
@@ -242,23 +254,40 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
              IT.insertWith (flip const) (lpoverlappedToInt lpol)
                (CompletionData fptr completionCB') tbl
 
-        let execute = do res <- startCB lpol
-                         wakeupIOManager
-                         return res
-        execute `onException` (Just `fmap` Win32.getLastError) >>= \result ->
+        execute <- (startCB lpol) `onException`
+                        (CbError `fmap` Win32.getLastError) >>= \result -> do
           case result of
-            Nothing -> return ()
-            Just err -> do
-                _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
+            CbPending   -> wakeupIOManager
+            CbError err -> do
+              _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
                     IT.delete (lpoverlappedToInt lpol) tbl
-                signalThrow (Just err)
+              signalThrow (Just err)
+            CbDone      -> do
+              _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
+                    IT.delete (lpoverlappedToInt lpol) tbl
+              return ()
+          return result
 
         let cancel = uninterruptibleMask_ $ FFI.cancelIoEx h lpol
         let runner = do res <- takeMVar signal `onException` cancel
                         case res of
                           IOFailed err -> FFI.throwWinErr fname (maybe 0 fromIntegral err)
                           _            -> return res
-        runner
+
+        -- Sometimes we shouldn't bother with the I/O manager as the call has
+        -- failed or is done.
+        case execute of
+          CbPending   -> runner
+          CbDone      -> do
+            -- It's safe to block here since the operation completed it will
+            -- return immediately.
+            bytes <- FFI.getOverlappedResult h lpol True
+            case bytes of
+              Just res -> completionCB 0 res
+              Nothing  -> do err <- FFI.overlappedIOStatus lpol
+                             completionCB err 0
+          CbError err -> do let err' = fromIntegral err
+                            completionCB err' 0
 
 -- This will block the current haskell thread
 -- but will allow you to cancel the operation from
@@ -268,7 +297,7 @@ withOverlappedNonThreaded_ :: String
                            -> HANDLE
                            -> Word64 -- ^ Value to use for the @OVERLAPPED@
                                      --   structure's Offset/OffsetHigh members.
-                           -> StartCallback (Maybe Int)
+                           -> StartIOCallback Int
                            -> CompletionCallback (IOResult a)
                            -> IO (IOResult a)
 withOverlappedNonThreaded_ _fname h offset startCB completionCB = do
@@ -284,21 +313,20 @@ withOverlappedNonThreaded_ _fname h offset startCB completionCB = do
 
         startCB lpol `onException` (Just `fmap` Win32.getLastError) >>= \result ->
           case result of
-            Nothing -> do
-                bytes <- FFI.getOverlappedResult h lpol True
-                case bytes of
-                  Just num_bytes -> completionCB' 0 num_bytes
-                  Nothing        -> do err <- FFI.overlappedIOStatus lpol
-                                       completionCB' err 0
-            Just err -> do
-                signalThrow (Just err)
+            CbError err -> signalThrow $ Just err
+            _           -> do
+              bytes <- FFI.getOverlappedResult h lpol True
+              case bytes of
+                Just num_bytes -> completionCB' 0 num_bytes
+                Nothing        -> do err <- FFI.overlappedIOStatus lpol
+                                     completionCB' err 0
 
 -- Safe version of function
 withOverlapped :: String
                -> HANDLE
                -> Word64 -- ^ Value to use for the @OVERLAPPED@
                          --   structure's Offset/OffsetHigh members.
-               -> StartCallback (Maybe Int)
+               -> StartIOCallback Int
                -> CompletionCallback (IOResult a)
                -> IO (IOResult a)
 withOverlapped fname h offset startCB completionCB
@@ -312,7 +340,7 @@ withOverlappedEx :: Maybe Manager
                  -> HANDLE
                  -> Word64 -- ^ Value to use for the @OVERLAPPED@
                            --   structure's Offset/OffsetHigh members.
-                 -> StartCallback (Maybe Int)
+                 -> StartIOCallback Int
                  -> CompletionCallback (IOResult a)
                  -> IO (IOResult a)
 withOverlappedEx mngr fname h offset startCB completionCB

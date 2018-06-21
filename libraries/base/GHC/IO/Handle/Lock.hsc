@@ -213,7 +213,7 @@ lockImplWinIO h ctx mode block = do
                           withOverlapped ctx wh 0 (startCB wh) completionCB
              case () of
               _ | retcode == #{const ERROR_OPERATION_ABORTED} -> retry
-                | retcode == #{const ERROR_SUCCESS} -> return True
+                | retcode == #{const ERROR_SUCCESS}           -> return True
                 | retcode == #{const ERROR_LOCK_VIOLATION} && not block
                     -> return False
                 | otherwise -> failWith ctx retcode
@@ -232,16 +232,16 @@ lockImplWinIO h ctx mode block = do
         err <- getLastError
         let err' = fromIntegral err
         do case () of
-            _ | err == #{const ERROR_IO_PENDING} -> return Nothing
-              | ret -> return Nothing
-              | err == #{const ERROR_SUCCESS} -> do
+            _ | err == #{const ERROR_IO_PENDING} -> return Mgr.CbPending
+              | ret                              -> return Mgr.CbDone
+              | err == #{const ERROR_SUCCESS}    -> do
                   success <- overlappedIOStatus lpOverlapped
                   -- Check to see if the operation was completed on a
                   -- non-overlapping handle.
                   if success == #{const ERROR_SUCCESS}
-                    then return Nothing
-                    else return $ Just err'
-              | otherwise -> return $ Just err'
+                    then return Mgr.CbDone
+                    else return $ Mgr.CbError err'
+              | otherwise -> return $ Mgr.CbError err'
 
       completionCB err dwBytes
         | err == #{const ERROR_SUCCESS} = Mgr.ioSuccess 0
@@ -264,8 +264,8 @@ lockImplPOSIX h ctx mode block = do
       True  -> return True
       False -> getLastError >>= \err -> if
         | not block && err == #{const ERROR_LOCK_VIOLATION} -> return False
-        | err == #{const ERROR_OPERATION_ABORTED} -> retry
-        | otherwise -> failWith ctx err
+        | err == #{const ERROR_OPERATION_ABORTED}           -> retry
+        | otherwise                                         -> failWith ctx err
   where
     sizeof_OVERLAPPED = #{size OVERLAPPED}
 
@@ -286,10 +286,20 @@ unlockImplWinIO h = do
       startCB wh lpOverlapped = do
         ret <- c_UnlockFileEx wh 0 #{const INFINITE} #{const INFINITE}
                               lpOverlapped
-        when (not ret) $
-          failIf_ (/= #{const ERROR_IO_PENDING}) "unlockImpl failed" $
-                    getLastError
-        return Nothing
+
+        err <- getLastError
+        let err' = fromIntegral err
+        do case () of
+            _ | err == #{const ERROR_IO_PENDING} -> return Mgr.CbPending
+              | ret                              -> return Mgr.CbDone
+              | err == #{const ERROR_SUCCESS}    -> do
+                  success <- overlappedIOStatus lpOverlapped
+                  -- Check to see if the operation was completed on a
+                  -- non-overlapping handle.
+                  if success == #{const ERROR_SUCCESS}
+                    then return Mgr.CbDone
+                    else return $ Mgr.CbError err'
+              | otherwise -> return $ Mgr.CbError err'
 
       completionCB err dwBytes
         | err == #{const ERROR_SUCCESS} = Mgr.ioSuccess 0

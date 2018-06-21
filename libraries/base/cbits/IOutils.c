@@ -223,6 +223,9 @@ __is_console(HANDLE hFile)
     return true;
 }
 
+#ifndef ENABLE_VIRTUAL_TERMINAL_INPUT
+#define ENABLE_VIRTUAL_TERMINAL_INPUT 0x0200
+#endif
 
 bool
 __set_console_buffering(HANDLE hFile, bool cooked)
@@ -230,15 +233,19 @@ __set_console_buffering(HANDLE hFile, bool cooked)
     DWORD  st;
     /* According to GetConsoleMode() docs, it is not possible to
        leave ECHO_INPUT enabled without also having LINE_INPUT,
-       so we have to turn both off here. */
+       so we have to turn both off here.
+       We toggle ENABLE_VIRTUAL_TERMINAL_INPUT to enable us to receive
+       virtual keyboard keys in ReadConsole.  */
     DWORD flgs = ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
+    DWORD enabled = (st & ~flgs);// | ENABLE_VIRTUAL_TERMINAL_INPUT;
+    DWORD disabled = (st | ENABLE_LINE_INPUT);// & ~ENABLE_VIRTUAL_TERMINAL_INPUT;
 
     if (hFile == INVALID_HANDLE_VALUE) {
         return false;
     }
 
 	return GetConsoleMode(hFile, &st) &&
-	       SetConsoleMode(hFile, cooked ? st & ~flgs : (st | ENABLE_LINE_INPUT));
+	       SetConsoleMode(hFile, cooked ? enabled : disabled);
 }
 
 bool
