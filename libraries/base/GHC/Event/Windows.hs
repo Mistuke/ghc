@@ -57,7 +57,7 @@ import Foreign       hiding (new)
 import Foreign.C
 import Foreign.ForeignPtr.Unsafe
 import qualified GHC.Event.Array    as A
-import GHC.Arr (Array, (!), listArray)
+import GHC.Arr (Array, (!), listArray, numElements)
 import GHC.Base
 import {-# SOURCE #-} GHC.Conc.Sync (forkIO, myThreadId, showThreadId,
                                      ThreadId(..), ThreadStatus(..),
@@ -77,7 +77,7 @@ import GHC.RTS.Flags
 import qualified GHC.Windows as Win32
 
 c_DEBUG_DUMP :: IO Bool
-c_DEBUG_DUMP = scheduler `fmap` getDebugFlags
+c_DEBUG_DUMP = return True -- scheduler `fmap` getDebugFlags
 
 
 -- ---------------------------------------------------------------------------
@@ -138,7 +138,9 @@ startIOManagerThread :: IO () -> IO ()
 startIOManagerThread loop = do
   modifyMVar_ ioManagerThread $ \old -> do
     let create = do debugIO "spawning thread.."
-                    t <- forkIO loop
+                    t <- if threaded
+                            then forkOS loop
+                            else forkIO loop
                     debugIO $ "created io-manager thread."
                     return (Just t)
     case old of
@@ -148,7 +150,9 @@ startIOManagerThread loop = do
         case s of
           ThreadFinished -> create
           ThreadDied     -> create
-          _other         -> do c_sendIOManagerEvent io_MANAGER_WAKEUP
+          _other         -> do debugIO $ "already alive, waking up thread."
+                               c_sendIOManagerEvent io_MANAGER_WAKEUP
+                               debugIO $ "woke up manager on thread: " ++ showThreadId t
                                return (Just t)
 
 
@@ -250,22 +254,17 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
                                     IOFailed  err -> signalThrow err
         fptr <- FFI.allocOverlapped offset
         let lpol = unsafeForeignPtrToPtr fptr
-        _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
-             IT.insertWith (flip const) (lpoverlappedToInt lpol)
-               (CompletionData fptr completionCB') tbl
 
-        execute <- (startCB lpol) `onException`
+        execute <- startCB lpol `onException`
                         (CbError `fmap` Win32.getLastError) >>= \result -> do
           case result of
-            CbPending   -> wakeupIOManager
-            CbError err -> do
+            CbPending   -> do
               _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
-                    IT.delete (lpoverlappedToInt lpol) tbl
-              signalThrow (Just err)
-            CbDone      -> do
-              _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
-                    IT.delete (lpoverlappedToInt lpol) tbl
-              return ()
+                      IT.insertWith (flip const) (lpoverlappedToInt lpol)
+                                    (CompletionData fptr completionCB') tbl
+              wakeupIOManager
+            CbError err -> signalThrow (Just err)
+            CbDone      -> return ()
           return result
 
         let cancel = uninterruptibleMask_ $ FFI.cancelIoEx h lpol
@@ -502,8 +501,11 @@ step mgr@Manager{..} = do
       cap <- A.capacity mgrOverlappedEntries
       when (cap == n) $ A.ensureCapacity mgrOverlappedEntries (2*cap)
 
-    -- Keep running if we did some work just now or if we have a pending delay.
-    return (n > 0 || isJust delay, delay)
+    -- Keep running if we still have some work queued or
+    -- if we have a pending delay.
+    let more = numElements mgrCallbacks > 0
+    debugIO $ "has more: " ++ show more ++ " - removed: " ++  show n
+    return (more || isJust delay, delay)
 
 io_mngr_loop :: HANDLE -> Manager -> IO ()
 io_mngr_loop event mgr = go

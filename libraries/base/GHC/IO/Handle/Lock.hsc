@@ -227,7 +227,7 @@ lockImplWinIO h ctx mode block = do
 
       startCB wh lpOverlapped = do
         ret <- c_LockFileEx wh flags 0 #{const INFINITE} #{const INFINITE}
-                              lpOverlapped
+                            lpOverlapped
 
         err <- getLastError
         let err' = fromIntegral err

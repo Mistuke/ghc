@@ -52,6 +52,7 @@ import Foreign
 import Foreign.C.Types
 import GHC.Base
 import GHC.Enum (fromEnum)
+import GHC.Num ((*))
 import GHC.Real (fromIntegral)
 import GHC.Show
 import GHC.Windows
@@ -108,6 +109,8 @@ getQueuedCompletionStatusEx :: IOCP
 getQueuedCompletionStatusEx iocp arr timeout =
     alloca $ \num_removed_ptr ->do
         A.unsafeLoad arr $ \oes cap -> do
+            -- TODO: remove after debugging
+            fillBytes oes 0 (cap * (sizeOf (undefined :: OVERLAPPED_ENTRY)))
             debugIO $ "-- call getQueuedCompletionStatusEx "
             -- don't block the call if the rts is not supporting threads.
             -- this would block the entire program.
@@ -115,7 +118,8 @@ getQueuedCompletionStatusEx iocp arr timeout =
                   num_removed_ptr timeout (not rtsSupportsBoundThreads)
             debugIO $ "-- call getQueuedCompletionStatusEx: " ++ show ok
             err <- getLastError
-            debugIO $ "-- getQueuedCompletionStatusEx: " ++ show err
+            nc <- (peek num_removed_ptr)
+            debugIO $ "-- getQueuedCompletionStatusEx: n=" ++ show nc ++ " ,err=" ++ show err
             if ok then fromIntegral `fmap` peek num_removed_ptr
             else do err <- getLastError
                     debugIO $ "failed getQueuedCompletionStatusEx: " ++ show err
