@@ -70,6 +70,7 @@ import GHC.IO.IOMode
 import GHC.IO.Windows.Encoding (withGhcInternalToUTF16, withUTF16ToGhcInternal)
 import GHC.IO.Windows.Paths (getDevicePath)
 import GHC.IO.Handle.Internals (debugIO)
+import GHC.IORef
 import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
 import GHC.Event.Windows.FFI (overlappedIOStatus)
 import Foreign.Ptr
@@ -93,9 +94,16 @@ import Text.Show
 data NativeHandle
 data ConsoleHandle
 
+-- | Bit of a Hack, but we don't want every handle to have a cooked entry
+--   but all copies of the handles for which we do want one need to share
+--   the same value.
+--   We can't store it seperately because we don't know when the handle will
+--   be destroyed or invalidated.
 data IoHandle a where
   NativeHandle  :: { getNativeHandle  :: HANDLE } -> IoHandle NativeHandle
-  ConsoleHandle :: { getConsoleHandle :: HANDLE } -> IoHandle ConsoleHandle
+  ConsoleHandle :: { getConsoleHandle :: HANDLE
+                   , cookedHandle :: IORef Bool
+                   } -> IoHandle ConsoleHandle
 
 type Io a = IoHandle a
 
@@ -132,16 +140,24 @@ class (GHC.IO.Device.RawIO a, IODevice a, BufferedIO a, Typeable a)
   toHANDLE   :: a -> HANDLE
   fromHANDLE :: HANDLE -> a
   isLockable :: a -> Bool
+  setCooked  :: a -> Bool -> IO a
+  isCooked   :: a -> IO Bool
 
 instance RawHandle (Io NativeHandle) where
   toHANDLE     = getNativeHandle
   fromHANDLE   = NativeHandle
   isLockable _ = True
+  setCooked    = const . return
+  isCooked   _ = return False
 
 instance RawHandle (Io ConsoleHandle) where
-  toHANDLE     = getConsoleHandle
-  fromHANDLE   = ConsoleHandle
-  isLockable _ = False
+  toHANDLE         = getConsoleHandle
+  fromHANDLE h     = unsafePerformIO $ ConsoleHandle h <$> newIORef False
+  isLockable _     = False
+  setCooked  h val =
+    do writeIORef (cookedHandle h) val
+       return h
+  isCooked   h     = readIORef (cookedHandle h)
 
 -- -----------------------------------------------------------------------------
 -- The Windows IO device implementation
@@ -174,7 +190,7 @@ instance GHC.IO.Device.IODevice (Io ConsoleHandle) where
   setSize    = handle_set_console_size
   setEcho    = handle_set_echo
   getEcho    = handle_get_echo
-  setRaw     = handle_set_buffering
+  setRaw     = console_set_buffering
   devType    = handle_dev_type
   dup        = handle_duplicate
 
@@ -233,9 +249,14 @@ getStdHandle hid =
   failIf (== iNVALID_HANDLE_VALUE) "GetStdHandle" $ c_GetStdHandle hid
 
 stdin, stdout, stderr :: Io ConsoleHandle
-stdin  = unsafePerformIO $ ConsoleHandle <$> getStdHandle sTD_INPUT_HANDLE
-stdout = unsafePerformIO $ ConsoleHandle <$> getStdHandle sTD_OUTPUT_HANDLE
-stderr = unsafePerformIO $ ConsoleHandle <$> getStdHandle sTD_ERROR_HANDLE
+stdin  = unsafePerformIO $ mkConsoleHandle =<< getStdHandle sTD_INPUT_HANDLE
+stdout = unsafePerformIO $ mkConsoleHandle =<< getStdHandle sTD_OUTPUT_HANDLE
+stderr = unsafePerformIO $ mkConsoleHandle =<< getStdHandle sTD_ERROR_HANDLE
+
+mkConsoleHandle :: HANDLE -> IO (Io ConsoleHandle)
+mkConsoleHandle hwnd
+  = do ref <- newIORef False
+       return $ ConsoleHandle hwnd ref
 
 -- -----------------------------------------------------------------------------
 -- Some console internal types to detect EOF.
@@ -627,6 +648,9 @@ handle_duplicate hwnd = alloca $ \ptr -> do
   failIfFalse_ "GHC.IO.Handle.handle_duplicate" $
       c_duplicate_handle (toHANDLE hwnd) ptr
   fromHANDLE <$> peek ptr
+
+console_set_buffering :: Io ConsoleHandle -> Bool -> IO ()
+console_set_buffering hwnd value = writeIORef (cookedHandle hwnd) value
 
 handle_set_buffering :: RawHandle a => a -> Bool -> IO ()
 handle_set_buffering hwnd value =

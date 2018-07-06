@@ -77,7 +77,7 @@ import GHC.RTS.Flags
 import qualified GHC.Windows as Win32
 
 c_DEBUG_DUMP :: IO Bool
-c_DEBUG_DUMP = return True -- scheduler `fmap` getDebugFlags
+c_DEBUG_DUMP = scheduler `fmap` getDebugFlags
 
 
 -- ---------------------------------------------------------------------------
