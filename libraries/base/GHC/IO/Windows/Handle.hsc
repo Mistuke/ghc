@@ -58,6 +58,7 @@ import GHC.Base
 import GHC.Enum
 import GHC.Num
 import GHC.Real
+import GHC.List
 
 import GHC.IO
 import GHC.IO.Buffer
@@ -77,12 +78,13 @@ import Foreign.Ptr
 import Foreign.C
 import Foreign.C.Types
 import Foreign.C.String
-import Foreign.Marshal.Alloc (alloca)
+import Foreign.Marshal.Array (pokeArray)
+import Foreign.Marshal.Alloc (alloca, allocaBytes)
 import Foreign.Marshal.Utils (with, fromBool)
 import Foreign.Storable (Storable (..))
 import qualified GHC.Event.Windows as Mgr
 
-import GHC.Windows (LPVOID, LPDWORD, DWORD, HANDLE, BOOL, LPCTSTR, ULONG,
+import GHC.Windows (LPVOID, LPDWORD, DWORD, HANDLE, BOOL, LPCTSTR, ULONG, WORD,
                     failIf, iNVALID_HANDLE_VALUE, failIf_, failWith,
                     failIfFalse_, getLastError)
 import qualified GHC.Windows as Win32
@@ -321,6 +323,7 @@ eotControl =
     , crcDwControlKeyState = 0
     }
 
+type PINPUT_RECORD = Ptr ()
 -- -----------------------------------------------------------------------------
 -- Foreign imports
 
@@ -396,6 +399,9 @@ foreign import WINDOWS_CCONV safe "windows.h ReadConsoleW"
 foreign import WINDOWS_CCONV safe "windows.h WriteConsoleW"
   c_write_console :: HANDLE -> Ptr Word16 -> DWORD -> Ptr DWORD -> Ptr ()
                   -> IO BOOL
+
+foreign import WINDOWS_CCONV safe "windows.h ReadConsoleInputW"
+  c_read_console_input :: HANDLE -> PINPUT_RECORD -> DWORD -> LPDWORD -> IO BOOL
 
 type LPSECURITY_ATTRIBUTES = LPVOID
 
@@ -542,8 +548,12 @@ consoleWriteNonBlocking hwnd ptr _offset bytes
 consoleRead :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int -> IO Int
 consoleRead hwnd ptr _offset bytes
   = withUTF16ToGhcInternal ptr bytes $ \reqBytes w_ptr ->
-      alloca $ \res ->
-       do -- eotControl allows us to handle control characters like EOL
+      alloca $ \res -> do
+       cooked <- isCooked hwnd
+       case cooked of
+        False -> do
+          debugIO "consoleRead :: un-cooked I/O read."
+          -- eotControl allows us to handle control characters like EOL
           -- without needing a newline, which would sort of defeat the point
           -- of an EOL.
           res_code <- with eotControl $ \p_eotControl ->
@@ -570,6 +580,56 @@ consoleRead hwnd ptr _offset bytes
                         _ | w_first == fromIntegral acCtrlD -> return 0
                           | w_first == fromIntegral acCtrlZ -> return 0
                           | otherwise                       -> return b_read
+        True -> do
+          debugIO "consoleRead :: cooked I/O read."
+          -- Input is cooked, don't wait till a line return and consume all
+          -- characters as they are.  Technically this function can handle any
+          -- console event.  Including mouse, window and virtual key events
+          -- but for now I'm only interested in key presses.
+          let entries = fromIntegral $ reqBytes `div` (#size INPUT_RECORD)
+          allocaBytes entries $ \p_inputs ->
+            readEvent p_inputs entries res w_ptr
+
+    where readEvent p_inputs entries res w_ptr = do
+            failIfFalse_ "GHC.IO.Handle.consoleRead" $
+              c_read_console_input (toHANDLE hwnd) p_inputs
+                                   (fromIntegral entries) res
+
+            b_read <- fromIntegral <$> peek res
+            read <- cobble b_read w_ptr p_inputs
+            if read > 0
+               then return $ fromIntegral read
+               else readEvent p_inputs entries res w_ptr
+
+          cobble :: Int -> Ptr Word16 -> PINPUT_RECORD -> IO Int
+          cobble 0 _ _ = do debugIO "cobble: done."
+                            return 0
+          cobble n w_ptr p_inputs =
+            do eventType <- peekByteOff p_inputs 0 :: IO WORD
+               debugIO $ "cobble: Length=" ++ show n
+               debugIO $ "cobble: Type=" ++ show eventType
+               let ni_offset      = fromIntegral (#size INPUT_RECORD)
+               let event          = #{const __builtin_offsetof (INPUT_RECORD, Event)}
+               let char_offset    = event + #{const __builtin_offsetof (KEY_EVENT_RECORD, uChar)}
+               let btnDown_offset = event + #{const __builtin_offsetof (KEY_EVENT_RECORD, bKeyDown)}
+               let repeat_offset  = event + #{const __builtin_offsetof (KEY_EVENT_RECORD, wRepeatCount)}
+               let n'             = n - 1
+               let p_inputs'      = p_inputs `plusPtr` ni_offset
+               btnDown  <- peekByteOff p_inputs btnDown_offset
+               repeated <- fromIntegral <$> (peekByteOff p_inputs repeat_offset :: IO WORD)
+               debugIO $ "cobble: BtnDown=" ++ show btnDown
+               -- Handle the key only on button down and not on button up.
+               if eventType == #{const KEY_EVENT} && btnDown
+                  then do debugIO $ "cobble: read-char."
+                          char <- peekByteOff p_inputs char_offset
+                          let w_ptr'      = w_ptr `plusPtr` 1
+                          debugIO $ "cobble: offset - " ++ show char_offset
+                          debugIO $ "cobble: show > " ++ show char
+                          debugIO $ "cobble: repeat: " ++ show repeated
+                          pokeArray w_ptr $ replicate repeated char
+                          (+1) <$> cobble n' w_ptr' p_inputs'
+                  else do debugIO $ "cobble: skip event."
+                          cobble n' w_ptr p_inputs'
 
 
 consoleReadNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int

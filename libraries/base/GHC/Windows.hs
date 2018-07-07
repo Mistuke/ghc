@@ -39,6 +39,7 @@ module GHC.Windows (
         LPSTR,
         LPCSTR,
         LPCWSTR,
+        WORD,
 
         -- * Constants
         iNFINITE,
@@ -115,6 +116,7 @@ type LPDWORD = Ptr DWORD
 type LPSTR   = Ptr CChar
 type LPCSTR  = LPSTR
 type LPCWSTR = LPWSTR
+type WORD    = Word16
 
 nullHANDLE :: HANDLE
 nullHANDLE = nullPtr
