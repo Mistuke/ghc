@@ -284,6 +284,9 @@ const int default_alignment = 8;
 
 void initLinker_PEi386()
 {
+  /* Make sure the memory allocator has been initialized.  */
+  winmem_init ();
+
   if (!ghciInsertSymbolTable(WSTR("(GHCi/Ld special symbols)"),
                              symhash, "__image_base__", __image_base,
                              HS_BOOL_TRUE, NULL)) {

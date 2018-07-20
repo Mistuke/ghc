@@ -1410,7 +1410,8 @@ preloadObjectFile (pathchar *path)
 
 # else /* !defined(darwin_HOST_OS) */
 
-   image = stgMallocBytes(fileSize, "loadObj(image)");
+   image = stgMallocBytes(fileSize + misalignment, "loadObj(image)");
+   image += misalignment;
 
 #endif
 

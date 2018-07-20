@@ -125,7 +125,7 @@ typedef struct {
 #if defined(mingw32_HOST_OS)
     uint8_t     inst[2];
     uint8_t     addr[8];
-    uint8_t     jumpIsland[6]
+    uint8_t     jumpIsland[6];
 #else
     uint64_t    addr;
     uint8_t     jumpIsland[6];
