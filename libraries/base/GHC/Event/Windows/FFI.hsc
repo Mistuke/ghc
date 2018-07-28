@@ -39,6 +39,7 @@ module GHC.Event.Windows.FFI (
 
     -- ** miscellaneous
     throwWinErr,
+    setLastError
 ) where
 
 #include <ntstatus.h>
@@ -297,6 +298,9 @@ throwWinErr :: String -> ErrCode -> IO a
 throwWinErr loc err = do
     c_SetLastError err
     Win32.failWith loc err
+
+setLastError :: ErrCode -> IO ()
+setLastError = c_SetLastError
 
 foreign import WINDOWS_CCONV unsafe "windows.h SetLastError"
     c_SetLastError :: ErrCode -> IO ()

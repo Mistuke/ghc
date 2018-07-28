@@ -229,7 +229,7 @@ lockImplWinIO h ctx mode block = do
         ret <- c_LockFileEx wh flags 0 #{const INFINITE} #{const INFINITE}
                             lpOverlapped
 
-        err <- getLastError
+        err <- Mgr.getErrorCode
         let err' = fromIntegral err
         do case () of
             _ | err == #{const ERROR_IO_PENDING} -> return Mgr.CbPending
@@ -287,7 +287,7 @@ unlockImplWinIO h = do
         ret <- c_UnlockFileEx wh 0 #{const INFINITE} #{const INFINITE}
                               lpOverlapped
 
-        err <- getLastError
+        err <- Mgr.getErrorCode
         let err' = fromIntegral err
         do case () of
             _ | err == #{const ERROR_IO_PENDING} -> return Mgr.CbPending

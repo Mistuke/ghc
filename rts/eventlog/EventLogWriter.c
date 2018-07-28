@@ -95,6 +95,7 @@ writeEventLogFile(void *eventlog, size_t eventlog_size)
         begin += written;
     }
 
+    flushEventLogFile ();
     return true;
 }
 

@@ -72,7 +72,8 @@ import GHC.IO.Windows.Encoding (withGhcInternalToUTF16, withUTF16ToGhcInternal)
 import GHC.IO.Windows.Paths (getDevicePath)
 import GHC.IO.Handle.Internals (debugIO)
 import GHC.IORef
-import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
+import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..),
+                          getErrorCode)
 import GHC.Event.Windows.FFI (overlappedIOStatus)
 import Foreign.Ptr
 import Foreign.C
@@ -419,7 +420,7 @@ hwndRead hwnd ptr offset bytes
       debugIO ":: hwndRead"
       ret <- c_ReadFile (toHANDLE hwnd) (castPtr outBuf)
                         (fromIntegral bytes) nullPtr lpOverlapped
-      err <- Win32.getLastError
+      err <- getErrorCode
       let err' = fromIntegral err
 
       case () of
@@ -455,7 +456,8 @@ hwndReadNonBlocking hwnd ptr offset bytes
       debugIO ":: hwndReadNonBlocking"
       ret <- c_ReadFile (toHANDLE hwnd) (castPtr inputBuf)
                         (fromIntegral bytes) nullPtr lpOverlapped
-      err <- fmap fromIntegral Win32.getLastError
+      err <- fmap fromIntegral getErrorCode
+
       case () of
         _ | err == #{const ERROR_IO_PENDING} -> return Mgr.CbPending
           | err == #{const ERROR_HANDLE_EOF} -> return Mgr.CbDone
@@ -485,7 +487,7 @@ hwndWrite hwnd ptr offset bytes
       debugIO ":: hwndWrite"
       ret <- c_WriteFile (toHANDLE hwnd) (castPtr outBuf)
                          (fromIntegral bytes) nullPtr lpOverlapped
-      err <- fmap fromIntegral Win32.getLastError
+      err <- fmap fromIntegral getErrorCode
 
       case () of
         _ | err == #{const ERROR_SUCCESS}    -> return Mgr.CbDone
@@ -508,7 +510,7 @@ hwndWriteNonBlocking hwnd ptr offset bytes
       debugIO ":: hwndWriteNonBlocking"
       ret <- c_WriteFile (toHANDLE hwnd) (castPtr outBuf)
                          (fromIntegral bytes) nullPtr lpOverlapped
-      err <- fmap fromIntegral Win32.getLastError
+      err <- fmap fromIntegral getErrorCode
 
       case () of
         _ | err == #{const ERROR_SUCCESS}    -> return Mgr.CbDone

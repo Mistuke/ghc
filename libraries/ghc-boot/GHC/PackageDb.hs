@@ -410,9 +410,9 @@ decodeFromFile file mode decoder = case mode of
     decodeFileContents = withBinaryFile file ReadMode $ \hnd ->
       feed hnd (runGetIncremental decoder)
 
-    feed hnd (Partial k)  = do hPutStrLn stderr $ ":: decodeFromFile - start: " ++ file
+    feed hnd (Partial k)  = do -- hPutStrLn stderr $ ":: decodeFromFile - start: " ++ file
                                chunk <- BS.hGet hnd BS.Lazy.defaultChunkSize
-                               hPutStrLn stderr $ ":: decodeFromFile - chunked read: " ++ file
+                               -- hPutStrLn stderr $ ":: decodeFromFile - chunked read: " ++ file
                                if BS.null chunk
                                  then feed hnd (k Nothing)
                                  else feed hnd (k (Just chunk))

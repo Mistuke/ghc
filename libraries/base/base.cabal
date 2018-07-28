@@ -217,6 +217,7 @@ Library
         GHC.Enum
         GHC.Environment
         GHC.Err
+        GHC.Event.TimeOut
         GHC.Exception
         GHC.ExecutionStack
         GHC.ExecutionStack.Internal

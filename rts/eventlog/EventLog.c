@@ -1240,6 +1240,7 @@ void printAndClearEventBuf (EventsBuf *ebuf)
                     "printAndClearEventLog: could not flush event log"
                 );
             resetEventsBuf(ebuf);
+            flushEventLog();
             return;
         }
 

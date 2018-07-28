@@ -5,6 +5,21 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE CPP #-}
+
+-------------------------------------------------------------------------------
+-- |
+-- Module      :  GHC.Event.Windows
+-- Copyright   :  (c) Tamar Christina 2018
+-- License     :  BSD-style (see the file libraries/base/LICENSE)
+--
+-- Maintainer  :  libraries@haskell.org
+-- Stability   :  experimental
+-- Portability :  non-portable
+--
+-- WinIO Windows event manager.
+--
+-------------------------------------------------------------------------------
+
 module GHC.Event.Windows (
     -- * Manager
     Manager,
@@ -33,6 +48,7 @@ module GHC.Event.Windows (
     withException,
     ioSuccess,
     ioFailed,
+    getErrorCode,
 
     -- * IO Result type
     IOResult(..)
@@ -64,6 +80,7 @@ import {-# SOURCE #-} GHC.Conc.Sync (forkIO, myThreadId, showThreadId,
                                      threadStatus, sharedCAF)
 import GHC.List (replicate, length)
 import GHC.Event.Unique
+import GHC.Event.TimeOut
 import GHC.Num
 import GHC.Real
 import GHC.Read
@@ -228,6 +245,34 @@ associateHandle Manager{..} h =
     -- Use as completion key the file handle itself, so we can track completion
     FFI.associateHandleWithIOCP mgrIOCP h (fromIntegral $ ptrToWordPtr h)
 
+-- Note [RTS Scheduler error propagation]
+--
+-- The RTS scheduler will save and restore Last Error across Haskell threads
+-- when it suspends or resumes threads.  This is normally fine since the errors
+-- are mostly informative.  The problem starts with I/O CP calls, where in
+-- particular ERROR_IO_PENDING is a dangerous one.  During long running threads
+-- the scheduler will incorrectly restore this error, which indicates there are
+-- still pending I/O operations.  If we're doing lazy reads then this tricks
+-- the I/O manager into thinking we still have things we need to read, while
+-- there is none.  So it just keeps looping.  Coincidentally it also tricks
+-- itself into not resuming the main thread, as that also thinks events are
+-- pending.
+--
+-- To mitigate this, we purge the error immediately after making the any I/O
+-- call that may result in pending I/O operations.
+--
+-- Crude but effective, however since this is still Haskell code, need to
+-- figure out a more thread-safe way.  Perhaps I should just prevent this code
+-- from being saved/restored.  But that may break an I/O read that was in
+-- progress.. Grrr
+
+getErrorCode :: IO ErrCode
+getErrorCode = do
+    err <- getLastError
+    -- See Note [RTS Scheduler error propagation]
+    when (err /= 0) $ FFI.setLastError 0
+    return err
+
 -- | Start an overlapped I/O operation, and wait for its completion.  If
 -- 'withOverlapped' is interrupted by an asynchronous exception, the operation
 -- will be canceled using @CancelIoEx@.
@@ -310,7 +355,8 @@ withOverlappedNonThreaded_ _fname h offset startCB completionCB = do
         fptr <- FFI.allocOverlapped offset
         let lpol = unsafeForeignPtrToPtr fptr
 
-        startCB lpol `onException` (Just `fmap` Win32.getLastError) >>= \result ->
+        startCB lpol `onException`
+            (Just `fmap` Win32.getLastError) >>= \result ->
           case result of
             CbError err -> signalThrow $ Just err
             _           -> do
@@ -328,11 +374,13 @@ withOverlapped :: String
                -> StartIOCallback Int
                -> CompletionCallback (IOResult a)
                -> IO (IOResult a)
-withOverlapped fname h offset startCB completionCB
-  = do mngr <- getSystemManager
-       case mngr of
-         Nothing    -> withOverlappedNonThreaded_    fname h offset startCB completionCB
-         Just mngr' -> withOverlappedThreaded_ mngr' fname h offset startCB completionCB
+withOverlapped fname h offset startCB completionCB = do
+  mngr <- getSystemManager
+  case mngr of
+    Nothing    ->
+      withOverlappedNonThreaded_    fname h offset startCB completionCB
+    Just mngr' ->
+      withOverlappedThreaded_ mngr' fname h offset startCB completionCB
 
 withOverlappedEx :: Maybe Manager
                  -> String
@@ -342,10 +390,12 @@ withOverlappedEx :: Maybe Manager
                  -> StartIOCallback Int
                  -> CompletionCallback (IOResult a)
                  -> IO (IOResult a)
-withOverlappedEx mngr fname h offset startCB completionCB
-  = do case mngr of
-         Nothing    -> withOverlappedNonThreaded_    fname h offset startCB completionCB
-         Just mngr' -> withOverlappedThreaded_ mngr' fname h offset startCB completionCB
+withOverlappedEx mngr fname h offset startCB completionCB = do
+  case mngr of
+    Nothing    ->
+      withOverlappedNonThreaded_    fname h offset startCB completionCB
+    Just mngr' ->
+      withOverlappedThreaded_ mngr' fname h offset startCB completionCB
 
 ------------------------------------------------------------------------
 -- I/O Utilities
@@ -366,24 +416,6 @@ ioFailed = return . IOFailed . Just . fromIntegral
 
 ------------------------------------------------------------------------
 -- Timeouts
-
--- | A priority search queue, with timeouts as priorities.
-type TimeoutQueue = Q.PSQ TimeoutCallback
-
--- |
--- Warning: since the 'TimeoutCallback' is called from the I/O manager, it must
--- not throw an exception or block for a long period of time.  In particular,
--- be wary of 'Control.Exception.throwTo' and 'Control.Concurrent.killThread':
--- if the target thread is making a foreign call, these functions will block
--- until the call completes.
-type TimeoutCallback = IO ()
-
--- | An edit to apply to a 'TimeoutQueue'.
-type TimeoutEdit = TimeoutQueue -> TimeoutQueue
-
--- | A timeout registration cookie.
-newtype TimeoutKey = TK Unique
-    deriving (Eq, Ord)
 
 -- | Register an action to be performed in the given number of seconds.  The
 -- returned 'TimeoutKey' can be used to later unregister or update the timeout.

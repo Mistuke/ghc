@@ -217,8 +217,11 @@ __is_console(HANDLE hFile)
        particular, it's what most of our terminal functions
        assume works, so if it doesn't work for all intents
        and purposes we're not dealing with a terminal. */
-    if (!GetConsoleMode(hFile, &st))
+    if (!GetConsoleMode(hFile, &st)) {
+        /* Clear the error buffer before returning.  */
+        SetLastError (ERROR_SUCCESS);
         return false;
+    }
 
     return true;
 }
@@ -230,22 +233,26 @@ __is_console(HANDLE hFile)
 bool
 __set_console_buffering(HANDLE hFile, bool cooked)
 {
+    if (hFile == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
     DWORD  st;
+    if (!GetConsoleMode(hFile, &st)) {
+        return false;
+    }
+
     /* According to GetConsoleMode() docs, it is not possible to
        leave ECHO_INPUT enabled without also having LINE_INPUT,
        so we have to turn both off here.
        We toggle ENABLE_VIRTUAL_TERMINAL_INPUT to enable us to receive
        virtual keyboard keys in ReadConsole.  */
     DWORD flgs = ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
-    DWORD enabled = (st & ~flgs);// | ENABLE_VIRTUAL_TERMINAL_INPUT;
-    DWORD disabled = (st | ENABLE_LINE_INPUT);// & ~ENABLE_VIRTUAL_TERMINAL_INPUT;
+    DWORD enabled = (st & ~flgs) | ENABLE_VIRTUAL_TERMINAL_INPUT;
+    DWORD disabled = (st | ENABLE_LINE_INPUT) & ~ENABLE_VIRTUAL_TERMINAL_INPUT;
 
-    if (hFile == INVALID_HANDLE_VALUE) {
-        return false;
-    }
 
-	return GetConsoleMode(hFile, &st) &&
-	       SetConsoleMode(hFile, cooked ? enabled : disabled);
+	return SetConsoleMode(hFile, cooked ? enabled : disabled);
 }
 
 bool
