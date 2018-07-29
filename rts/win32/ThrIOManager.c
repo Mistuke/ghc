@@ -92,7 +92,7 @@ readIOManagerEvent (void)
 
     RELEASE_LOCK(&event_buf_mutex);
 
-    // debugBelch("readIOManagerEvent: %d\n", res);
+    //debugBelch("readIOManagerEvent: %d\n", res);
     return res;
 #else
     return 0;
@@ -105,16 +105,16 @@ sendIOManagerEvent (HsWord32 event)
 #if defined(THREADED_RTS)
     ACQUIRE_LOCK(&event_buf_mutex);
 
-    // debugBelch("sendIOManagerEvent: %d\n", event);
+    //debugBelch("sendIOManagerEvent: %d to %p\n", event, io_manager_event);
     if (io_manager_event != INVALID_HANDLE_VALUE) {
         if (next_event == EVENT_BUFSIZ) {
             errorBelch("event buffer overflowed; event dropped");
         } else {
+            event_buf[next_event++] = (StgWord32)event;
             if (!SetEvent(io_manager_event)) {
                 sysErrorBelch("sendIOManagerEvent");
                 stg_exit(EXIT_FAILURE);
             }
-            event_buf[next_event++] = (StgWord32)event;
         }
     }
 

@@ -27,7 +27,6 @@ import GHC.Base ()  -- dummy dependency
         ( Handler(..)
         , installHandler
         , ConsoleEvent(..)
-        , flushConsole
         ) where
 
 #include <windows.h>
@@ -144,20 +143,5 @@ foreign import ccall unsafe "RtsExternal.h rts_InstallConsoleEvent"
   rts_installHandler :: CInt -> Ptr (StablePtr (CInt -> IO ())) -> IO CInt
 foreign import ccall unsafe "RtsExternal.h rts_ConsoleHandlerDone"
   rts_ConsoleHandlerDone :: CInt -> IO ()
-
-
-flushConsole :: Handle -> IO ()
-flushConsole h =
-  wantReadableHandle_ "flushConsole" h $ \ Handle__{haDevice=dev} ->
-    case cast dev of
-      Nothing -> ioException $
-                    IOError (Just h) IllegalOperation "flushConsole"
-                        "handle is not a file descriptor" Nothing Nothing
-      Just fd -> do
-        throwErrnoIfMinus1Retry_ "flushConsole" $
-           flush_console_fd (fdFD fd)
-
-foreign import ccall unsafe "consUtils.h flush_input_console__"
-        flush_console_fd :: CInt -> IO CInt
 
 #endif /* mingw32_HOST_OS */
