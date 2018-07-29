@@ -34,9 +34,7 @@ module GHC.Conc.POSIX
        , asyncReadBA
        , asyncWriteBA
 
-       , ConsoleEvent(..)
-       , win32ConsoleHandler
-       , toWin32ConsoleEvent
+       , module GHC.Event.Windows.ConsoleEvent
        ) where
 
 
@@ -46,6 +44,7 @@ import Data.Bits (shiftR)
 import GHC.Base
 import GHC.Conc.Sync
 import GHC.Enum (Enum)
+import GHC.Event.Windows.ConsoleEvent
 import GHC.IO (unsafePerformIO)
 import GHC.IORef
 import GHC.MVar
@@ -264,41 +263,6 @@ service_cont wakeup delays = do
 io_MANAGER_WAKEUP, io_MANAGER_DIE :: Word32
 io_MANAGER_WAKEUP = 0xffffffff
 io_MANAGER_DIE    = 0xfffffffe
-
-data ConsoleEvent
- = ControlC
- | Break
- | Close
-    -- these are sent to Services only.
- | Logoff
- | Shutdown
- deriving ( Eq   -- ^ @since 4.3.0.0
-          , Ord  -- ^ @since 4.3.0.0
-          , Enum -- ^ @since 4.3.0.0
-          , Show -- ^ @since 4.3.0.0
-          , Read -- ^ @since 4.3.0.0
-          )
-
-start_console_handler :: Word32 -> IO ()
-start_console_handler r =
-  case toWin32ConsoleEvent r of
-     Just x  -> withMVar win32ConsoleHandler $ \handler -> do
-                    _ <- forkIO (handler x)
-                    return ()
-     Nothing -> return ()
-
-toWin32ConsoleEvent :: (Eq a, Num a) => a -> Maybe ConsoleEvent
-toWin32ConsoleEvent ev =
-   case ev of
-       0 {- CTRL_C_EVENT-}        -> Just ControlC
-       1 {- CTRL_BREAK_EVENT-}    -> Just Break
-       2 {- CTRL_CLOSE_EVENT-}    -> Just Close
-       5 {- CTRL_LOGOFF_EVENT-}   -> Just Logoff
-       6 {- CTRL_SHUTDOWN_EVENT-} -> Just Shutdown
-       _ -> Nothing
-
-win32ConsoleHandler :: MVar (ConsoleEvent -> IO ())
-win32ConsoleHandler = unsafePerformIO (newMVar (errorWithoutStackTrace "win32ConsoleHandler"))
 
 wakeupIOManager :: IO ()
 wakeupIOManager = c_sendIOManagerEvent io_MANAGER_WAKEUP

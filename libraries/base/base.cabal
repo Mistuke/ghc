@@ -218,6 +218,7 @@ Library
         GHC.Environment
         GHC.Err
         GHC.Event.TimeOut
+        GHC.Event.Windows.ConsoleEvent
         GHC.Exception
         GHC.ExecutionStack
         GHC.ExecutionStack.Internal

@@ -30,6 +30,7 @@ import GHC.Base ()  -- dummy dependency
         , flushConsole
         ) where
 
+#include <windows.h>
 {-
 #include "rts/Signals.h"
 
@@ -122,11 +123,11 @@ installHandler handler
   where
    fromConsoleEvent ev =
      case ev of
-       ControlC -> 0 {- CTRL_C_EVENT-}
-       Break    -> 1 {- CTRL_BREAK_EVENT-}
-       Close    -> 2 {- CTRL_CLOSE_EVENT-}
-       Logoff   -> 5 {- CTRL_LOGOFF_EVENT-}
-       Shutdown -> 6 {- CTRL_SHUTDOWN_EVENT-}
+       ControlC -> #{const CTRL_C_EVENT       }
+       Break    -> #{const CTRL_BREAK_EVENT   }
+       Close    -> #{const CTRL_CLOSE_EVENT   }
+       Logoff   -> #{const CTRL_LOGOFF_EVENT  }
+       Shutdown -> #{const CTRL_SHUTDOWN_EVENT}
 
    toHandler hdlr ev = do
       case toWin32ConsoleEvent ev of

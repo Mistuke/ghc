@@ -34,9 +34,8 @@ module GHC.Conc.Windows
        , asyncReadBA
        , asyncWriteBA
 
-       , POSIX.ConsoleEvent(..)
-       , POSIX.win32ConsoleHandler
-       , POSIX.toWin32ConsoleEvent
+       -- * Console event handler
+       , module GHC.Event.Windows.ConsoleEvent
        ) where
 
 
@@ -47,6 +46,7 @@ import GHC.IO
 import GHC.Conc.Sync
 import qualified GHC.Conc.POSIX as POSIX
 import qualified GHC.Conc.IOCP as WINIO
+import GHC.Event.Windows.ConsoleEvent
 import GHC.IO.SubSystem (isWindowsNativeIO, (<!>))
 import GHC.Ptr
 
