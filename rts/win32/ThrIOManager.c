@@ -78,7 +78,11 @@ readIOManagerEvent (void)
         if (next_event == 0) {
             res = 0; // no event to return
         } else {
-            res = (HsWord32)(event_buf[--next_event]);
+            do {
+               // Dequeue as many wakeup events as possible.
+                res = (HsWord32)(event_buf[--next_event]);
+            } while (res == IO_MANAGER_WAKEUP && next_event);
+
             if (next_event == 0) {
                 if (!ResetEvent(io_manager_event)) {
                     sysErrorBelch("readIOManagerEvent");
