@@ -181,10 +181,10 @@ requests :: MVar Word64
 requests = unsafePerformIO $ newMVar 0
 
 addRequest :: IO Word64
-addRequest = modifyMVar requests (\x -> return (x, x + 1))
+addRequest = modifyMVar requests (\x -> return (x + 1, x + 1))
 
 removeRequest :: IO Word64
-removeRequest = modifyMVar requests (\x -> return (x,  x + 1))
+removeRequest = modifyMVar requests (\x -> return (x - 1, x - 1))
 
 outstandingRequests :: IO Word64
 outstandingRequests = withMVar requests return
@@ -204,8 +204,11 @@ interruptSystemManager = do
   mgr <- getSystemManager
   case mgr of
     Nothing   -> return ()
-    Just mgr' -> do debugIO "interrupt received.."
-                    FFI.postQueuedCompletionStatus (mgrIOCP mgr') 0 0 nullPtr
+    Just mgr' -> do more <- (>0) `fmap` outstandingRequests
+                    when more $
+                      do debugIO "interrupt received.."
+                         FFI.postQueuedCompletionStatus (mgrIOCP mgr') 0 0
+                                                        nullPtr
 
 -- must be power of 2
 callbackArraySize :: Int
@@ -331,7 +334,8 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
               _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
                       IT.insertWith (flip const) (lpoverlappedToInt lpol)
                                     (CompletionData fptr completionCB') tbl
-              addRequest
+              reqs <- addRequest
+              debugIO $ "+1.. " ++ show reqs ++ " requests queued."
               wakeupIOManager
             CbError err -> signalThrow (Just err)
             CbDone      -> return ()
@@ -340,7 +344,8 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
         let cancel = do uninterruptibleMask_ $ FFI.cancelIoEx h lpol
                         withMVar (callbackTableVar mgr lpol) $ \tbl ->
                           IT.delete (lpoverlappedToInt lpol) tbl
-                        removeRequest
+                        reqs <- removeRequest
+                        debugIO $ "-1.. " ++ show reqs ++ " requests queued after error."
         let runner = do res <- takeMVar signal `onException` cancel
                         case res of
                           IOFailed err -> FFI.throwWinErr fname (maybe 0 fromIntegral err)
@@ -543,12 +548,13 @@ step mgr@Manager{..} = do
       A.forM_ mgrOverlappedEntries $ \oe -> do
           mCD <- withMVar (callbackTableVar mgr (lpOverlapped oe)) $ \tbl ->
                    IT.delete (lpoverlappedToInt (lpOverlapped oe)) tbl
-          removeRequest
           case mCD of
             Nothing                        -> return ()
             Just (CompletionData _fptr cb) -> do
-                         status <- FFI.overlappedIOStatus (lpOverlapped oe)
-                         cb status (dwNumberOfBytesTransferred oe)
+              reqs <- removeRequest
+              debugIO $ "-1.. " ++ show reqs ++ " requests queued."
+              status <- FFI.overlappedIOStatus (lpOverlapped oe)
+              cb status (dwNumberOfBytesTransferred oe)
 
       -- clear the array so we don't erronously interpret the output, in
       -- certain circumstances like lockFileEx the code could return 1 entry
@@ -564,7 +570,9 @@ step mgr@Manager{..} = do
 
     -- Keep running if we still have some work queued or
     -- if we have a pending delay.
-    more <- (>0) `fmap` outstandingRequests
+    reqs <-outstandingRequests
+    debugIO $ "outstanding requests: " ++ show reqs
+    let more = reqs > 0
     debugIO $ "has more: " ++ show more ++ " - removed: " ++  show n
     return (more || isJust delay, delay)
 
@@ -581,9 +589,6 @@ io_mngr_loop event mgr = go
                   0 -> return False -- spurious wakeup
                   _ -> do start_console_handler (r2 `shiftR` 1)
                           return False
-              -- Check to see if we were told to wake up, which likely means
-              -- someone wanted us to do something despite our queue being empty.
-              let woken = r2 == io_MANAGER_WAKEUP
 
               -- If we have no more work to do, or something from the outside
               -- told us to stop then we let the thread die and stop the I/O
@@ -596,7 +601,6 @@ io_mngr_loop event mgr = go
                       r <- c_WaitForSingleObject event timeout
                       when (r == 0xffffffff) $ throwGetLastError "io_mngr_loop"
                       go
-                _ | woken -> go  -- we were asked to wake up, so continue.
                 _ | more -> go -- We seem to have more work but no ETA for it.
                                -- So just retry until we run out of work.
                 _ -> do
@@ -614,11 +618,13 @@ io_MANAGER_DIE    = 0xfffffffe
 wakeupIOManager :: IO ()
 wakeupIOManager
   = do mngr <- getSystemManager
-       event <- c_getIOManagerEvent
-       debugIO "waking up I/O manager."
-       case mngr of
-         Nothing  -> error "cannot happen."
-         Just mgr -> startIOManagerThread (io_mngr_loop event mgr)
+       more <- (>0) `fmap` outstandingRequests
+       when more $ do
+         event <- c_getIOManagerEvent
+         debugIO "waking up I/O manager."
+         case mngr of
+           Nothing  -> error "cannot happen."
+           Just mgr -> startIOManagerThread (io_mngr_loop event mgr)
 
 foreign import ccall unsafe "getIOManagerEvent" -- in the RTS (ThrIOManager.c)
   c_getIOManagerEvent :: IO HANDLE

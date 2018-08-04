@@ -232,10 +232,10 @@ static BOOL WINAPI generic_handler(DWORD dwCtrlType)
          */
         return false;
     default:
-        printf ("cancelll!!\n");
         if (!deliver_event) return true;
 
 #if defined(THREADED_RTS)
+        printf ("cancelll!!\n");
         sendIOManagerEvent((StgWord8) ((dwCtrlType<<1) | 1));
         interruptIOManagerEvent ();
 #else
