@@ -1,6 +1,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 module GHC.Event.Windows.Thread (
     ensureIOManagerIsRunning,
+    interruptIOManager,
     threadDelay,
     registerDelay,
 ) where
@@ -18,6 +19,9 @@ import GHC.Event.Windows
 ensureIOManagerIsRunning :: IO ()
 ensureIOManagerIsRunning = do _ <- getSystemManager
                               return ()
+
+interruptIOManager :: IO ()
+interruptIOManager = interruptSystemManager
 
 threadDelay :: Int -> IO ()
 threadDelay usecs = mask_ $ do

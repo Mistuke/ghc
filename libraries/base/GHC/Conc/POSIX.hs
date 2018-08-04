@@ -21,6 +21,7 @@
 -- #not-home
 module GHC.Conc.POSIX
        ( ensureIOManagerIsRunning
+       , interruptIOManager
 
        -- * Waiting
        , threadDelay
@@ -168,6 +169,9 @@ ensureIOManagerIsRunning :: IO ()
 ensureIOManagerIsRunning
   | threaded  = startIOManagerThread
   | otherwise = return ()
+
+interruptIOManager :: IO ()
+interruptIOManager = return ()
 
 startIOManagerThread :: IO ()
 startIOManagerThread = do

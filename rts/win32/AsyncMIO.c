@@ -375,6 +375,7 @@ abandonRequestWait( void )
      * properly serviced (see resetAbandon() below).  --SDM 18/12/2003
      */
     SetEvent(abandon_req_wait);
+    interruptIOManagerEvent ();
 }
 
 void

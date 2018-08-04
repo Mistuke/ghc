@@ -21,6 +21,7 @@
 -- #not-home
 module GHC.Conc.Windows
        ( ensureIOManagerIsRunning
+       , interruptIOManager
 
        -- * Waiting
        , threadDelay
@@ -110,5 +111,8 @@ foreign import ccall unsafe "rtsSupportsBoundThreads" threaded :: Bool
 ensureIOManagerIsRunning :: IO ()
 ensureIOManagerIsRunning =  POSIX.ensureIOManagerIsRunning
                         <!> WINIO.ensureIOManagerIsRunning
+
+interruptIOManager :: IO ()
+interruptIOManager = POSIX.interruptIOManager <!> WINIO.interruptIOManager
 
 

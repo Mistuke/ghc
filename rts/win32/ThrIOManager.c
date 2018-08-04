@@ -116,10 +116,29 @@ sendIOManagerEvent (HsWord32 event)
         } else {
             event_buf[next_event++] = (StgWord32)event;
             if (!SetEvent(io_manager_event)) {
-                sysErrorBelch("sendIOManagerEvent");
+                sysErrorBelch("sendIOManagerEvent: SetEvent");
                 stg_exit(EXIT_FAILURE);
             }
         }
+    }
+
+    RELEASE_LOCK(&event_buf_mutex);
+#endif
+}
+
+void
+interruptIOManagerEvent (void)
+{
+#if defined(THREADED_RTS)
+    ACQUIRE_LOCK(&event_buf_mutex);
+
+    /* How expensive is this??.  */
+    Capability *cap;
+    if (io_manager_event == INVALID_HANDLE_VALUE) {
+        cap = rts_lock();
+        debugBelch ("Calling interrupt...\n");
+        rts_evalIO(&cap, interruptIOManager_closure, NULL);
+        rts_unlock(cap);
     }
 
     RELEASE_LOCK(&event_buf_mutex);

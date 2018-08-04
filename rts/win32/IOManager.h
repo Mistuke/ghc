@@ -105,3 +105,5 @@ extern int AddProcRequest ( void*          proc,
                             CompletionProc onCompletion);
 
 extern void abandonWorkRequest ( int reqID );
+
+extern void interruptIOManagerEvent ( void );

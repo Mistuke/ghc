@@ -11,6 +11,7 @@ module GHC.Event.IntTable
     , reset
     , delete
     , updateWith
+    , size
     ) where
 
 import Data.Bits ((.&.), shiftL, shiftR)
@@ -117,6 +118,12 @@ reset k Nothing  tbl = delete k tbl >> return ()
 
 indexOf :: Int -> IT a -> Int
 indexOf k IT{..} = k .&. (Arr.size tabArr - 1)
+
+-- | Get number of elements in the table
+size :: IntTable a -> IO Int
+size (IntTable ref) = do
+  it@IT{..} <- readIORef ref
+  withForeignPtr tabSize peek
 
 -- | Remove the given key from the table and return its associated value.
 delete :: Int -> IntTable a -> IO (Maybe a)

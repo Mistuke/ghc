@@ -49,6 +49,7 @@ PRELUDE_CLOSURE(base_GHCziEventziThread_blockedOnBadFD_closure);
 
 PRELUDE_CLOSURE(base_GHCziConcziSync_runSparks_closure);
 PRELUDE_CLOSURE(base_GHCziConcziIO_ensureIOManagerIsRunning_closure);
+PRELUDE_CLOSURE(base_GHCziConcziIO_interruptIOManager_closure);
 PRELUDE_CLOSURE(base_GHCziConcziIO_ioManagerCapabilitiesChanged_closure);
 PRELUDE_CLOSURE(base_GHCziConcziSignal_runHandlersPtr_closure);
 
@@ -82,6 +83,7 @@ PRELUDE_INFO(base_GHCziStable_StablePtr_con_info);
 
 #define runSparks_closure         DLL_IMPORT_DATA_REF(base_GHCziConcziSync_runSparks_closure)
 #define ensureIOManagerIsRunning_closure DLL_IMPORT_DATA_REF(base_GHCziConcziIO_ensureIOManagerIsRunning_closure)
+#define interruptIOManager_closure DLL_IMPORT_DATA_REF(base_GHCziConcziIO_interruptIOManager_closure)
 #define ioManagerCapabilitiesChanged_closure DLL_IMPORT_DATA_REF(base_GHCziConcziIO_ioManagerCapabilitiesChanged_closure)
 #define runHandlersPtr_closure       DLL_IMPORT_DATA_REF(base_GHCziConcziSignal_runHandlersPtr_closure)
 

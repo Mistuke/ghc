@@ -29,6 +29,7 @@
 module GHC.Conc.IO
         ( ensureIOManagerIsRunning
         , ioManagerCapabilitiesChanged
+        , interruptIOManager
 
         -- * Waiting
         , threadDelay
@@ -74,6 +75,13 @@ ensureIOManagerIsRunning :: IO ()
 ensureIOManagerIsRunning = Event.ensureIOManagerIsRunning
 #else
 ensureIOManagerIsRunning = Windows.ensureIOManagerIsRunning
+#endif
+
+interruptIOManager :: IO ()
+#if !defined(mingw32_HOST_OS)
+interruptIOManager = Event.interruptIOManager
+#else
+interruptIOManager = Windows.interruptIOManager
 #endif
 
 ioManagerCapabilitiesChanged :: IO ()

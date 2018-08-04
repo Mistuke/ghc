@@ -269,6 +269,7 @@ hs_init_ghc(int *argc, char **argv[], RtsConfig rts_config)
 
     getStablePtr((StgPtr)runSparks_closure);
     getStablePtr((StgPtr)ensureIOManagerIsRunning_closure);
+    getStablePtr((StgPtr)interruptIOManager_closure);
     getStablePtr((StgPtr)ioManagerCapabilitiesChanged_closure);
 #if !defined(mingw32_HOST_OS)
     getStablePtr((StgPtr)blockedOnBadFD_closure);
