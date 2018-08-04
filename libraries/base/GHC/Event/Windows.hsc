@@ -174,8 +174,18 @@ startIOManagerThread loop = do
           ThreadDied     -> create
           _other         -> do c_sendIOManagerEvent io_MANAGER_WAKEUP
                                interruptSystemManager
+                               setRunning True
                                debugIO $ "woke up manager on thread: " ++ showThreadId t
                                return (Just t)
+
+running :: MVar Bool
+running = unsafePerformIO $ newMVar False
+
+setRunning :: Bool -> IO ()
+setRunning val = modifyMVar_ running (\a -> return val)
+
+isRunning :: IO Bool
+isRunning = readMVar running
 
 requests :: MVar Word64
 requests = unsafePerformIO $ newMVar 0
@@ -209,6 +219,8 @@ interruptSystemManager = do
                       do debugIO "interrupt received.."
                          FFI.postQueuedCompletionStatus (mgrIOCP mgr') 0 0
                                                         nullPtr
+                         active <- isRunning
+                         when (not active) wakeupIOManager
 
 -- must be power of 2
 callbackArraySize :: Int
@@ -579,22 +591,25 @@ step mgr@Manager{..} = do
 io_mngr_loop :: HANDLE -> Manager -> IO ()
 io_mngr_loop event mgr = go
     where
-      go = do (more, delay) <- step mgr
-              debugIO "I/O manager stepping."
-              r2 <- c_readIOManagerEvent
+      go = do r2 <- c_readIOManagerEvent
               exit <-
                 case r2 of
                   _ | r2 == io_MANAGER_WAKEUP -> return False
                   _ | r2 == io_MANAGER_DIE    -> return True
                   0 -> return False -- spurious wakeup
-                  _ -> do start_console_handler (r2 `shiftR` 1)
+                  _ -> do debugIO $ "handling console event: " ++ show (r2 `shiftR` 1)
+                          start_console_handler (r2 `shiftR` 1)
                           return False
+
+              (more, delay) <- step mgr
+              debugIO "I/O manager stepping."
 
               -- If we have no more work to do, or something from the outside
               -- told us to stop then we let the thread die and stop the I/O
               -- manager.  It will be woken up again when there is more to do.
               case () of
-                _ | exit -> debugIO "I/O manager shutting down."
+                _ | exit -> do setRunning False
+                               debugIO "I/O manager shutting down."
                 _ | isJust delay -> do
                       let timeout = fromTimeout delay
                       debugIO "I/O manager pausing."
