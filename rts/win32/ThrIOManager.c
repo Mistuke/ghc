@@ -129,6 +129,7 @@ sendIOManagerEvent (HsWord32 event)
 void
 interruptIOManagerEvent (void)
 {
+    debugBelch (">> interrupt...\n");
 #if defined(THREADED_RTS)
     ACQUIRE_LOCK(&event_buf_mutex);
 

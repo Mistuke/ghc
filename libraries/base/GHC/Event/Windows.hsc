@@ -163,6 +163,7 @@ startIOManagerThread loop = do
                     t <- if threaded
                             then forkOS loop
                             else forkIO loop
+                    setStatus WinIORunning
                     debugIO $ "created io-manager thread."
                     return (Just t)
     case old of
@@ -172,20 +173,35 @@ startIOManagerThread loop = do
         case s of
           ThreadFinished -> create
           ThreadDied     -> create
-          _other         -> do c_sendIOManagerEvent io_MANAGER_WAKEUP
-                               interruptSystemManager
-                               setRunning True
-                               debugIO $ "woke up manager on thread: " ++ showThreadId t
+          _other         -> do status <- getStatus
+                               case status of
+                                WinIOBlocked  -> do
+                                  c_sendIOManagerEvent io_MANAGER_WAKEUP
+                                  debugIO $ "woke up manager on thread: "
+                                            ++ showThreadId t
+                                WinIOScanning -> do
+                                  interruptSystemManager
+                                  debugIO $ "interrupted IOCP wait on thread: "
+                                            ++ showThreadId t
+                                _             -> return ()
                                return (Just t)
 
-running :: MVar Bool
-running = unsafePerformIO $ newMVar False
+data WinIOStatus
+  = WinIORunning
+  | WinIOScanning
+  | WinIOBlocked
+  | WinIODone
+  deriving Eq
 
-setRunning :: Bool -> IO ()
-setRunning val = modifyMVar_ running (\a -> return val)
 
-isRunning :: IO Bool
-isRunning = readMVar running
+statusWinIO :: MVar WinIOStatus
+statusWinIO = unsafePerformIO $ newMVar WinIODone
+
+setStatus :: WinIOStatus -> IO ()
+setStatus val = modifyMVar_ statusWinIO (\a -> return val)
+
+getStatus :: IO WinIOStatus
+getStatus = readMVar statusWinIO
 
 requests :: MVar Word64
 requests = unsafePerformIO $ newMVar 0
@@ -212,15 +228,15 @@ managerRef = unsafePerformIO $
 interruptSystemManager :: IO ()
 interruptSystemManager = do
   mgr <- getSystemManager
-  case mgr of
-    Nothing   -> return ()
-    Just mgr' -> do more <- (>0) `fmap` outstandingRequests
-                    when more $
-                      do debugIO "interrupt received.."
-                         FFI.postQueuedCompletionStatus (mgrIOCP mgr') 0 0
-                                                        nullPtr
-                         active <- isRunning
-                         when (not active) wakeupIOManager
+  status <- getStatus
+  case (mgr, status) of
+    (Just mgr', WinIOScanning) -> do
+      more <- (>0) `fmap` outstandingRequests
+      when more $
+        do debugIO "interrupt received.."
+           FFI.postQueuedCompletionStatus (mgrIOCP mgr') 0 0 nullPtr
+           setStatus WinIORunning
+    (_        ,             _) -> return ()
 
 -- must be power of 2
 callbackArraySize :: Int
@@ -475,7 +491,6 @@ registerTimeout mgr@Manager{..} relTime cb = do
       now <- getTime mgrClock
       let !expTime = secondsToNanoSeconds $ now + relTime
       editTimeouts mgr (Q.insert key expTime cb)
-      wakeupIOManager
     return $ TK key
 
 -- | Update an active timeout to fire in the given number of seconds (from the
@@ -486,7 +501,6 @@ updateTimeout mgr (TK key) relTime = do
     now <- getTime (mgrClock mgr)
     let !expTime = secondsToNanoSeconds $ now + relTime
     editTimeouts mgr (Q.adjust (const expTime) key)
-    wakeupIOManager
 
 -- | Unregister an active timeout.  This is a harmless no-op if the timeout is
 -- already unregistered or has already fired.
@@ -496,10 +510,11 @@ updateTimeout mgr (TK key) relTime = do
 unregisterTimeout :: Manager -> TimeoutKey -> IO ()
 unregisterTimeout mgr (TK key) = do
     editTimeouts mgr (Q.delete key)
-    wakeupIOManager
 
 editTimeouts :: Manager -> TimeoutEdit -> IO ()
-editTimeouts mgr g = atomicModifyIORef' (mgrTimeouts mgr) $ \tq -> (g tq, ())
+editTimeouts mgr g = do
+  atomicModifyIORef' (mgrTimeouts mgr) $ \tq -> (g tq, ())
+  wakeupIOManager
 
 ------------------------------------------------------------------------
 -- I/O manager loop
@@ -546,11 +561,13 @@ step :: Manager -> IO (Bool, Maybe Seconds)
 step mgr@Manager{..} = do
     delay <- runExpiredTimeouts mgr
     debugIO $ "next timeout: " ++ show delay
+    setStatus WinIOScanning
     -- The getQueuedCompletionStatusEx call will remove entries queud by the OS
     -- and returns the finished ones in mgrOverlappedEntries and the number of
     -- entries removed.
     n <- FFI.getQueuedCompletionStatusEx mgrIOCP mgrOverlappedEntries
                                          (fromTimeout delay)
+    setStatus WinIORunning
     debugIO $ "completed completions: " ++ show n
 
     -- If some completions are done, we need to process them and call their
@@ -591,7 +608,8 @@ step mgr@Manager{..} = do
 io_mngr_loop :: HANDLE -> Manager -> IO ()
 io_mngr_loop event mgr = go
     where
-      go = do r2 <- c_readIOManagerEvent
+      go = do setStatus WinIORunning
+              r2 <- c_readIOManagerEvent
               exit <-
                 case r2 of
                   _ | r2 == io_MANAGER_WAKEUP -> return False
@@ -608,19 +626,23 @@ io_mngr_loop event mgr = go
               -- told us to stop then we let the thread die and stop the I/O
               -- manager.  It will be woken up again when there is more to do.
               case () of
-                _ | exit -> do setRunning False
+                _ | exit -> do setStatus WinIODone
                                debugIO "I/O manager shutting down."
                 _ | isJust delay -> do
                       let timeout = fromTimeout delay
                       debugIO "I/O manager pausing."
+                      setStatus WinIOBlocked
                       r <- c_WaitForSingleObject event timeout
+                      setStatus WinIORunning
                       when (r == 0xffffffff) $ throwGetLastError "io_mngr_loop"
                       go
                 _ | more -> go -- We seem to have more work but no ETA for it.
                                -- So just retry until we run out of work.
                 _ -> do
                   debugIO "I/O manager deep sleep."
+                  setStatus WinIOBlocked
                   r <- c_WaitForSingleObject event 0xFFFFFFFF
+                  setStatus WinIORunning
                   when (r == 0xffffffff) $ throwGetLastError "io_mngr_loop"
                   go
 
