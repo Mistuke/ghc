@@ -59,6 +59,7 @@ module GHC.Event.Windows (
 ) where
 
 ##include "windows_cconv.h"
+#include <windows.h>
 
 import GHC.Event.Windows.Clock   (Clock, Seconds, getClock, getTime)
 import GHC.Event.Windows.FFI     (OVERLAPPED, LPOVERLAPPED, OVERLAPPED_ENTRY(..))
@@ -99,7 +100,7 @@ import GHC.RTS.Flags
 import qualified GHC.Windows as Win32
 
 c_DEBUG_DUMP :: IO Bool
-c_DEBUG_DUMP = return True -- scheduler `fmap` getDebugFlags
+c_DEBUG_DUMP = scheduler `fmap` getDebugFlags
 
 
 -- ---------------------------------------------------------------------------
@@ -180,15 +181,20 @@ startIOManagerThread loop = do
                                   debugIO $ "woke up manager on thread: "
                                             ++ showThreadId t
                                 WinIOScanning -> do
-                                  interruptSystemManager
-                                  debugIO $ "interrupted IOCP wait on thread: "
+                                  debugIO $ "interrupted IOCP timeout wait on thread: "
+                                            ++ showThreadId t
+                                WinIOWaiting -> do
+                                  debugIO $ "interrupted IOCP long wait on thread: "
                                             ++ showThreadId t
                                 _             -> return ()
+                               when (status /= WinIORunning)
+                                    interruptSystemManager
                                return (Just t)
 
 data WinIOStatus
   = WinIORunning
   | WinIOScanning
+  | WinIOWaiting
   | WinIOBlocked
   | WinIODone
   deriving Eq
@@ -229,14 +235,16 @@ interruptSystemManager :: IO ()
 interruptSystemManager = do
   mgr <- getSystemManager
   status <- getStatus
-  case (mgr, status) of
-    (Just mgr', WinIOScanning) -> do
-      more <- (>0) `fmap` outstandingRequests
-      when more $
-        do debugIO "interrupt received.."
-           FFI.postQueuedCompletionStatus (mgrIOCP mgr') 0 0 nullPtr
-           setStatus WinIORunning
-    (_        ,             _) -> return ()
+  case mgr of
+    Nothing -> return ()
+    Just mgr' -> do
+      when (status /= WinIORunning) $
+            do debugIO "interrupt received.."
+               FFI.postQueuedCompletionStatus (mgrIOCP mgr') 0 0 nullPtr
+      when (status == WinIODone) $
+            do debugIO $  "I/O manager is dead. You need to revive it first. "
+                       ++ "Try wakeupIOManager instead."
+
 
 -- must be power of 2
 callbackArraySize :: Int
@@ -557,16 +565,25 @@ fromTimeout (Just sec) | sec > 120  = 120000
                        | sec > 0    = ceiling (sec * 1000)
                        | otherwise  = 0
 
-step :: Manager -> IO (Bool, Maybe Seconds)
-step mgr@Manager{..} = do
+step :: Bool -> Manager -> IO (Bool, Maybe Seconds)
+step maxDelay mgr@Manager{..} = do
     delay <- runExpiredTimeouts mgr
+    let timer = if maxDelay && delay == Nothing
+                   then #{const INFINITE}
+                   else fromTimeout delay
     debugIO $ "next timeout: " ++ show delay
-    setStatus WinIOScanning
+    debugIO $ "next timer: " ++ show timer -- todo: print as hex
     -- The getQueuedCompletionStatusEx call will remove entries queud by the OS
     -- and returns the finished ones in mgrOverlappedEntries and the number of
     -- entries removed.
-    n <- FFI.getQueuedCompletionStatusEx mgrIOCP mgrOverlappedEntries
-                                         (fromTimeout delay)
+    case (maxDelay, delay) of
+      (_    , Just{} ) -> do setStatus WinIOWaiting
+                             debugIO "I/O manager waiting."
+      (False, Nothing) -> do setStatus WinIOScanning
+                             debugIO "I/O manager pausing."
+      (True , Nothing) -> do setStatus WinIOBlocked
+                             debugIO "I/O manager deep sleep."
+    n <- FFI.getQueuedCompletionStatusEx mgrIOCP mgrOverlappedEntries timer
     setStatus WinIORunning
     debugIO $ "completed completions: " ++ show n
 
@@ -606,45 +623,33 @@ step mgr@Manager{..} = do
     return (more || isJust delay, delay)
 
 io_mngr_loop :: HANDLE -> Manager -> IO ()
-io_mngr_loop event mgr = go
+io_mngr_loop event mgr = go False
     where
-      go = do setStatus WinIORunning
-              r2 <- c_readIOManagerEvent
-              exit <-
-                case r2 of
-                  _ | r2 == io_MANAGER_WAKEUP -> return False
-                  _ | r2 == io_MANAGER_DIE    -> return True
-                  0 -> return False -- spurious wakeup
-                  _ -> do debugIO $ "handling console event: " ++ show (r2 `shiftR` 1)
-                          start_console_handler (r2 `shiftR` 1)
-                          return False
+      go maxDelay =
+          do setStatus WinIORunning
+             (more, delay) <- step maxDelay mgr
+             debugIO "I/O manager stepping."
+             r2 <- c_readIOManagerEvent
+             exit <-
+               case r2 of
+                 _ | r2 == io_MANAGER_WAKEUP -> return False
+                 _ | r2 == io_MANAGER_DIE    -> return True
+                 0 -> return False -- spurious wakeup
+                 _ -> do debugIO $ "handling console event: " ++ show (r2 `shiftR` 1)
+                         start_console_handler (r2 `shiftR` 1)
+                         return False
 
-              (more, delay) <- step mgr
-              debugIO "I/O manager stepping."
-
-              -- If we have no more work to do, or something from the outside
-              -- told us to stop then we let the thread die and stop the I/O
-              -- manager.  It will be woken up again when there is more to do.
-              case () of
-                _ | exit -> do setStatus WinIODone
-                               debugIO "I/O manager shutting down."
-                _ | isJust delay -> do
-                      let timeout = fromTimeout delay
-                      debugIO "I/O manager pausing."
-                      setStatus WinIOBlocked
-                      r <- c_WaitForSingleObject event timeout
-                      setStatus WinIORunning
-                      when (r == 0xffffffff) $ throwGetLastError "io_mngr_loop"
-                      go
-                _ | more -> go -- We seem to have more work but no ETA for it.
-                               -- So just retry until we run out of work.
-                _ -> do
-                  debugIO "I/O manager deep sleep."
-                  setStatus WinIOBlocked
-                  r <- c_WaitForSingleObject event 0xFFFFFFFF
-                  setStatus WinIORunning
-                  when (r == 0xffffffff) $ throwGetLastError "io_mngr_loop"
-                  go
+             -- If we have no more work to do, or something from the outside
+             -- told us to stop then we let the thread die and stop the I/O
+             -- manager.  It will be woken up again when there is more to do.
+             case () of
+               _ | exit -> do setStatus WinIODone
+                              debugIO "I/O manager shutting down."
+               _ | isJust delay -> go False
+               -- We seem to have more work but no ETA for it.
+               -- So just retry until we run out of work.
+               _ | more -> go False
+               _        -> go True
 
 -- TODO: Do some refactoring to share this between here and GHC.Conc.POSIX
 -- must agree with rts/win32/ThrIOManager.c
@@ -655,8 +660,8 @@ io_MANAGER_DIE    = 0xfffffffe
 wakeupIOManager :: IO ()
 wakeupIOManager
   = do mngr <- getSystemManager
-       more <- (>0) `fmap` outstandingRequests
-       when more $ do
+       status <- getStatus
+       when (status /= WinIORunning) $ do
          event <- c_getIOManagerEvent
          debugIO "waking up I/O manager."
          case mngr of

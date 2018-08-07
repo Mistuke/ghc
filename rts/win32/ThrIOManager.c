@@ -129,18 +129,14 @@ sendIOManagerEvent (HsWord32 event)
 void
 interruptIOManagerEvent (void)
 {
-    debugBelch (">> interrupt...\n");
 #if defined(THREADED_RTS)
     ACQUIRE_LOCK(&event_buf_mutex);
 
     /* How expensive is this??.  */
     Capability *cap;
-    if (io_manager_event == INVALID_HANDLE_VALUE) {
-        cap = rts_lock();
-        debugBelch ("Calling interrupt...\n");
-        rts_evalIO(&cap, interruptIOManager_closure, NULL);
-        rts_unlock(cap);
-    }
+    cap = rts_lock();
+    rts_evalIO(&cap, interruptIOManager_closure, NULL);
+    rts_unlock(cap);
 
     RELEASE_LOCK(&event_buf_mutex);
 #endif
