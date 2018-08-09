@@ -130,6 +130,7 @@ void
 interruptIOManagerEvent (void)
 {
 #if defined(THREADED_RTS)
+  if (is_io_mng_native_p ()) {
     ACQUIRE_LOCK(&event_buf_mutex);
 
     /* How expensive is this??.  */
@@ -139,6 +140,7 @@ interruptIOManagerEvent (void)
     rts_unlock(cap);
 
     RELEASE_LOCK(&event_buf_mutex);
+  }
 #endif
 }
 
