@@ -88,7 +88,7 @@ EXTERN_INLINE int TRY_ACQUIRE_LOCK(pthread_mutex_t *mutex)
 
 #include <windows.h>
 
-typedef HANDLE Condition;
+typedef CONDITION_VARIABLE Condition;
 typedef DWORD OSThreadId;
 // don't be tempted to use HANDLE as the OSThreadId: there can be
 // many HANDLES to a given thread, so comparison would not work.
