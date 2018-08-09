@@ -41,52 +41,34 @@ static uint8_t* cpuGroupDistCache = NULL;
 void
 initCondition( Condition* pCond )
 {
-  HANDLE h =  CreateEvent(NULL,
-                          FALSE,  /* auto reset */
-                          FALSE,  /* initially not signalled */
-                          NULL); /* unnamed => process-local. */
-
-  if ( h == NULL ) {
-      sysErrorBelch("initCondition: unable to create");
-      stg_exit(EXIT_FAILURE);
-  }
-  *pCond = h;
+  InitializeConditionVariable(pCond);
   return;
 }
 
 void
 closeCondition( Condition* pCond )
 {
-  if ( CloseHandle(*pCond) == 0 ) {
-      sysErrorBelch("closeCondition: failed to close");
-  }
   return;
 }
 
 bool
 broadcastCondition ( Condition* pCond )
 {
-  PulseEvent(*pCond);
+  WakeAllConditionVariable(pCond);
   return true;
 }
 
 bool
 signalCondition ( Condition* pCond )
 {
-    if (SetEvent(*pCond) == 0) {
-        sysErrorBelch("SetEvent");
-        stg_exit(EXIT_FAILURE);
-    }
-    return true;
+  WakeConditionVariable(pCond);
+  return true;
 }
 
 bool
 waitCondition ( Condition* pCond, Mutex* pMut )
 {
-  RELEASE_LOCK(pMut);
-  WaitForSingleObject(*pCond, INFINITE);
-  /* Hmm..use WaitForMultipleObjects() ? */
-  ACQUIRE_LOCK(pMut);
+  SleepConditionVariableSRW(pCond, pMut, INFINITE, 0);
   return true;
 }
 
