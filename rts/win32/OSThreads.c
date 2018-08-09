@@ -150,34 +150,16 @@ osThreadIsAlive(OSThreadId id)
     return (exit_code == STILL_ACTIVE);
 }
 
-#if defined(USE_CRITICAL_SECTIONS)
 void
 initMutex (Mutex* pMut)
 {
-    InitializeCriticalSectionAndSpinCount(pMut,4000);
+    InitializeSRWLock(pMut);
 }
 void
 closeMutex (Mutex* pMut)
 {
-    DeleteCriticalSection(pMut);
+    (void)pMut;
 }
-#else
-void
-initMutex (Mutex* pMut)
-{
-  HANDLE h = CreateMutex ( NULL,  /* default sec. attributes */
-                           TRUE, /* not owned => initially signalled */
-                           NULL
-                           );
-  *pMut = h;
-  return;
-}
-void
-closeMutex (Mutex* pMut)
-{
-    CloseHandle(*pMut);
-}
-#endif
 
 void
 newThreadLocalKey (ThreadLocalKey *key)

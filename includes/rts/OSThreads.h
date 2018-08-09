@@ -77,14 +77,14 @@ EXTERN_INLINE int TRY_ACQUIRE_LOCK(pthread_mutex_t *mutex)
 
 #if defined(CMINUSMINUS)
 
-/* We jump through a hoop here to get a CCall EnterCriticalSection
-   and LeaveCriticalSection, as that's what C-- wants. */
+/* We jump through a hoop here to get a CCall AcquireSRWLockExclusive
+   and ReleaseSRWLockExclusive, as that's what C-- wants. */
 
-#define OS_ACQUIRE_LOCK(mutex) foreign "stdcall" EnterCriticalSection(mutex)
-#define OS_RELEASE_LOCK(mutex) foreign "stdcall" LeaveCriticalSection(mutex)
+#define OS_ACQUIRE_LOCK(mutex) foreign "stdcall" AcquireSRWLockExclusive(mutex)
+#define OS_RELEASE_LOCK(mutex) foreign "stdcall" ReleaseSRWLockExclusive(mutex)
 #define OS_ASSERT_LOCK_HELD(mutex) /* nothing */
 
-#else
+#else // CMINUSMINUS
 
 #include <windows.h>
 
@@ -98,58 +98,42 @@ typedef DWORD ThreadLocalKey;
 
 #define INIT_COND_VAR  0
 
-// We have a choice for implementing Mutexes on Windows.  Standard
-// Mutexes are kernel objects that require kernel calls to
-// acquire/release, whereas CriticalSections are spin-locks that block
-// in the kernel after spinning for a configurable number of times.
-// CriticalSections are *much* faster, so we use those.  The Mutex
-// implementation is left here for posterity.
-#define USE_CRITICAL_SECTIONS 1
+/* We have a choice for implementing Mutexes on Windows.  Standard
+   Mutexes are kernel objects that require kernel calls to
+   acquire/release, whereas CriticalSections are spin-locks that block
+   in the kernel after spinning for a configurable number of times.
+   CriticalSections are *much* faster, however not as fast as slim reader/writer
+   locks.  CriticalSections also require a 48 byte structure to provide
+   reentrancy.  We don't need that so SRW's 8 byte size is much more
+   appropriate.  With an 8 byte payload there's a higher chance of it being in
+   your cache line.  They're also a lot faster than CriticalSections when
+   multiple threads are involved.  */
 
-#if USE_CRITICAL_SECTIONS
-
-typedef CRITICAL_SECTION Mutex;
+typedef PSRWLOCK Mutex;
 
 #if defined(LOCK_DEBUG)
 
 #define OS_ACQUIRE_LOCK(mutex) \
   debugBelch("ACQUIRE_LOCK(0x%p) %s %d\n", mutex,__FILE__,__LINE__); \
-  EnterCriticalSection(mutex)
+  AcquireSRWLockExclusive(mutex)
 #define OS_RELEASE_LOCK(mutex) \
   debugBelch("RELEASE_LOCK(0x%p) %s %d\n", mutex,__FILE__,__LINE__); \
-  LeaveCriticalSection(mutex)
+  ReleaseSRWLockExclusive(mutex)
 #define OS_ASSERT_LOCK_HELD(mutex) /* nothing */
 
 #else
 
-#define OS_ACQUIRE_LOCK(mutex)      EnterCriticalSection(mutex)
-#define TRY_ACQUIRE_LOCK(mutex)  (TryEnterCriticalSection(mutex) == 0)
-#define OS_RELEASE_LOCK(mutex)      LeaveCriticalSection(mutex)
+#define OS_ACQUIRE_LOCK(mutex)      AcquireSRWLockExclusive(mutex)
+#define TRY_ACQUIRE_LOCK(mutex)  (TryAcquireSRWLockExclusive(mutex) == 0)
+#define OS_RELEASE_LOCK(mutex)      ReleaseSRWLockExclusive(mutex)
+#define OS_INIT_LOCK(mutex)         InitializeSRWLock(mutex)
+#define OS_CLOSE_LOCK(mutex)
 
 // I don't know how to do this.  TryEnterCriticalSection() doesn't do
 // the right thing.
 #define OS_ASSERT_LOCK_HELD(mutex) /* nothing */
 
-#endif
-
-#else
-
-typedef HANDLE Mutex;
-
-// casting to (Mutex *) here required due to use in .cmm files where
-// the argument has (void *) type.
-#define OS_ACQUIRE_LOCK(mutex)                                     \
-    if (WaitForSingleObject(*((Mutex *)mutex),INFINITE) == WAIT_FAILED) { \
-        barf("WaitForSingleObject: %d", GetLastError());        \
-    }
-
-#define OS_RELEASE_LOCK(mutex)                             \
-    if (ReleaseMutex(*((Mutex *)mutex)) == 0) {         \
-        barf("ReleaseMutex: %d", GetLastError());       \
-    }
-
-#define OS_ASSERT_LOCK_HELD(mutex) /* nothing */
-#endif
+#endif // LOCK_DEBUG
 
 #endif // CMINUSMINUS
 

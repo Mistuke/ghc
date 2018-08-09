@@ -22,10 +22,10 @@ rts_VERSION = 1.0
 # Minimum supported Windows version.
 # These numbers can be found at:
 #  https://msdn.microsoft.com/en-us/library/windows/desktop/aa383745(v=vs.85).aspx
-# If we're compiling on windows, enforce that we only support Vista SP1+
+# If we're compiling on windows, enforce that we only support Windows 7+
 # Adding this here means it doesn't have to be done in individual .c files
 # and also centralizes the versioning.
-rts_WINVER = 0x06000100
+rts_WINVER = 0x06010000
 
 # merge GhcLibWays and GhcRTSWays but strip out duplicates
 rts_WAYS = $(GhcLibWays) $(filter-out $(GhcLibWays),$(GhcRTSWays))
@@ -302,8 +302,8 @@ $(eval $(call distdir-opts,rts,dist,1))
 # We like plenty of warnings.
 WARNING_OPTS += -Wall
 WARNING_OPTS += -Wextra
-WARNING_OPTS += -Wstrict-prototypes 
-WARNING_OPTS += -Wmissing-prototypes 
+WARNING_OPTS += -Wstrict-prototypes
+WARNING_OPTS += -Wmissing-prototypes
 WARNING_OPTS += -Wmissing-declarations
 WARNING_OPTS += -Winline
 WARNING_OPTS += -Waggregate-return
@@ -321,7 +321,7 @@ endif
 #WARNING_OPTS += -Wshadow
 #WARNING_OPTS += -Wcast-qual
 
-# This one seems buggy on GCC 4.1.2, which is the only GCC version we 
+# This one seems buggy on GCC 4.1.2, which is the only GCC version we
 # have that can bootstrap the SPARC build. We end up with lots of supurious
 # warnings of the form "cast increases required alignment of target type".
 # Some legitimate warnings can be fixed by adding an intermediate cast to
@@ -353,7 +353,7 @@ rts_CC_OPTS += -DUSE_LIBFFI_FOR_ADJUSTORS
 endif
 
 # We *want* type-checking of hand-written cmm.
-rts_HC_OPTS += -dcmm-lint 
+rts_HC_OPTS += -dcmm-lint
 
 # -fno-strict-aliasing is required for the runtime, because we often
 # use a variety of types to represent closure pointers (StgPtr,
