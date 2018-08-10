@@ -122,8 +122,7 @@ getQueuedCompletionStatusEx iocp arr timeout =
             nc <- (peek num_removed_ptr)
             debugIO $ "-- getQueuedCompletionStatusEx: n=" ++ show nc ++ " ,err=" ++ show err
             if ok then fromIntegral `fmap` peek num_removed_ptr
-            else do err <- getLastError
-                    debugIO $ "failed getQueuedCompletionStatusEx: " ++ show err
+            else do debugIO $ "failed getQueuedCompletionStatusEx: " ++ show err
                     if err == #{const WAIT_TIMEOUT} then return 0
                     else failWith "GetQueuedCompletionStatusEx" err
 

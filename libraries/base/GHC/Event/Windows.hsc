@@ -100,7 +100,7 @@ import GHC.RTS.Flags
 import qualified GHC.Windows as Win32
 
 c_DEBUG_DUMP :: IO Bool
-c_DEBUG_DUMP = scheduler `fmap` getDebugFlags
+c_DEBUG_DUMP = return True -- scheduler `fmap` getDebugFlags
 
 
 -- ---------------------------------------------------------------------------
@@ -353,8 +353,11 @@ withOverlappedThreaded_ :: Manager
                         -> IO (IOResult a)
 withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
     signal <- newEmptyMVar :: IO (MVar (IOResult a))
-    let signalReturn a = tryPutMVar signal (IOSuccess a) >> return ()
-        signalThrow ex = tryPutMVar signal (IOFailed ex) >> return ()
+    let dbg s = s ++ " (" ++ show h ++ ":" ++ show offset ++ ")"
+    let signalReturn a = failIfFalse_ (dbg "signalReturn") $
+                            tryPutMVar signal (IOSuccess a)
+        signalThrow ex = failIfFalse_ (dbg "signalThrow") $
+                            tryPutMVar signal (IOFailed ex)
     mask_ $ do
         let completionCB' e b = completionCB e b >>= \result ->
                                   case result of
@@ -371,10 +374,10 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
                       IT.insertWith (flip const) (lpoverlappedToInt lpol)
                                     (CompletionData fptr completionCB') tbl
               reqs <- addRequest
-              debugIO $ "+1.. " ++ show reqs ++ " requests queued."
+              debugIO $ "+1.. " ++ show reqs ++ " requests queued. | " ++ show (lpoverlappedToInt lpol)
               wakeupIOManager
             CbError err -> signalThrow (Just err)
-            CbDone      -> return ()
+            CbDone      -> debugIO "request handled immediately, not queued."
           return result
 
         let cancel = do uninterruptibleMask_ $ FFI.cancelIoEx h lpol
@@ -382,7 +385,9 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
                           IT.delete (lpoverlappedToInt lpol) tbl
                         reqs <- removeRequest
                         debugIO $ "-1.. " ++ show reqs ++ " requests queued after error."
-        let runner = do res <- takeMVar signal `onException` cancel
+        let runner = do debugIO $ (dbg ":: waiting ") ++ " | "  ++ show (lpoverlappedToInt lpol)
+                        res <- takeMVar signal `onException` cancel
+                        debugIO $ dbg ":: signaled "
                         case res of
                           IOFailed err -> FFI.throwWinErr fname (maybe 0 fromIntegral err)
                           _            -> return res
@@ -592,6 +597,7 @@ step maxDelay mgr@Manager{..} = do
     -- the index if required.
     when (n > 0) $ do
       A.forM_ mgrOverlappedEntries $ \oe -> do
+          debugIO $ " $ checking " ++ show (lpoverlappedToInt (lpOverlapped oe))
           mCD <- withMVar (callbackTableVar mgr (lpOverlapped oe)) $ \tbl ->
                    IT.delete (lpoverlappedToInt (lpOverlapped oe)) tbl
           case mCD of
