@@ -87,6 +87,7 @@ EXTERN_INLINE int TRY_ACQUIRE_LOCK(pthread_mutex_t *mutex)
 #else // CMINUSMINUS
 
 #include <windows.h>
+#include <synchapi.h>
 
 typedef CONDITION_VARIABLE Condition;
 typedef DWORD OSThreadId;
