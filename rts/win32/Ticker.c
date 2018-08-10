@@ -1,6 +1,9 @@
 /*
  * RTS periodic timers.
  *
+ * TODO: Use high res timers http://undocumented.ntinternals.net/index.html?page=UserMode%2FUndocumented%20Functions%2FTime%2FNtSetTimerResolution.html
+ * https://docs.microsoft.com/en-us/windows/desktop/SysInfo/acquiring-high-resolution-time-stamps#hardware-timer-info
+ *
  */
 
 #include "Rts.h"
