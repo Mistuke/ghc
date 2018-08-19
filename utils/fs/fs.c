@@ -33,7 +33,7 @@
    Anything else such as raw device paths we leave untouched.  The main benefit
    of doing any of this is that we can break the MAX_PATH restriction and also
    access raw handles that we couldn't before.  */
-static wchar_t* __hs_create_device_name (const wchar_t* filename) {
+wchar_t* FS (create_device_name) (const wchar_t* filename) {
   const wchar_t* win32_dev_namespace  = L"\\\\.\\";
   const wchar_t* win32_file_namespace = L"\\\\?\\";
   const wchar_t* nt_device_namespace  = L"\\Device\\";
@@ -171,7 +171,7 @@ int FS(swopen) (const wchar_t* filename, int oflag, int shflag, int pmode)
   securityAttributes.lpSecurityDescriptor = NULL;
   securityAttributes.nLength              = sizeof(SECURITY_ATTRIBUTES);
 
-  wchar_t* _filename = __hs_create_device_name (filename);
+  wchar_t* _filename = FS (create_device_name) (filename);
   if (!_filename)
     return -1;
 

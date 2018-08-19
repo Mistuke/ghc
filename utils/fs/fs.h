@@ -25,12 +25,11 @@
 
 #if defined(_WIN32)
 #include <wchar.h>
-
+wchar_t* FS (create_device_name) (const wchar_t* filename);
 int FS(swopen) (const wchar_t* filename, int oflag,
                 int shflag, int pmode);
 FILE *FS(fwopen) (const wchar_t* filename, const wchar_t* mode);
 FILE *FS(fopen) (const char* filename, const char* mode);
 #else
-
 FILE *FS(fopen) (const char* filename, const char* mode);
 #endif
