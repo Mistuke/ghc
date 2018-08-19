@@ -196,9 +196,9 @@ void
 startTicker(void)
 {
   char* errmsg;
-  debugBelch ("* Starting ticker..\n");
+  //debugBelch ("* Starting ticker..\n");
   if (use_kernel_timer) {
-    debugBelch ("* Starting timer for: %lluns\n", TimeToNS (tick_interval));
+    //debugBelch ("* Starting timer for: %lluns\n", TimeToNS (tick_interval));
     use_kernel_timer = true;
     NTSTATUS result = NtCreateTimer (&timer, TIMER_ALL_ACCESS, NULL, SynchronizationEvent);
     if (result != STATUS_SUCCESS) { errmsg = "NtCreateTimer"; goto fail; }
@@ -210,7 +210,7 @@ startTicker(void)
     QueryPerformanceFrequency(&Frequency);
     if (ResumeThread(timer_queue) == (DWORD)-1) { errmsg = "ResumeThread"; goto fail; }
     QueryPerformanceCounter(&StartingTime);
-    debugBelch ("* Timer started successfully.\n");
+    //debugBelch ("* Timer started successfully.\n");
   } else {
     BOOL r = CreateTimerQueueTimer(&timer, timer_queue, tick_callback, 0, 0,
                                    TimeToMS(tick_interval),
@@ -232,7 +232,7 @@ stopTicker(void)
       SuspendThread (timer_queue);
       NtCancelTimer (timer, NULL);
       CloseHandle (timer);
-      debugBelch ("* Timer stopped.\n");
+      //debugBelch ("* Timer stopped.\n");
     } else {
       DeleteTimerQueueTimer(timer_queue, timer, NULL);
     }
