@@ -11,7 +11,10 @@
 -----------------------------------------------------------------------------
 -}
 
-module SysTools.BaseDir (expandTopDir, findTopDir) where
+module SysTools.BaseDir
+  ( expandTopDir, expandToolDir
+  , findTopDir, findToolDir
+  ) where
 
 #include "HsVersions.h"
 
@@ -19,6 +22,7 @@ import GhcPrelude
 
 import Panic
 
+import System.Environment (lookupEnv)
 import System.FilePath
 import Data.List
 
@@ -70,28 +74,63 @@ On Windows:
 
 from topdir we can find package.conf, ghc-asm, etc.
 
+
+Note [tooldir: How GHC finds mingw and perl on Windows]
+
+GHC has some custom logic on Windows for finding the mingw
+toolchain and perl. Depending on whether GHC is built
+with the make build system or Hadrian, and on whether we're
+running a bindist, we might find the mingw toolchain and perl
+either under $topdir/../{mingw, perl}/ or
+$topdir/../../{mingw, perl}/.
+
 -}
 
 -- | Expand occurrences of the @$topdir@ interpolation in a string.
 expandTopDir :: FilePath -> String -> String
-expandTopDir top_dir str
-  | Just str' <- stripPrefix "$topdir" str
+expandTopDir = expandPathVar "topdir"
+
+-- | Expand occurrences of the @$tooldir@ interpolation in a string
+-- on Windows, leave the string untouched otherwise.
+expandToolDir :: Maybe FilePath -> String -> String
+#if defined(mingw32_HOST_OS)
+expandToolDir (Just tool_dir) s = expandPathVar "tooldir" tool_dir s
+expandToolDir Nothing         _ = panic "Could not determine $tooldir"
+#else
+expandToolDir _ s = s
+#endif
+
+-- | @expandPathVar var value str@
+--
+--   replaces occurences of variable @$var@ with @value@ in str.
+expandPathVar :: String -> FilePath -> String -> String
+expandPathVar var value str
+  | Just str' <- stripPrefix ('$':var) str
   , null str' || isPathSeparator (head str')
-  = top_dir ++ expandTopDir top_dir str'
-expandTopDir top_dir (x:xs) = x : expandTopDir top_dir xs
-expandTopDir _ [] = []
+  = value ++ expandPathVar var value str'
+expandPathVar var value (x:xs) = x : expandPathVar var value xs
+expandPathVar _ _ [] = []
 
 -- | Returns a Unix-format path pointing to TopDir.
 findTopDir :: Maybe String -- Maybe TopDir path (without the '-B' prefix).
            -> IO String    -- TopDir (in Unix format '/' separated)
 findTopDir (Just minusb) = return (normalise minusb)
 findTopDir Nothing
-    = do -- Get directory of executable
-         maybe_exec_dir <- getBaseDir
-         case maybe_exec_dir of
-             -- "Just" on Windows, "Nothing" on unix
-             Nothing  -> throwGhcExceptionIO (InstallationError "missing -B<dir> option")
-             Just dir -> return dir
+    = do -- The _GHC_TOP_DIR environment variable can be used to specify
+         -- the top dir when the -B argument is not specified. It is not
+         -- intended for use by users, it was added specifically for the
+         -- purpose of running GHC within GHCi.
+         maybe_env_top_dir <- lookupEnv "_GHC_TOP_DIR"
+         case maybe_env_top_dir of
+             Just env_top_dir -> return env_top_dir
+             Nothing -> do
+                 -- Get directory of executable
+                 maybe_exec_dir <- getBaseDir
+                 case maybe_exec_dir of
+                     -- "Just" on Windows, "Nothing" on unix
+                     Nothing -> throwGhcExceptionIO $
+                         InstallationError "missing -B<dir> option"
+                     Just dir -> return dir
 
 getBaseDir :: IO (Maybe String)
 #if defined(mingw32_HOST_OS)
@@ -172,7 +211,7 @@ foreign import WINDOWS_CCONV unsafe "dynamic"
   makeGetFinalPathNameByHandle :: FunPtr GetFinalPath -> GetFinalPath
 #elif defined(darwin_HOST_OS) || defined(linux_HOST_OS)
 -- on unix, this is a bit more confusing.
--- The layout right now is somehting like
+-- The layout right now is something like
 --
 --   /bin/ghc-X.Y.Z <- wrapper script (1)
 --   /bin/ghc       <- symlink to wrapper script (2)
@@ -192,4 +231,27 @@ foreign import WINDOWS_CCONV unsafe "dynamic"
 getBaseDir = Just . (\p -> p </> "lib") . takeDirectory . takeDirectory <$> getExecutablePath
 #else
 getBaseDir = return Nothing
+#endif
+
+-- See Note [tooldir: How GHC finds mingw and perl on Windows]
+-- Returns @Nothing@ when not on Windows.
+-- When called on Windows, it either throws an error when the
+-- tooldir can't be located, or returns @Just tooldirpath@.
+findToolDir
+  :: FilePath -- ^ topdir
+  -> IO (Maybe FilePath)
+#if defined(mingw32_HOST_OS)
+findToolDir top_dir = go 0 (top_dir </> "..")
+  where maxDepth = 2
+        go :: Int -> FilePath -> IO (Maybe FilePath)
+        go k path
+          | k == maxDepth = throwGhcExceptionIO $
+              InstallationError "could not detect mingw toolchain"
+          | otherwise = do
+              oneLevel <- doesDirectoryExist (path </> "mingw")
+              if oneLevel
+                then return (Just path)
+                else go (k+1) (path </> "..")
+#else
+findToolDir _ = return Nothing
 #endif

@@ -69,7 +69,6 @@ import RnTypes
 import TcHsSyn
 import TcSimplify
 import Type
-import Kind
 import NameSet
 import TcMType
 import TcHsType
@@ -103,7 +102,7 @@ import ErrUtils
 import Util
 import Unique
 import VarSet
-import Data.List        ( find, mapAccumL )
+import Data.List        ( find )
 import Data.Maybe
 import FastString
 import BasicTypes hiding( SuccessFlag(..) )
@@ -112,6 +111,7 @@ import DynFlags
 import Panic
 import Lexeme
 import qualified EnumSet
+import Plugins
 
 import qualified Language.Haskell.TH as TH
 -- THSyntax gives access to internal functions and data types
@@ -162,7 +162,7 @@ runAnnotation     :: CoreAnnTarget -> LHsExpr GhcRn -> TcM Annotation
 
 -- See Note [How brackets and nested splices are handled]
 -- tcTypedBracket :: HsBracket Name -> TcRhoType -> TcM (HsExpr TcId)
-tcTypedBracket rn_expr brack@(TExpBr expr) res_ty
+tcTypedBracket rn_expr brack@(TExpBr _ expr) res_ty
   = addErrCtxt (quotationCtxtDoc brack) $
     do { cur_stage <- getStage
        ; ps_ref <- newMutVar []
@@ -183,7 +183,7 @@ tcTypedBracket rn_expr brack@(TExpBr expr) res_ty
        ; tcWrapResultO (Shouldn'tHappenOrigin "TExpBr")
                        rn_expr
                        (unLoc (mkHsApp (nlHsTyApp texpco [expr_ty])
-                                              (noLoc (HsTcBracketOut brack ps'))))
+                                      (noLoc (HsTcBracketOut noExt brack ps'))))
                        meta_ty res_ty }
 tcTypedBracket _ other_brack _
   = pprPanic "tcTypedBracket" (ppr other_brack)
@@ -195,17 +195,19 @@ tcUntypedBracket rn_expr brack ps res_ty
        ; meta_ty <- tcBrackTy brack
        ; traceTc "tc_bracket done untyped" (ppr meta_ty)
        ; tcWrapResultO (Shouldn'tHappenOrigin "untyped bracket")
-                       rn_expr (HsTcBracketOut brack ps') meta_ty res_ty }
+                       rn_expr (HsTcBracketOut noExt brack ps') meta_ty res_ty }
 
 ---------------
 tcBrackTy :: HsBracket GhcRn -> TcM TcType
-tcBrackTy (VarBr _ _) = tcMetaTy nameTyConName  -- Result type is Var (not Q-monadic)
-tcBrackTy (ExpBr _)   = tcMetaTy expQTyConName  -- Result type is ExpQ (= Q Exp)
-tcBrackTy (TypBr _)   = tcMetaTy typeQTyConName -- Result type is Type (= Q Typ)
-tcBrackTy (DecBrG _)  = tcMetaTy decsQTyConName -- Result type is Q [Dec]
-tcBrackTy (PatBr _)   = tcMetaTy patQTyConName  -- Result type is PatQ (= Q Pat)
-tcBrackTy (DecBrL _)  = panic "tcBrackTy: Unexpected DecBrL"
-tcBrackTy (TExpBr _)  = panic "tcUntypedBracket: Unexpected TExpBr"
+tcBrackTy (VarBr {})  = tcMetaTy nameTyConName
+                                           -- Result type is Var (not Q-monadic)
+tcBrackTy (ExpBr {})  = tcMetaTy expQTyConName  -- Result type is ExpQ (= Q Exp)
+tcBrackTy (TypBr {})  = tcMetaTy typeQTyConName -- Result type is Type (= Q Typ)
+tcBrackTy (DecBrG {}) = tcMetaTy decsQTyConName -- Result type is Q [Dec]
+tcBrackTy (PatBr {})  = tcMetaTy patQTyConName  -- Result type is PatQ (= Q Pat)
+tcBrackTy (DecBrL {})   = panic "tcBrackTy: Unexpected DecBrL"
+tcBrackTy (TExpBr {})   = panic "tcUntypedBracket: Unexpected TExpBr"
+tcBrackTy (XBracket {}) = panic "tcUntypedBracket: Unexpected XBracket"
 
 ---------------
 tcPendingSplice :: PendingRnSplice -> TcM PendingTcSplice
@@ -433,7 +435,7 @@ When a variable is used, we compare
 ************************************************************************
 -}
 
-tcSpliceExpr splice@(HsTypedSplice _ name expr) res_ty
+tcSpliceExpr splice@(HsTypedSplice _ _ name expr) res_ty
   = addErrCtxt (spliceCtxtDoc splice) $
     setSrcSpan (getLoc expr)    $ do
     { stage <- getStage
@@ -583,8 +585,9 @@ runAnnotation target expr = do
               ; wrapper <- instCall AnnOrigin [expr_ty] [mkClassPred data_class [expr_ty]]
               ; let specialised_to_annotation_wrapper_expr
                       = L loc (mkHsWrap wrapper
-                                        (HsVar (L loc to_annotation_wrapper_id)))
-              ; return (L loc (HsApp specialised_to_annotation_wrapper_expr expr')) }
+                                 (HsVar noExt (L loc to_annotation_wrapper_id)))
+              ; return (L loc (HsApp noExt
+                                specialised_to_annotation_wrapper_expr expr')) }
 
     -- Run the appropriately wrapped expression to get the value of
     -- the annotation and its dictionaries. The return value is of
@@ -732,10 +735,13 @@ runMeta' show_code ppr_hs run_and_convert expr
         -- in type-correct programs.
         ; failIfErrsM
 
-        -- Desugar
-        ; ds_expr <- initDsTc (dsLExpr expr)
-        -- Compile and link it; might fail if linking fails
+        -- run plugins
         ; hsc_env <- getTopEnv
+        ; expr' <- withPlugins (hsc_dflags hsc_env) spliceRunAction expr
+
+        -- Desugar
+        ; ds_expr <- initDsTc (dsLExpr expr')
+        -- Compile and link it; might fail if linking fails
         ; src_span <- getSrcSpanM
         ; traceTc "About to run (desugared)" (ppr ds_expr)
         ; either_hval <- tryM $ liftIO $
@@ -888,20 +894,22 @@ instance TH.Quasi TcM where
       l <- getSrcSpanM
       let either_hval = convertToHsDecls l thds
       ds <- case either_hval of
-              Left exn -> pprPanic "qAddTopDecls: can't convert top-level declarations" exn
+              Left exn -> failWithTc $
+                hang (text "Error in a declaration passed to addTopDecls:")
+                   2 exn
               Right ds -> return ds
       mapM_ (checkTopDecl . unLoc) ds
       th_topdecls_var <- fmap tcg_th_topdecls getGblEnv
       updTcRef th_topdecls_var (\topds -> ds ++ topds)
     where
       checkTopDecl :: HsDecl GhcPs -> TcM ()
-      checkTopDecl (ValD binds)
+      checkTopDecl (ValD _ binds)
         = mapM_ bindName (collectHsBindBinders binds)
-      checkTopDecl (SigD _)
+      checkTopDecl (SigD _ _)
         = return ()
-      checkTopDecl (AnnD _)
+      checkTopDecl (AnnD _ _)
         = return ()
-      checkTopDecl (ForD (ForeignImport { fd_name = L _ name }))
+      checkTopDecl (ForD _ (ForeignImport { fd_name = L _ name }))
         = bindName name
       checkTopDecl _
         = addErr $ text "Only function, value, annotation, and foreign import declarations may be added with addTopDecl"
@@ -1172,8 +1180,8 @@ reifyInstances th_nm th_tys
                do { (rn_ty, fvs) <- rnLHsType doc rdr_ty
                   ; return ((tv_names, rn_ty), fvs) }
         ; (_tvs, ty)
-            <- solveEqualities $
-               tcImplicitTKBndrsType tv_names $
+            <- failIfEmitsConstraints $  -- avoid error cascade if there are unsolved
+               tcImplicitTKBndrs ReifySkol tv_names $
                fst <$> tcLHsType rn_ty
         ; ty <- zonkTcTypeToType emptyZonkEnv ty
                 -- Substitute out the meta type variables
@@ -1488,8 +1496,7 @@ reifyDataCon isGadtDataCon tys dc
               -- See Note [Freshen reified GADT constructors' universal tyvars]
            <- freshenTyVarBndrs $
               filterOut (`elemVarSet` eq_spec_tvs) g_univ_tvs
-       ; let (tvb_subst, g_user_tvs)
-                       = mapAccumL substTyVarBndr univ_subst g_user_tvs'
+       ; let (tvb_subst, g_user_tvs) = substTyVarBndrs univ_subst g_user_tvs'
              g_theta   = substTys tvb_subst g_theta'
              g_arg_tys = substTys tvb_subst g_arg_tys'
              g_res_ty  = substTy  tvb_subst g_res_ty'
@@ -1713,8 +1720,8 @@ reifyFamilyInstance is_poly_tvs inst@(FamInst { fi_flavor = flavor
 ------------------------------
 reifyType :: TyCoRep.Type -> TcM TH.Type
 -- Monadic only because of failure
-reifyType ty                | tcIsStarKind ty = return TH.StarT
-  -- Make sure to use tcIsStarKind here, since we don't want to confuse it
+reifyType ty                | tcIsLiftedTypeKind ty = return TH.StarT
+  -- Make sure to use tcIsLiftedTypeKind here, since we don't want to confuse it
   -- with Constraint (#14869).
 reifyType ty@(ForAllTy {})  = reify_for_all ty
 reifyType (LitTy t)         = do { r <- reifyTyLit t; return (TH.LitT r) }

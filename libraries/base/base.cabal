@@ -1,6 +1,6 @@
 cabal-version:  2.1
 name:           base
-version:        4.11.0.0
+version:        4.12.0.0
 -- NOTE: Don't forget to update ./changelog.md
 
 license:        BSD-3-Clause
@@ -36,6 +36,7 @@ extra-source-files:
     include/HsBaseConfig.h.in
     include/ieee-flpt.h
     include/md5.h
+    include/fs.h
     install-sh
 
 source-repository head
@@ -220,6 +221,7 @@ Library
         GHC.Event.TimeOut
         GHC.Event.Windows.ConsoleEvent
         GHC.Exception
+        GHC.Exception.Type
         GHC.ExecutionStack
         GHC.ExecutionStack.Internal
         GHC.Exts
@@ -262,6 +264,7 @@ Library
         GHC.IORef
         GHC.Int
         GHC.List
+        GHC.Maybe
         GHC.MVar
         GHC.Natural
         GHC.Num
@@ -274,6 +277,7 @@ Library
         GHC.Read
         GHC.Real
         GHC.Records
+        GHC.ResponseFile
         GHC.RTS.Flags
         GHC.ST
         GHC.StaticPtr
@@ -345,6 +349,7 @@ Library
         cbits/primFloat.c
         cbits/sysconf.c
         cbits/IOutils.c
+        cbits/fs.c
 
     cmm-sources:
         cbits/CastFloatWord.cmm
@@ -416,3 +421,6 @@ Library
     -- We need to set the unit id to base (without a version number)
     -- as it's magic.
     ghc-options: -this-unit-id base
+
+    -- Make sure we don't accidentally regress into anti-patterns
+    ghc-options: -Wcompat -Wnoncanonical-monad-instances

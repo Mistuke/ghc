@@ -88,20 +88,6 @@ So, for example, ``ghc -c Foo.hs``
     runtime or space *worse* if you're unlucky. They are normally turned
     on or off individually.
 
-.. ghc-flag:: -Odph
-    :shortdesc: Enable level 2 optimisations, set
-        ``-fmax-simplifier-iterations=20``
-        and ``-fsimplifier-phases=3``.
-    :type: dynamic
-    :category: optimization-levels
-
-    .. index::
-       single: optimise; DPH
-
-    Enables all ``-O2`` optimisation, sets
-    ``-fmax-simplifier-iterations=20`` and ``-fsimplifier-phases=3``.
-    Designed for use with :ref:`Data Parallel Haskell (DPH) <dph>`.
-
 We don't use a ``-O*`` flag for day-to-day work. We use ``-O`` to get
 respectable speed; e.g., when we want to measure something. When we want
 to go for broke, we tend to use ``-O2`` (and we go for lots of coffee
@@ -216,6 +202,23 @@ by saying ``-fno-wombat``.
     eliminate the duplicates attempts to move variable bindings closer
     to their usage sites. It also inlines simple expressions like
     literals or registers.
+
+.. ghc-flag:: -fasm-shortcutting
+    :shortdesc: Enable shortcutting on assembly. Implied by :ghc-flag:`-O2`.
+    :type: dynamic
+    :reverse: -fno-asm-shortcutting
+    :category:
+
+    :default: off
+
+    This enables shortcutting at the assembly stage of the code generator.
+    In simpler terms shortcutting means if a block of instructions A only consists
+    of a unconditionally jump, we replace all jumps to A by jumps to the successor
+    of A.
+
+    This is mostly done during Cmm passes. However this can miss corner cases. So at -O2
+    we run the pass again at the asm stage to catch these.
+
 
 .. ghc-flag:: -fcpr-anal
     :shortdesc: Turn on CPR analysis in the demand analyser. Implied by :ghc-flag:`-O`.
@@ -888,6 +891,8 @@ by saying ``-fno-wombat``.
     :shortdesc: Run a late specialisation pass
     :type: dynamic
     :reverse: -fno-late-specialise
+    :category:
+
     :default: off
 
     Runs another specialisation pass towards the end of the optimisation
@@ -1128,41 +1133,3 @@ by saying ``-fno-wombat``.
     if a function definition will be inlined *at a call site*. The other option
     determines if a function definition will be kept around at all for
     potential inlining.
-
-.. ghc-flag:: -fvectorisation-avoidance
-    :shortdesc: Enable vectorisation avoidance. Always enabled by default.
-    :type: dynamic
-    :reverse: -fno-vectorisation-avoidance
-    :category:
-
-    :default: on
-
-    .. index::
-       single: -fvectorisation-avoidance
-
-    Part of :ref:`Data Parallel Haskell (DPH) <dph>`.
-
-    Enable the *vectorisation* avoidance optimisation.
-    This optimisation only works when used in combination with the
-    ``-fvectorise`` transformation.
-
-    While vectorisation of code using DPH is often a big win, it can
-    also produce worse results for some kinds of code. This optimisation
-    modifies the vectorisation transformation to try to determine if a
-    function would be better of unvectorised and if so, do just that.
-
-.. ghc-flag:: -fvectorise
-    :shortdesc: Enable vectorisation of nested data parallelism
-    :type: dynamic
-    :reverse: -fno-vectorise
-    :category:
-
-    :default: off
-
-    Part of :ref:`Data Parallel Haskell (DPH) <dph>`.
-
-    Enable the *vectorisation* optimisation
-    transformation. This optimisation transforms the nested data
-    parallelism code of programs using DPH into flat data parallelism.
-    Flat data parallel programs should have better load balancing,
-    enable SIMD parallelism and friendlier cache behaviour.

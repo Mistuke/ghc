@@ -21,3 +21,14 @@ class Mk a where
 instance Mk a where
   mk :: LamCons a '()
   mk = mk
+
+-- At some point, this program was accepted. That's fine. But right now,
+-- it's rejected with a kind error, and we can't generally defer kind
+-- errors, so I'm saying that behavior is OK.
+
+-- Later (May 18) the kind error ended up being in an term-level
+-- implication constraint, which /does/ have an evidence binding
+-- So now the kind error can be deferred.
+-- Consequence of a fast-path for tcImplicitTKBndrsX I think.
+
+

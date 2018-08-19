@@ -1,5 +1,4 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE TypeFamilies #-}
 
 module CmmPipeline (
   -- | Converts C-- with an implicit stack and native C-- calls into
@@ -29,27 +28,26 @@ import Control.Monad
 import Outputable
 import Platform
 
-import Data.Maybe
-
 -----------------------------------------------------------------------------
 -- | Top level driver for C-- pipeline
 -----------------------------------------------------------------------------
 
-cmmPipeline  :: HscEnv -- Compilation env including
-                       -- dynamic flags: -dcmm-lint -ddump-cmm-cps
-             -> TopSRT     -- SRT table and accumulating list of compiled procs
-             -> CmmGroup             -- Input C-- with Procedures
-             -> IO (TopSRT, CmmGroup) -- Output CPS transformed C--
+cmmPipeline
+ :: HscEnv -- Compilation env including
+           -- dynamic flags: -dcmm-lint -ddump-cmm-cps
+ -> ModuleSRTInfo        -- Info about SRTs generated so far
+ -> CmmGroup             -- Input C-- with Procedures
+ -> IO (ModuleSRTInfo, CmmGroup) -- Output CPS transformed C--
 
-cmmPipeline hsc_env topSRT prog =
+cmmPipeline hsc_env srtInfo prog =
   do let dflags = hsc_dflags hsc_env
 
      tops <- {-# SCC "tops" #-} mapM (cpsTop hsc_env) prog
 
-     (topSRT, cmms) <- {-# SCC "doSRTs" #-} doSRTs dflags topSRT tops
+     (srtInfo, cmms) <- {-# SCC "doSRTs" #-} doSRTs dflags srtInfo tops
      dumpWith dflags Opt_D_dump_cmm_cps "Post CPS Cmm" (ppr cmms)
 
-     return (topSRT, cmms)
+     return (srtInfo, cmms)
 
 
 cpsTop :: HscEnv -> CmmDecl -> IO (CAFEnv, [CmmDecl])
@@ -70,9 +68,9 @@ cpsTop hsc_env proc =
                                           , do_layout = do_layout }} = h
 
        ----------- Eliminate common blocks -------------------------------------
-       (g, _) <- {-# SCC "elimCommonBlocks" #-}
-                 condPass2 Opt_CmmElimCommonBlocks elimCommonBlocks g mapEmpty
-                           Opt_D_dump_cmm_cbe "Post common block elimination"
+       g <- {-# SCC "elimCommonBlocks" #-}
+            condPass Opt_CmmElimCommonBlocks elimCommonBlocks g
+                          Opt_D_dump_cmm_cbe "Post common block elimination"
 
        -- Any work storing block Labels must be performed _after_
        -- elimCommonBlocks
@@ -107,34 +105,8 @@ cpsTop hsc_env proc =
             condPass Opt_CmmSink (cmmSink dflags) g
                      Opt_D_dump_cmm_sink "Sink assignments"
 
-       (g, call_pps, proc_points) <- do
-         -- Only do the second CBE if we did the sinking pass. Otherwise,
-         -- it's unlikely we'll have any new opportunities to find redundant
-         -- blocks.
-         if not (gopt Opt_CmmSink dflags)
-           then pure (g, call_pps, proc_points)
-           else do
-             (g, cbe_subst) <- {-# SCC "elimCommonBlocks2" #-}
-               condPass2
-                 Opt_CmmElimCommonBlocks elimCommonBlocks g mapEmpty
-                 Opt_D_dump_cmm_cbe "Post common block elimination 2"
-
-             -- CBE might invalidate the results of proc-point analysis (by
-             -- removing labels). So we need to fix it. Instead of re-doing
-             -- the whole analysis, we use the final substitution env from
-             -- CBE to update existing results.
-             let cbe_fix set bid =
-                   setInsert (fromMaybe bid (mapLookup bid cbe_subst)) set
-             let !new_call_pps = setFoldl cbe_fix setEmpty call_pps
-             let !new_proc_points
-                   | splitting_proc_points =
-                       setFoldl cbe_fix setEmpty proc_points
-                   | otherwise = new_call_pps
-
-             return (g, new_call_pps, new_proc_points)
-
        ------------- CAF analysis ----------------------------------------------
-       let cafEnv = {-# SCC "cafAnal" #-} cafAnal g
+       let cafEnv = {-# SCC "cafAnal" #-} cafAnal call_pps l g
        dumpWith dflags Opt_D_dump_cmm_caf "CAFEnv" (ppr cafEnv)
 
        g <- if splitting_proc_points
@@ -184,13 +156,6 @@ cpsTop hsc_env proc =
                     return g
                else return g
 
-        condPass2 flag pass g a dumpflag dumpname =
-            if gopt flag dflags
-               then do
-                    (g, a) <- return $ pass g
-                    dump dumpflag dumpname g
-                    return (g, a)
-               else return (g, a)
 
         -- we don't need to split proc points for the NCG, unless
         -- tablesNextToCode is off.  The latter is because we have no

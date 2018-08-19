@@ -95,6 +95,8 @@
  *
  * We build up a static object list while collecting generations 0..N,
  * which is then appended to the static object list of generation N+1.
+ *
+ * See also: Note [STATIC_LINK fields] in Storage.h.
  */
 
 /* N is the oldest generation being collected, where the generations
@@ -118,8 +120,6 @@ uint32_t mutlist_MUTVARS,
     mutlist_TVAR_WATCH_QUEUE,
     mutlist_TREC_CHUNK,
     mutlist_TREC_HEADER,
-    mutlist_ATOMIC_INVARIANT,
-    mutlist_INVARIANT_CHECK_QUEUE,
     mutlist_OTHERS;
 #endif
 
@@ -247,8 +247,6 @@ GarbageCollect (uint32_t collect_gen,
   mutlist_TVAR_WATCH_QUEUE = 0;
   mutlist_TREC_CHUNK = 0;
   mutlist_TREC_HEADER = 0;
-  mutlist_ATOMIC_INVARIANT = 0;
-  mutlist_INVARIANT_CHECK_QUEUE = 0;
   mutlist_OTHERS = 0;
 #endif
 
@@ -399,11 +397,6 @@ GarbageCollect (uint32_t collect_gen,
   }
 
   markScheduler(mark_root, gct);
-
-#if defined(RTS_USER_SIGNALS)
-  // mark the signal handlers (signals should be already blocked)
-  markSignalHandlers(mark_root, gct);
-#endif
 
   // Mark the weak pointer list, and prepare to detect dead weak pointers.
   markWeakPtrList();
@@ -557,13 +550,11 @@ GarbageCollect (uint32_t collect_gen,
         copied +=  mut_list_size;
 
         debugTrace(DEBUG_gc,
-                   "mut_list_size: %lu (%d vars, %d arrays, %d MVARs, %d TVARs, %d TVAR_WATCH_QUEUEs, %d TREC_CHUNKs, %d TREC_HEADERs, %d ATOMIC_INVARIANTs, %d INVARIANT_CHECK_QUEUEs, %d others)",
+                   "mut_list_size: %lu (%d vars, %d arrays, %d MVARs, %d TVARs, %d TVAR_WATCH_QUEUEs, %d TREC_CHUNKs, %d TREC_HEADERs, %d others)",
                    (unsigned long)(mut_list_size * sizeof(W_)),
                    mutlist_MUTVARS, mutlist_MUTARRS, mutlist_MVARS,
                    mutlist_TVAR, mutlist_TVAR_WATCH_QUEUE,
                    mutlist_TREC_CHUNK, mutlist_TREC_HEADER,
-                   mutlist_ATOMIC_INVARIANT,
-                   mutlist_INVARIANT_CHECK_QUEUE,
                    mutlist_OTHERS);
     }
 
@@ -1533,9 +1524,6 @@ collect_gct_blocks (void)
    take a global lock.  Here we collect those blocks from the
    cap->pinned_object_blocks lists and put them on the
    main g0->large_object list.
-
-   Returns: the number of words allocated this way, for stats
-   purposes.
    -------------------------------------------------------------------------- */
 
 static void
@@ -1831,8 +1819,8 @@ resize_nursery (void)
    Sanity code for CAF garbage collection.
 
    With DEBUG turned on, we manage a CAF list in addition to the SRT
-   mechanism.  After GC, we run down the CAF list and blackhole any
-   CAFs which have been garbage collected.  This means we get an error
+   mechanism.  After GC, we run down the CAF list and make any
+   CAFs which have been garbage collected GCD_CAF.  This means we get an error
    whenever the program tries to enter a garbage collected CAF.
 
    Any garbage collected CAFs are taken off the CAF list at the same
@@ -1858,7 +1846,10 @@ static void gcCAFs(void)
         info = get_itbl((StgClosure*)p);
         ASSERT(info->type == IND_STATIC);
 
-        if (p->static_link == NULL) {
+        // See Note [STATIC_LINK fields] in Storage.h
+        // This condition identifies CAFs that have just been GC'd and
+        // don't have static_link==3 which means they should be ignored.
+        if ((((StgWord)(p->static_link)&STATIC_BITS) | prev_static_flag) != 3) {
             debugTrace(DEBUG_gccafs, "CAF gc'd at 0x%p", p);
             SET_INFO((StgClosure*)p,&stg_GCD_CAF_info); // stub it
             if (prev == NULL) {

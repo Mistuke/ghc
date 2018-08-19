@@ -18,6 +18,7 @@ import Language.Haskell.TH.Syntax hiding (Role, InjectivityAnn)
 import qualified Language.Haskell.TH.Syntax as TH
 import Control.Monad( liftM, liftM2 )
 import Data.Word( Word8 )
+import Prelude
 
 ----------------------------------------------------------
 -- * Type synonyms
@@ -57,6 +58,7 @@ type TySynEqnQ           = Q TySynEqn
 type PatSynDirQ          = Q PatSynDir
 type PatSynArgsQ         = Q PatSynArgs
 type FamilyResultSigQ    = Q FamilyResultSig
+type DerivStrategyQ      = Q DerivStrategy
 
 -- must be defined here for DsMeta to find it
 type Role                = TH.Role
@@ -533,12 +535,13 @@ roleAnnotD name roles = return $ RoleAnnotD name roles
 standaloneDerivD :: CxtQ -> TypeQ -> DecQ
 standaloneDerivD = standaloneDerivWithStrategyD Nothing
 
-standaloneDerivWithStrategyD :: Maybe DerivStrategy -> CxtQ -> TypeQ -> DecQ
-standaloneDerivWithStrategyD ds ctxtq tyq =
+standaloneDerivWithStrategyD :: Maybe DerivStrategyQ -> CxtQ -> TypeQ -> DecQ
+standaloneDerivWithStrategyD mdsq ctxtq tyq =
   do
+    mds  <- sequenceA mdsq
     ctxt <- ctxtq
     ty   <- tyq
-    return $ StandaloneDerivD ds ctxt ty
+    return $ StandaloneDerivD mds ctxt ty
 
 defaultSigD :: Name -> TypeQ -> DecQ
 defaultSigD n tyq =
@@ -570,9 +573,22 @@ tySynEqn lhs rhs =
 cxt :: [PredQ] -> CxtQ
 cxt = sequence
 
-derivClause :: Maybe DerivStrategy -> [PredQ] -> DerivClauseQ
-derivClause ds p = do p' <- cxt p
-                      return $ DerivClause ds p'
+derivClause :: Maybe DerivStrategyQ -> [PredQ] -> DerivClauseQ
+derivClause mds p = do mds' <- sequenceA mds
+                       p'   <- cxt p
+                       return $ DerivClause mds' p'
+
+stockStrategy :: DerivStrategyQ
+stockStrategy = pure StockStrategy
+
+anyclassStrategy :: DerivStrategyQ
+anyclassStrategy = pure AnyclassStrategy
+
+newtypeStrategy :: DerivStrategyQ
+newtypeStrategy = pure NewtypeStrategy
+
+viaStrategy :: TypeQ -> DerivStrategyQ
+viaStrategy = fmap ViaStrategy
 
 normalC :: Name -> [BangTypeQ] -> ConQ
 normalC con strtys = liftM (NormalC con) $ sequence strtys

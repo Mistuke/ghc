@@ -10,7 +10,8 @@ The @TyCon@ datatype
 
 module TyCon(
         -- * Main TyCon data types
-        TyCon, AlgTyConRhs(..), visibleDataCons,
+        TyCon,
+        AlgTyConRhs(..), visibleDataCons,
         AlgTyConFlav(..), isNoParent,
         FamTyConFlav(..), Role(..), Injectivity(..),
         RuntimeRepInfo(..), TyConFlavour(..),
@@ -19,7 +20,7 @@ module TyCon(
         TyConBinder, TyConBndrVis(..),
         mkNamedTyConBinder, mkNamedTyConBinders,
         mkAnonTyConBinder, mkAnonTyConBinders,
-        tyConBinderArgFlag, isNamedTyConBinder,
+        tyConBinderArgFlag, tyConBndrVisArgFlag, isNamedTyConBinder,
         isVisibleTyConBinder, isInvisibleTyConBinder,
 
         -- ** Field labels
@@ -96,7 +97,7 @@ module TyCon(
         algTcFields,
         tyConRuntimeRepInfo,
         tyConBinders, tyConResKind, tyConTyVarBinders,
-        tcTyConScopedTyVars,
+        tcTyConScopedTyVars, tcTyConUserTyVars,
         mkTyConTagMap,
 
         -- ** Manipulating TyCons
@@ -152,9 +153,10 @@ import FastStringEnv
 import FieldLabel
 import Constants
 import Util
-import Unique( tyConRepNameUnique, dataConRepNameUnique )
+import Unique( tyConRepNameUnique, dataConTyRepNameUnique )
 import UniqSet
 import Module
+import {-# SOURCE #-} DataCon
 
 import qualified Data.Data as Data
 
@@ -390,11 +392,15 @@ See also:
 -}
 
 type TyConBinder = TyVarBndr TyVar TyConBndrVis
-                   -- See also Note [TyBinder] in TyCoRep
+                   -- See also Note [TyBinders] in TyCoRep
 
 data TyConBndrVis
   = NamedTCB ArgFlag
   | AnonTCB
+
+instance Outputable TyConBndrVis where
+  ppr (NamedTCB flag) = text "NamedTCB" <+> ppr flag
+  ppr AnonTCB         = text "AnonTCB"
 
 mkAnonTyConBinder :: TyVar -> TyConBinder
 mkAnonTyConBinder tv = TvBndr tv AnonTCB
@@ -411,8 +417,11 @@ mkNamedTyConBinders :: ArgFlag -> [TyVar] -> [TyConBinder]
 mkNamedTyConBinders vis tvs = map (mkNamedTyConBinder vis) tvs
 
 tyConBinderArgFlag :: TyConBinder -> ArgFlag
-tyConBinderArgFlag (TvBndr _ (NamedTCB vis)) = vis
-tyConBinderArgFlag (TvBndr _ AnonTCB)        = Required
+tyConBinderArgFlag (TvBndr _ vis) = tyConBndrVisArgFlag vis
+
+tyConBndrVisArgFlag :: TyConBndrVis -> ArgFlag
+tyConBndrVisArgFlag (NamedTCB vis) = vis
+tyConBndrVisArgFlag AnonTCB        = Required
 
 isNamedTyConBinder :: TyConBinder -> Bool
 -- Identifies kind variables
@@ -804,7 +813,8 @@ data TyCon
         promDcRepInfo :: RuntimeRepInfo  -- ^ See comments with 'RuntimeRepInfo'
     }
 
-  -- | These exist only during a recursive type/class type-checking knot.
+  -- | These exist only during type-checking. See Note [How TcTyCons work]
+  -- in TcTyClsDecls
   | TcTyCon {
         tyConUnique :: Unique,
         tyConName   :: Name,
@@ -819,6 +829,8 @@ data TyCon
         tcTyConScopedTyVars :: [(Name,TyVar)],
                            -- ^ Scoped tyvars over the tycon's body
                            -- See Note [How TcTyCons work] in TcTyClsDecls
+                           -- Order does *not* matter.
+        tcTyConUserTyVars :: SDoc, -- ^ Original, user-written tycon tyvars
 
         tcTyConFlavour :: TyConFlavour
                            -- ^ What sort of 'TyCon' this represents.
@@ -854,6 +866,7 @@ data AlgTyConRhs
                                    -- tuple?
     }
 
+  -- | An unboxed sum type.
   | SumTyCon {
         data_cons :: [DataCon],
         data_cons_size :: Int  -- ^ Cached value: length data_cons
@@ -1159,7 +1172,6 @@ so the coercion tycon CoT must have
         kind:    T ~ []
  and    arity:   0
 
-
 ************************************************************************
 *                                                                      *
                  TyConRepName
@@ -1181,7 +1193,10 @@ tyConRepName_maybe (AlgTyCon { algTcParent = parent })
   | UnboxedAlgTyCon rep_nm <- parent = rep_nm
 tyConRepName_maybe (FamilyTyCon { famTcFlav = DataFamilyTyCon rep_nm })
   = Just rep_nm
-tyConRepName_maybe (PromotedDataCon { tcRepName = rep_nm })
+tyConRepName_maybe (PromotedDataCon { dataCon = dc, tcRepName = rep_nm })
+  | isUnboxedSumCon dc   -- see #13276
+  = Nothing
+  | otherwise
   = Just rep_nm
 tyConRepName_maybe _ = Nothing
 
@@ -1196,7 +1211,7 @@ mkPrelTyConRepName tc_name  -- Prelude tc_name is always External,
     name_mod  = nameModule  tc_name
     name_uniq = nameUnique  tc_name
     rep_uniq | isTcOcc name_occ = tyConRepNameUnique   name_uniq
-             | otherwise        = dataConRepNameUnique name_uniq
+             | otherwise        = dataConTyRepNameUnique name_uniq
     (rep_mod, rep_occ) = tyConRepModOcc name_mod name_occ
 
 -- | The name (and defining module) for the Typeable representation (TyCon) of a
@@ -1407,7 +1422,7 @@ So we compromise, and move their Kind calculation to the call site.
 -}
 
 -- | Given the name of the function type constructor and it's kind, create the
--- corresponding 'TyCon'. It is recomended to use 'TyCoRep.funTyCon' if you want
+-- corresponding 'TyCon'. It is recommended to use 'TyCoRep.funTyCon' if you want
 -- this functionality
 mkFunTyCon :: Name -> [TyConBinder] -> Name -> TyCon
 mkFunTyCon name binders rep_nm
@@ -1517,20 +1532,22 @@ mkSumTyCon name binders res_kind arity tyvars cons parent
         algTcParent      = parent
     }
 
--- | Makes a tycon suitable for use during type-checking.
--- The only real need for this is for printing error messages during
--- a recursive type/class type-checking knot. It has a kind because
--- TcErrors sometimes calls typeKind.
+-- | Makes a tycon suitable for use during type-checking. It stores
+-- a variety of details about the definition of the TyCon, but no
+-- right-hand side. It lives only during the type-checking of a
+-- mutually-recursive group of tycons; it is then zonked to a proper
+-- TyCon in zonkTcTyCon.
 -- See also Note [Kind checking recursive type and class declarations]
 -- in TcTyClsDecls.
 mkTcTyCon :: Name
+          -> SDoc                -- ^ user-written tycon tyvars
           -> [TyConBinder]
           -> Kind                -- ^ /result/ kind only
-          -> [(Name,TyVar)]      -- ^ Scoped type variables;
+          -> [(Name,TcTyVar)]    -- ^ Scoped type variables;
                                  -- see Note [How TcTyCons work] in TcTyClsDecls
           -> TyConFlavour        -- ^ What sort of 'TyCon' this represents
           -> TyCon
-mkTcTyCon name binders res_kind scoped_tvs flav
+mkTcTyCon name tyvars binders res_kind scoped_tvs flav
   = TcTyCon { tyConUnique  = getUnique name
             , tyConName    = name
             , tyConTyVars  = binderVars binders
@@ -1539,7 +1556,8 @@ mkTcTyCon name binders res_kind scoped_tvs flav
             , tyConKind    = mkTyConKind binders res_kind
             , tyConArity   = length binders
             , tcTyConScopedTyVars = scoped_tvs
-            , tcTyConFlavour      = flav }
+            , tcTyConFlavour      = flav
+            , tcTyConUserTyVars   = tyvars }
 
 -- | Create an unlifted primitive 'TyCon', such as @Int#@.
 mkPrimTyCon :: Name -> [TyConBinder]
@@ -1656,7 +1674,7 @@ isAbstractTyCon _ = False
 -- Used when recovering from errors
 makeRecoveryTyCon :: TyCon -> TyCon
 makeRecoveryTyCon tc
-  = mkTcTyCon (tyConName tc)
+  = mkTcTyCon (tyConName tc) empty
               (tyConBinders tc) (tyConResKind tc)
               [{- no scoped vars -}]
               (tyConFlavour tc)
@@ -2017,18 +2035,14 @@ isKindTyCon tc = getUnique tc `elementOfUniqSet` kindTyConKeys
 -- -XDataKinds.
 kindTyConKeys :: UniqSet Unique
 kindTyConKeys = unionManyUniqSets
-  ( mkUniqSet [ liftedTypeKindTyConKey, starKindTyConKey, unicodeStarKindTyConKey
-              , constraintKindTyConKey, tYPETyConKey ]
+  ( mkUniqSet [ liftedTypeKindTyConKey, constraintKindTyConKey, tYPETyConKey ]
   : map (mkUniqSet . tycon_with_datacons) [ runtimeRepTyCon
                                           , vecCountTyCon, vecElemTyCon ] )
   where
     tycon_with_datacons tc = getUnique tc : map getUnique (tyConDataCons tc)
 
 isLiftedTypeKindTyConName :: Name -> Bool
-isLiftedTypeKindTyConName
-  = (`hasKey` liftedTypeKindTyConKey) <||>
-    (`hasKey` starKindTyConKey) <||>
-    (`hasKey` unicodeStarKindTyConKey)
+isLiftedTypeKindTyConName = (`hasKey` liftedTypeKindTyConKey)
 
 -- | Identifies implicit tycons that, in particular, do not go into interface
 -- files (because they are implicitly reconstructed when the interface is
@@ -2372,7 +2386,11 @@ instance Uniquable TyCon where
 instance Outputable TyCon where
   -- At the moment a promoted TyCon has the same Name as its
   -- corresponding TyCon, so we add the quote to distinguish it here
-  ppr tc = pprPromotionQuote tc <> ppr (tyConName tc)
+  ppr tc = pprPromotionQuote tc <> ppr (tyConName tc) <> pp_tc
+    where
+      pp_tc = getPprStyle $ \sty -> if ((debugStyle sty || dumpStyle sty) && isTcTyCon tc)
+                                    then text "[tc]"
+                                    else empty
 
 -- | Paints a picture of what a 'TyCon' represents, in broad strokes.
 -- This is used towards more informative error messages.
@@ -2383,8 +2401,8 @@ data TyConFlavour
   | DataTypeFlavour
   | NewtypeFlavour
   | AbstractTypeFlavour
-  | DataFamilyFlavour
-  | OpenTypeFamilyFlavour
+  | DataFamilyFlavour Bool     -- True <=> associated
+  | OpenTypeFamilyFlavour Bool -- True <=> associated
   | ClosedTypeFamilyFlavour
   | TypeSynonymFlavour
   | BuiltInTypeFlavour -- ^ e.g., the @(->)@ 'TyCon'.
@@ -2401,8 +2419,10 @@ instance Outputable TyConFlavour where
       go DataTypeFlavour         = "data type"
       go NewtypeFlavour          = "newtype"
       go AbstractTypeFlavour     = "abstract type"
-      go DataFamilyFlavour       = "data family"
-      go OpenTypeFamilyFlavour   = "type family"
+      go (DataFamilyFlavour True)      = "associated data family"
+      go (DataFamilyFlavour False)     = "data family"
+      go (OpenTypeFamilyFlavour True)  = "associated type family"
+      go (OpenTypeFamilyFlavour False) = "type family"
       go ClosedTypeFamilyFlavour = "type family"
       go TypeSynonymFlavour      = "type synonym"
       go BuiltInTypeFlavour      = "built-in type"
@@ -2418,10 +2438,10 @@ tyConFlavour (AlgTyCon { algTcParent = parent, algTcRhs = rhs })
                   DataTyCon {}       -> DataTypeFlavour
                   NewTyCon {}        -> NewtypeFlavour
                   AbstractTyCon {}   -> AbstractTypeFlavour
-tyConFlavour (FamilyTyCon { famTcFlav = flav })
+tyConFlavour (FamilyTyCon { famTcFlav = flav, famTcParent = parent })
   = case flav of
-      DataFamilyTyCon{}            -> DataFamilyFlavour
-      OpenSynFamilyTyCon           -> OpenTypeFamilyFlavour
+      DataFamilyTyCon{}            -> DataFamilyFlavour (isJust parent)
+      OpenSynFamilyTyCon           -> OpenTypeFamilyFlavour (isJust parent)
       ClosedSynFamilyTyCon{}       -> ClosedTypeFamilyFlavour
       AbstractClosedSynFamilyTyCon -> ClosedTypeFamilyFlavour
       BuiltInSynFamTyCon{}         -> ClosedTypeFamilyFlavour
@@ -2436,20 +2456,20 @@ tcFlavourCanBeUnsaturated :: TyConFlavour -> Bool
 tcFlavourCanBeUnsaturated ClassFlavour            = True
 tcFlavourCanBeUnsaturated DataTypeFlavour         = True
 tcFlavourCanBeUnsaturated NewtypeFlavour          = True
-tcFlavourCanBeUnsaturated DataFamilyFlavour       = True
+tcFlavourCanBeUnsaturated DataFamilyFlavour{}     = True
 tcFlavourCanBeUnsaturated TupleFlavour{}          = True
 tcFlavourCanBeUnsaturated SumFlavour              = True
 tcFlavourCanBeUnsaturated AbstractTypeFlavour     = True
 tcFlavourCanBeUnsaturated BuiltInTypeFlavour      = True
 tcFlavourCanBeUnsaturated PromotedDataConFlavour  = True
 tcFlavourCanBeUnsaturated TypeSynonymFlavour      = False
-tcFlavourCanBeUnsaturated OpenTypeFamilyFlavour   = False
+tcFlavourCanBeUnsaturated OpenTypeFamilyFlavour{} = False
 tcFlavourCanBeUnsaturated ClosedTypeFamilyFlavour = False
 
 -- | Is this flavour of 'TyCon' an open type family or a data family?
 tcFlavourIsOpen :: TyConFlavour -> Bool
-tcFlavourIsOpen DataFamilyFlavour       = True
-tcFlavourIsOpen OpenTypeFamilyFlavour   = True
+tcFlavourIsOpen DataFamilyFlavour{}     = True
+tcFlavourIsOpen OpenTypeFamilyFlavour{} = True
 tcFlavourIsOpen ClosedTypeFamilyFlavour = False
 tcFlavourIsOpen ClassFlavour            = False
 tcFlavourIsOpen DataTypeFlavour         = False
@@ -2539,7 +2559,7 @@ data RecTcChecker = RC !Int (NameEnv Int)
   -- we have encountered each TyCon
 
 initRecTc :: RecTcChecker
--- Intialise with a fixed max bound of 100
+-- Initialise with a fixed max bound of 100
 -- We should probably have a flag for this
 initRecTc = RC 100 emptyNameEnv
 

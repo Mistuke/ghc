@@ -66,9 +66,12 @@ GhcHcOpts=-Rghc-timing
 # override options from $(GhcHcOpts).
 #
 # See Note [Stage number in build variables].
+#
+# -haddock is needed so the GHCi :doc command can find docs
+#   in the .hi-files for the ghc library
 GhcStage1HcOpts=
-GhcStage2HcOpts=-O2
-GhcStage3HcOpts=-O2
+GhcStage2HcOpts=-O2 -haddock
+GhcStage3HcOpts=-O2 -haddock
 
 
 # Note [Stage number in build variables].
@@ -311,8 +314,11 @@ GhcThreaded = $(if $(findstring thr,$(GhcRTSWays)),YES,NO)
 #
 # 	-O(2) is pretty desirable, otherwise no inlining of prelude
 #		things (incl "+") happens when compiling with this compiler
+#
+#       -haddock is needed so the GHCi :doc command can find the boot
+#               library docs in the respective .hi-files
 
-GhcLibHcOpts=-O2
+GhcLibHcOpts=-O2 -haddock
 
 # Strip local symbols from libraries?  This can make the libraries smaller,
 # but makes debugging somewhat more difficult.  Doesn't work with all ld's.
@@ -795,13 +801,13 @@ TAR_COMP      ?= xz
 
 # select compression command and .tar extension based on TAR_COMP value
 ifeq "$(TAR_COMP)" "bzip2"
-TAR_COMP_CMD  = $(BZIP2_CMD)
+TAR_COMP_CMD  = $(BZIP2_CMD) $(TAR_COMP_OPTS)
 TAR_COMP_EXT  = bz2
 else ifeq "$(TAR_COMP)" "gzip"
-TAR_COMP_CMD  = $(GZIP_CMD)
+TAR_COMP_CMD  = $(GZIP_CMD) $(TAR_COMP_OPTS)
 TAR_COMP_EXT  = gz
 else ifeq "$(TAR_COMP)" "xz"
-TAR_COMP_CMD  = $(XZ_CMD)
+TAR_COMP_CMD  = $(XZ_CMD) $(TAR_COMP_OPTS)
 TAR_COMP_EXT  = xz
 else
 $(error $$(TAR_COMP) set to unknown value "$(TAR_COMP)" (supported: "bzip2", "gzip", "xz"))
@@ -872,8 +878,6 @@ else
 HSCOLOUR_SRCS = YES
 endif
 
-# Build and install DPH?
-BUILD_DPH = NO
 # Build and install the "extra" packages (see ./packages)?
 BUILD_EXTRA_PKGS = NO
 

@@ -716,7 +716,7 @@ static void report_summary(const RTSSummaryStats* sum)
                 peakWorkerCount, workerCount,
                 n_capabilities);
 
-    statsPrintf("  SPARKS: %" FMT_Word
+    statsPrintf("  SPARKS: %" FMT_Word64
                 "(%" FMT_Word " converted, %" FMT_Word " overflowed, %"
                 FMT_Word " dud, %" FMT_Word " GC'd, %" FMT_Word " fizzled)\n\n",
                 sum->sparks_count,
@@ -1465,7 +1465,7 @@ statDescribeGens(void)
   }
   debugBelch("----------------------------------------------------------------------\n");
   debugBelch("%51s%9" FMT_Word " %9" FMT_Word "\n",
-             "",tot_live*sizeof(W_),tot_slop*sizeof(W_));
+             "",tot_live*(W_)sizeof(W_),tot_slop*(W_)sizeof(W_));
   debugBelch("----------------------------------------------------------------------\n");
   debugBelch("\n");
 }

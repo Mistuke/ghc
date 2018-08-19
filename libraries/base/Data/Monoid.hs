@@ -1,9 +1,9 @@
-{-# LANGUAGE Trustworthy #-}
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE PolyKinds #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE NoImplicitPrelude          #-}
+{-# LANGUAGE PolyKinds                  #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE Trustworthy                #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -16,8 +16,43 @@
 -- Stability   :  experimental
 -- Portability :  portable
 --
--- A class for monoids (types with an associative binary operation that
--- has an identity) with various general-purpose instances.
+-- A type @a@ is a 'Monoid' if it provides an associative function ('<>')
+-- that lets you combine any two values of type @a@ into one, and a neutral
+-- element (`mempty`) such that
+--
+-- > a <> mempty == mempty <> a == a
+--
+-- A 'Monoid' is a 'Semigroup' with the added requirement of a neutral element.
+-- Thus any 'Monoid' is a 'Semigroup', but not the other way around.
+--
+-- ==== __Examples__
+--
+-- The 'Sum' monoid is defined by the numerical addition operator and `0` as neutral element:
+--
+-- >>> mempty :: Sum Int
+-- Sum 0
+-- >>> Sum 1 <> Sum 2 <> Sum 3 <> Sum 4 :: Sum Int
+-- Sum {getSum = 10}
+--
+-- We can combine multiple values in a list into a single value using the `mconcat` function.
+-- Note that we have to specify the type here since 'Int' is a monoid under several different
+-- operations:
+--
+-- >>> mconcat [1,2,3,4] :: Sum Int
+-- Sum {getSum = 10}
+-- >>> mconcat [] :: Sum Int
+-- Sum {getSum = 0}
+--
+-- Another valid monoid instance of 'Int' is 'Product' It is defined by multiplication
+-- and `1` as neutral element:
+--
+-- >>> Product 1 <> Product 2 <> Product 3 <> Product 4 :: Product Int
+-- Product {getProduct = 24}
+-- >>> mconcat [1,2,3,4] :: Product Int
+-- Product {getProduct = 24}
+-- >>> mconcat [] :: Product Int
+-- Product {getProduct = 1}
+--
 --
 -----------------------------------------------------------------------------
 
@@ -38,14 +73,20 @@ module Data.Monoid (
         First(..),
         Last(..),
         -- * 'Alternative' wrapper
-        Alt (..)
+        Alt(..),
+        -- * 'Applicative' wrapper
+        Ap(..)
   ) where
 
 -- Push down the module in the dependency hierarchy.
 import GHC.Base hiding (Any)
+import GHC.Enum
+import GHC.Generics
+import GHC.Num
 import GHC.Read
 import GHC.Show
-import GHC.Generics
+
+import Control.Monad.Fail (MonadFail)
 
 import Data.Semigroup.Internal
 
@@ -88,6 +129,16 @@ import Data.Semigroup.Internal
 --
 -- >>> getFirst (First (Just "hello") <> First Nothing <> First (Just "world"))
 -- Just "hello"
+--
+-- Use of this type is discouraged. Note the following equivalence:
+--
+-- > Data.Monoid.First x === Maybe (Data.Semigroup.First x)
+--
+-- In addition to being equivalent in the structural sense, the two
+-- also have 'Monoid' instances that behave the same. This type will
+-- be marked deprecated in GHC 8.8, and removed in GHC 8.10.
+-- Users are advised to use the variant from "Data.Semigroup" and wrap
+-- it in 'Maybe'.
 newtype First a = First { getFirst :: Maybe a }
         deriving ( Eq          -- ^ @since 2.01
                  , Ord         -- ^ @since 2.01
@@ -117,6 +168,16 @@ instance Monoid (First a) where
 --
 -- >>> getLast (Last (Just "hello") <> Last Nothing <> Last (Just "world"))
 -- Just "world"
+--
+-- Use of this type is discouraged. Note the following equivalence:
+--
+-- > Data.Monoid.Last x === Maybe (Data.Semigroup.Last x)
+--
+-- In addition to being equivalent in the structural sense, the two
+-- also have 'Monoid' instances that behave the same. This type will
+-- be marked deprecated in GHC 8.8, and removed in GHC 8.10.
+-- Users are advised to use the variant from "Data.Semigroup" and wrap
+-- it in 'Maybe'.
 newtype Last a = Last { getLast :: Maybe a }
         deriving ( Eq          -- ^ @since 2.01
                  , Ord         -- ^ @since 2.01
@@ -139,7 +200,47 @@ instance Semigroup (Last a) where
 instance Monoid (Last a) where
         mempty = Last Nothing
 
+-- | This data type witnesses the lifting of a 'Monoid' into an
+-- 'Applicative' pointwise.
+--
+-- @since 4.12.0.0
+newtype Ap f a = Ap { getAp :: f a }
+        deriving ( Alternative -- ^ @since 4.12.0.0
+                 , Applicative -- ^ @since 4.12.0.0
+                 , Enum        -- ^ @since 4.12.0.0
+                 , Eq          -- ^ @since 4.12.0.0
+                 , Functor     -- ^ @since 4.12.0.0
+                 , Generic     -- ^ @since 4.12.0.0
+                 , Generic1    -- ^ @since 4.12.0.0
+                 , Monad       -- ^ @since 4.12.0.0
+                 , MonadFail   -- ^ @since 4.12.0.0
+                 , MonadPlus   -- ^ @since 4.12.0.0
+                 , Ord         -- ^ @since 4.12.0.0
+                 , Read        -- ^ @since 4.12.0.0
+                 , Show        -- ^ @since 4.12.0.0
+                 )
 
+-- | @since 4.12.0.0
+instance (Applicative f, Semigroup a) => Semigroup (Ap f a) where
+        (Ap x) <> (Ap y) = Ap $ liftA2 (<>) x y
+
+-- | @since 4.12.0.0
+instance (Applicative f, Monoid a) => Monoid (Ap f a) where
+        mempty = Ap $ pure mempty
+
+-- | @since 4.12.0.0
+instance (Applicative f, Bounded a) => Bounded (Ap f a) where
+  minBound = pure minBound
+  maxBound = pure maxBound
+
+-- | @since 4.12.0.0
+instance (Applicative f, Num a) => Num (Ap f a) where
+  (+)         = liftA2 (+)
+  (*)         = liftA2 (*)
+  negate      = fmap negate
+  fromInteger = pure . fromInteger
+  abs         = fmap abs
+  signum      = fmap signum
 
 {-
 {--------------------------------------------------------------------

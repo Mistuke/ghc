@@ -217,7 +217,7 @@ AC_DEFUN([FPTOOLS_SET_HASKELL_PLATFORM_VARS],
         mipsel)
             test -z "[$]2" || eval "[$]2=ArchMipsel"
             ;;
-        hppa|hppa1_1|ia64|m68k|nios2|rs6000|s390|s390x|sh4|vax)
+        hppa|hppa1_1|ia64|m68k|nios2|riscv32|riscv64|rs6000|s390|s390x|sh4|vax)
             test -z "[$]2" || eval "[$]2=ArchUnknown"
             ;;
         *)
@@ -470,15 +470,15 @@ AC_DEFUN([FP_SETTINGS],
     if test "$windows" = YES -a "$EnableDistroToolchain" = "NO"
     then
         mingw_bin_prefix=mingw/bin/
-        SettingsCCompilerCommand="\$topdir/../${mingw_bin_prefix}gcc.exe"
-        SettingsHaskellCPPCommand="\$topdir/../${mingw_bin_prefix}gcc.exe"
+	SettingsCCompilerCommand="\$tooldir/${mingw_bin_prefix}gcc.exe"
+	SettingsHaskellCPPCommand="\$tooldir/${mingw_bin_prefix}gcc.exe"
         SettingsHaskellCPPFlags="$HaskellCPPArgs"
-        SettingsLdCommand="\$topdir/../${mingw_bin_prefix}ld.exe"
-        SettingsArCommand="\$topdir/../${mingw_bin_prefix}ar.exe"
-        SettingsRanlibCommand="\$topdir/../${mingw_bin_prefix}ranlib.exe"
-        SettingsPerlCommand='$topdir/../perl/perl.exe'
-        SettingsDllWrapCommand="\$topdir/../${mingw_bin_prefix}dllwrap.exe"
-        SettingsWindresCommand="\$topdir/../${mingw_bin_prefix}windres.exe"
+	SettingsLdCommand="\$tooldir/${mingw_bin_prefix}ld.exe"
+	SettingsArCommand="\$tooldir/${mingw_bin_prefix}ar.exe"
+	SettingsRanlibCommand="\$tooldir/${mingw_bin_prefix}ranlib.exe"
+	SettingsPerlCommand='$tooldir/perl/perl.exe'
+	SettingsDllWrapCommand="\$tooldir/${mingw_bin_prefix}dllwrap.exe"
+	SettingsWindresCommand="\$tooldir/${mingw_bin_prefix}windres.exe"
         SettingsTouchCommand='$topdir/bin/touchy.exe'
     elif test "$EnableDistroToolchain" = "YES"
     then
@@ -651,6 +651,14 @@ AC_DEFUN([FPTOOLS_SET_C_LD_FLAGS],
         $3="$$3 -D_HPUX_SOURCE"
         $5="$$5 -D_HPUX_SOURCE"
         ;;
+
+    arm*freebsd*)
+        # On arm/freebsd, tell gcc to generate Arm
+        # instructions (ie not Thumb).
+        $2="$$2 -marm"
+        $3="$$3 -Wl,-z,noexecstack"
+        $4="$$4 -z noexecstack"
+        ;;
     arm*linux*)
         # On arm/linux and arm/android, tell gcc to generate Arm
         # instructions (ie not Thumb).
@@ -659,6 +667,10 @@ AC_DEFUN([FPTOOLS_SET_C_LD_FLAGS],
         $4="$$4 -z noexecstack"
         ;;
 
+    aarch64*freebsd*)
+        $3="$$3 -Wl,-z,noexecstack"
+        $4="$$4 -z noexecstack"
+        ;;
     aarch64*linux*)
         $3="$$3 -Wl,-z,noexecstack"
         $4="$$4 -z noexecstack"
@@ -1294,7 +1306,7 @@ AC_DEFUN([FP_GCC_SUPPORTS_NO_PIE],
    AC_MSG_CHECKING([whether GCC supports -no-pie])
    echo 'int main() { return 0; }' > conftest.c
    # Some GCC versions only warn when passed an unrecognized flag.
-   if $CC -no-pie -x c /dev/null -dM -E > conftest.txt 2>&1 && ! grep -i unrecognized conftest.txt > /dev/null 2>&1; then
+   if $CC -no-pie -Werror -x c /dev/null -dM -E > conftest.txt 2>&1 && ! grep -i unrecognized conftest.txt > /dev/null 2>&1; then
        CONF_GCC_SUPPORTS_NO_PIE=YES
        AC_MSG_RESULT([yes])
    else
@@ -1534,7 +1546,7 @@ if test "$RELEASE" = "NO"; then
 fi
 
     AC_MSG_CHECKING([for GHC Git commit id])
-    if test -d .git; then
+    if test -e .git; then
         git_commit_id=`git rev-parse HEAD`
         if test -n "$git_commit_id" 2>&1 >/dev/null; then true; else
             AC_MSG_ERROR([failed to detect revision: check that git is in your path])
@@ -1866,6 +1878,12 @@ case "$1" in
   powerpc*)
     $2="powerpc"
     ;;
+  riscv64*)
+    $2="riscv64"
+    ;;
+  riscv|riscv32*)
+    $2="riscv32"
+    ;;
   rs6000)
     $2="rs6000"
     ;;
@@ -1902,6 +1920,10 @@ case "$1" in
 # converts the canonicalized target into someting llvm can understand
 AC_DEFUN([GHC_LLVM_TARGET], [
   case "$2-$3" in
+    *-freebsd*-gnueabihf)
+      llvm_target_vendor="unknown"
+      llvm_target_os="freebsd-gnueabihf"
+      ;;
     hardfloat-*eabi)
       llvm_target_vendor="unknown"
       llvm_target_os="$3""hf"

@@ -74,7 +74,7 @@ module Id (
         DictId, isDictId, isEvVar,
 
         -- ** Join variables
-        JoinId, isJoinId, isJoinId_maybe, idJoinArity, isExitJoinId,
+        JoinId, isJoinId, isJoinId_maybe, idJoinArity,
         asJoinId, asJoinId_maybe, zapJoinId,
 
         -- ** Inline pragma stuff
@@ -219,9 +219,9 @@ lazySetIdInfo = Var.lazySetIdInfo
 
 setIdInfo :: Id -> IdInfo -> Id
 setIdInfo id info = info `seq` (lazySetIdInfo id info)
-        -- Try to avoid spack leaks by seq'ing
+        -- Try to avoid space leaks by seq'ing
 
-modifyIdInfo :: (IdInfo -> IdInfo) -> Id -> Id
+modifyIdInfo :: HasDebugCallStack => (IdInfo -> IdInfo) -> Id -> Id
 modifyIdInfo fn id = setIdInfo id (fn (idInfo id))
 
 -- maybeModifyIdInfo tries to avoid unnecessary thrashing
@@ -497,10 +497,6 @@ isJoinId_maybe id
                 JoinId arity -> Just arity
                 _            -> Nothing
  | otherwise = Nothing
-
--- see Note [Exitification] and see Note [Do not inline exit join points]
-isExitJoinId :: Var -> Bool
-isExitJoinId id = isJoinId id && isOneOcc (idOccInfo id) && occ_in_lam (idOccInfo id)
 
 idDataCon :: Id -> DataCon
 -- ^ Get from either the worker or the wrapper 'Id' to the 'DataCon'. Currently used only in the desugarer.
