@@ -503,7 +503,7 @@ registerTimeout mgr@Manager{..} relTime cb = do
     else do
       now <- getTime mgrClock
       let !expTime = secondsToNanoSeconds $ now + relTime
-      editTimeouts mgr (Q.insert key expTime cb)
+      editTimeouts mgr (Q.unsafeInsertNew key expTime cb)
     return $ TK key
 
 -- | Update an active timeout to fire in the given number of seconds (from the
