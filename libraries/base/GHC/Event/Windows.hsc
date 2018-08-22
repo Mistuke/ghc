@@ -492,7 +492,7 @@ ioFailed = return . IOFailed . Just . fromIntegral
 -- Timeouts
 
 -- | Register an action to be performed in the given number of seconds.  The
--- returned 'TimeoutKey' can be used to later unregister or update the timeout.
+-- returned 'TimeoutKey' can be used to later un-register or update the timeout.
 -- The timeout is automatically unregistered when it fires.
 --
 -- The 'TimeoutCallback' will not be called more than once.
