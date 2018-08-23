@@ -374,7 +374,7 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
                       IT.insertWith (flip const) (lpoverlappedToInt lpol)
                                     (CompletionData fptr completionCB') tbl
               reqs <- addRequest
-              debugIO $ "+1.. " ++ show reqs ++ " requests queued. | " ++ show (lpoverlappedToInt lpol)
+              debugIO $ "+1.. " ++ show reqs ++ " requests queued. | " ++ show lpol
               wakeupIOManager
             CbError err -> signalThrow (Just err)
             CbDone      -> debugIO "request handled immediately, not queued."
@@ -385,7 +385,7 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
                           IT.delete (lpoverlappedToInt lpol) tbl
                         reqs <- removeRequest
                         debugIO $ "-1.. " ++ show reqs ++ " requests queued after error."
-        let runner = do debugIO $ (dbg ":: waiting ") ++ " | "  ++ show (lpoverlappedToInt lpol)
+        let runner = do debugIO $ (dbg ":: waiting ") ++ " | "  ++ show lpol
                         res <- takeMVar signal `onException` cancel
                         debugIO $ dbg ":: signaled "
                         case res of
@@ -597,7 +597,7 @@ step maxDelay mgr@Manager{..} = do
     -- the index if required.
     when (n > 0) $ do
       A.forM_ mgrOverlappedEntries $ \oe -> do
-          debugIO $ " $ checking " ++ show (lpoverlappedToInt (lpOverlapped oe))
+          debugIO $ " $ checking " ++ show (lpOverlapped oe)
           mCD <- withMVar (callbackTableVar mgr (lpOverlapped oe)) $ \tbl ->
                    IT.delete (lpoverlappedToInt (lpOverlapped oe)) tbl
           case mCD of
