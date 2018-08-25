@@ -333,6 +333,7 @@ Library
         Data.Typeable.Internal
         Foreign.ForeignPtr.Imp
         GHC.StaticPtr.Internal
+        GHC.Event.Internal.Types
         System.Environment.ExecutablePath
         System.CPUTime.Utils
 
