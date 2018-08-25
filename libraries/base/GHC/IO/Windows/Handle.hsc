@@ -86,7 +86,7 @@ import Foreign.Storable (Storable (..))
 import qualified GHC.Event.Windows as Mgr
 
 import GHC.Windows (LPVOID, LPDWORD, DWORD, HANDLE, BOOL, LPCTSTR, ULONG, WORD,
-                    failIf, iNVALID_HANDLE_VALUE, failIf_, failWith,
+                    UCHAR, failIf, iNVALID_HANDLE_VALUE, failIf_, failWith,
                     failIfFalse_, getLastError)
 import qualified GHC.Windows as Win32
 import Text.Show
@@ -333,6 +333,9 @@ foreign import WINDOWS_CCONV safe "windows.h CreateFileW"
     c_CreateFile :: LPCTSTR -> DWORD -> DWORD -> LPSECURITY_ATTRIBUTES
                  -> DWORD -> DWORD -> HANDLE
                  -> IO HANDLE
+
+foreign import WINDOWS_CCONV safe "windows.h SetFileCompletionNotificationModes"
+    c_SetFileCompletionNotificationModes :: HANDLE -> UCHAR -> IO BOOL
 
 foreign import WINDOWS_CCONV safe "windows.h ReadFile"
     c_ReadFile :: HANDLE -> LPVOID -> DWORD -> LPDWORD -> LPOVERLAPPED
@@ -772,6 +775,7 @@ openFile filepath iomode non_blocking =
       case _type of
         -- Regular files need to be locked.
         RegularFile -> do
+          optimizeFileAccess h -- Set a few optimization flags on file handles.
           (unique_dev, unique_ino) <- getUniqueFileInfo hwnd
           r <- lockFile (fromIntegral $ ptrToWordPtr h) unique_dev unique_ino
                         (fromBool write_lock)
@@ -830,13 +834,19 @@ openFile filepath iomode non_blocking =
 
           createFile devicepath =
             withCWString devicepath $ \fp ->
-                failIf (== iNVALID_HANDLE_VALUE) "CreateFile failed" $
+                failIf (== iNVALID_HANDLE_VALUE) "CreateFile" $
                       c_CreateFile fp file_access_mode
                                       file_share_mode
                                       nullPtr
                                       file_open_mode
                                       file_create_flags
                                       nullPtr
+
+          optimizeFileAccess handle =
+              failIfFalse_ "SetFileCompletionNotificationModes"  $
+                c_SetFileCompletionNotificationModes handle
+                    (    #{const FILE_SKIP_COMPLETION_PORT_ON_SUCCESS}
+                     .|. #{const FILE_SKIP_SET_EVENT_ON_HANDLE})
 
 release :: RawHandle a => a -> IO ()
 release h = if isLockable h
