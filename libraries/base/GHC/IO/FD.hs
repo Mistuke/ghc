@@ -38,6 +38,7 @@ import GHC.Show
 import GHC.Enum
 
 import GHC.IO
+import GHC.IO.Types
 import GHC.IO.IOMode
 import GHC.IO.Buffer
 import GHC.IO.BufferedIO
@@ -317,17 +318,17 @@ close fd =
            throwErrnoIfMinus1Retry_ "GHC.IO.FD.close" $
 #if defined(mingw32_HOST_OS)
            if fdIsSocket fd then
-             c_closesocket (fromIntegral realFd)
+             c_closesocket (fromIntegral $ toFd realFd)
            else
 #endif
-             c_close (fromIntegral realFd)
+             c_close (fromIntegral $ toFd realFd)
 
      -- release the lock *first*, because otherwise if we're preempted
      -- after closing but before releasing, the FD may have been reused.
      -- (#7646)
      release fd
 
-     closeFdWith closer (fromIntegral (fdFD fd))
+     closeWith closer (fromIntegral (fdFD fd) :: Fd)
 
 release :: FD -> IO ()
 release fd = do _ <- unlockFile (fromIntegral $ fdFD fd)
