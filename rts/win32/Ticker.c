@@ -180,7 +180,8 @@ initTicker (Time interval, TickProc handle_tick)
         IF_DEBUG(scheduler, debugBelch ("* Kernel supports high accuracy timers. Enabling..\n"));
         return;
       }
-    }
+    };
+    use_kernel_timer = false; // disable for now.
   }
 
   if (!use_kernel_timer) {
@@ -198,8 +199,7 @@ startTicker(void)
   char* errmsg;
   //debugBelch ("* Starting ticker..\n");
   if (use_kernel_timer) {
-    //debugBelch ("* Starting timer for: %lluns\n", TimeToNS (tick_interval));
-    use_kernel_timer = true;
+    //debugBelch ("* Starting timer for: %lluns\n", TimeToNS (tick_interval))
     NTSTATUS result = NtCreateTimer (&timer, TIMER_ALL_ACCESS, NULL, SynchronizationEvent);
     if (result != STATUS_SUCCESS) { errmsg = "NtCreateTimer"; goto fail; }
 
