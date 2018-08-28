@@ -63,6 +63,7 @@ module GHC.Event.Windows (
 
 import GHC.Event.Windows.Clock   (Clock, Seconds, getClock, getTime)
 import GHC.Event.Windows.FFI     (OVERLAPPED, LPOVERLAPPED, OVERLAPPED_ENTRY(..))
+import GHC.Event.Internal.Types
 import qualified GHC.Event.Windows.FFI    as FFI
 import qualified GHC.Event.PSQ            as Q
 import qualified GHC.Event.IntTable       as IT
@@ -100,7 +101,7 @@ import GHC.RTS.Flags
 import qualified GHC.Windows as Win32
 
 c_DEBUG_DUMP :: IO Bool
-c_DEBUG_DUMP = scheduler `fmap` getDebugFlags
+c_DEBUG_DUMP = return True -- scheduler `fmap` getDebugFlags
 
 
 -- ---------------------------------------------------------------------------
@@ -121,12 +122,15 @@ foreign import ccall unsafe "getOrSetGHCConcWindowsIOManagerThreadStore"
 type IOCallback = CompletionCallback ()
 
 data CompletionData = CompletionData {-# UNPACK #-} !(ForeignPtr OVERLAPPED)
-                                     !IOCallback
+                                     !HANDLE !IOCallback
+
+-- I don't expect a lot of events, so a simple linked lists should be enough.
+type EventElements = [(Event, IOCallback)]
+data EventData = EventData !Event !EventElements
 
 data IOResult a
   = IOSuccess { ioValue :: a }
   | IOFailed  { ioErrCode :: Maybe Int }
-
 
 data Manager = Manager
     { mgrIOCP         :: {-# UNPACK #-} !FFI.IOCP
@@ -134,7 +138,9 @@ data Manager = Manager
     , mgrUniqueSource :: {-# UNPACK #-} !UniqueSource
     , mgrTimeouts     :: {-# UNPACK #-} !(IORef TimeoutQueue)
     , mgrCallbacks    :: {-# UNPACK #-}
-                         !(Array Int (MVar (IT.IntTable CompletionData)))
+                         !(MVar (IT.IntTable CompletionData))
+    , mgrEvntHandlers :: {-# UNPACK #-}
+                         !(Array Int (MVar EventData)) -- TODO: Make Handle
     , mgrOverlappedEntries
                       :: {-#UNPACK #-} !(A.Array OVERLAPPED_ENTRY)
     }
@@ -143,12 +149,17 @@ new :: IO Manager
 new = do
     debugIO "Starting io-manager..."
     mgrIOCP         <- FFI.newIOCP
+    debugIO $ "iocp: " ++ show mgrIOCP
     mgrClock        <- getClock
     mgrUniqueSource <- newSource
     mgrTimeouts     <- newIORef Q.empty
-    mgrCallbacks    <- fmap (listArray (0, callbackArraySize-1)) $
-           replicateM callbackArraySize (newMVar =<< IT.new 8)
+    mgrCallbacks    <- newMVar =<< IT.new callbackArraySize
     mgrOverlappedEntries <- A.new 64
+    -- TODO: find out how common these events are, if they're not very common
+    -- then no point in pre-allocating this buffer.  Based on the fact we didn't
+    -- miss them till now.. I guess they're not overly critical.
+    mgrEvntHandlers <- fmap (listArray (0, callbackArraySize-1)) $
+           replicateM callbackArraySize newEmptyMVar
     let !mgr = Manager{..}
     event <- c_getIOManagerEvent
     startIOManagerThread (io_mngr_loop event mgr)
@@ -222,13 +233,13 @@ outstandingRequests :: IO Word64
 outstandingRequests = withMVar requests return
 
 getSystemManager :: IO (Maybe Manager)
-getSystemManager = readIORef managerRef
+getSystemManager = readMVar managerRef
 
-managerRef :: IORef (Maybe Manager)
+managerRef :: MVar (Maybe Manager)
 managerRef = unsafePerformIO $
   if threaded
-     then new >>= newIORef . Just
-     else new >>= newIORef . Just -- newIORef Nothing
+     then new >>= newMVar . Just
+     else new >>= newMVar . Just -- newIORef Nothing
 {-# NOINLINE managerRef #-}
 
 interruptSystemManager :: IO ()
@@ -258,8 +269,8 @@ hashOverlapped :: LPOVERLAPPED -> Int
 hashOverlapped lpol = (lpoverlappedToInt lpol) .&. (callbackArraySize - 1)
 {-# INLINE hashOverlapped #-}
 
-callbackTableVar :: Manager -> LPOVERLAPPED -> MVar (IT.IntTable CompletionData)
-callbackTableVar mgr lpol = mgrCallbacks mgr ! hashOverlapped lpol
+callbackTableVar :: Manager -> MVar (IT.IntTable CompletionData)
+callbackTableVar = mgrCallbacks
 {-# INLINE callbackTableVar #-}
 
 
@@ -370,9 +381,9 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
                         (CbError `fmap` Win32.getLastError) >>= \result -> do
           case result of
             CbPending   -> do
-              _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
+              _ <- withMVar (callbackTableVar mgr) $ \tbl ->
                       IT.insertWith (flip const) (lpoverlappedToInt lpol)
-                                    (CompletionData fptr completionCB') tbl
+                                    (CompletionData fptr h completionCB') tbl
               reqs <- addRequest
               debugIO $ "+1.. " ++ show reqs ++ " requests queued. | " ++ show lpol
               wakeupIOManager
@@ -381,7 +392,7 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
           return result
 
         let cancel = do uninterruptibleMask_ $ FFI.cancelIoEx h lpol
-                        withMVar (callbackTableVar mgr lpol) $ \tbl ->
+                        withMVar (callbackTableVar mgr) $ \tbl ->
                           IT.delete (lpoverlappedToInt lpol) tbl
                         reqs <- removeRequest
                         debugIO $ "-1.. " ++ show reqs ++ " requests queued after error."
@@ -598,11 +609,11 @@ step maxDelay mgr@Manager{..} = do
     when (n > 0) $ do
       A.forM_ mgrOverlappedEntries $ \oe -> do
           debugIO $ " $ checking " ++ show (lpOverlapped oe)
-          mCD <- withMVar (callbackTableVar mgr (lpOverlapped oe)) $ \tbl ->
+          mCD <- withMVar (callbackTableVar mgr) $ \tbl ->
                    IT.delete (lpoverlappedToInt (lpOverlapped oe)) tbl
           case mCD of
             Nothing                        -> return ()
-            Just (CompletionData _fptr cb) -> do
+            Just (CompletionData _fptr _hwnd cb) -> do
               reqs <- removeRequest
               debugIO $ "-1.. " ++ show reqs ++ " requests queued."
               status <- FFI.overlappedIOStatus (lpOverlapped oe)

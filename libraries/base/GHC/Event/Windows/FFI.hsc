@@ -77,7 +77,7 @@ foreign import WINDOWS_CCONV unsafe "windows.h CreateIoCompletionPort"
 -- | Create a new I/O completion port.
 newIOCP :: IO IOCP
 newIOCP = failIf (== IOCP nullPtr) "newIOCP" $
-          c_CreateIoCompletionPort iNVALID_HANDLE_VALUE (IOCP nullPtr) 0 1
+          c_CreateIoCompletionPort iNVALID_HANDLE_VALUE (IOCP nullPtr) 0 0
 
 -- | Associate a HANDLE with an I/O completion port.
 associateHandleWithIOCP :: IOCP -> HANDLE -> CompletionKey -> IO ()
