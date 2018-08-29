@@ -738,7 +738,8 @@ error:
     stgFree(buf);
 
     char* errormsg = malloc(sizeof(char) * 80);
-    snprintf(errormsg, 80, "addDLL: %" PATH_FMT " or dependencies not loaded. (Win32 error %lu)", dll_name, GetLastError());
+    snprintf(errormsg, 80, "addDLL: %" PATH_FMT " or dependencies not loaded. "
+                           "(Win32 error %lu)", dll_name, GetLastError());
     /* LoadLibrary failed; return a ptr to the error msg. */
     return errormsg;
 }
@@ -767,7 +768,8 @@ pathchar* findSystemLibrary_PEi386( pathchar* dll_name )
 HsPtr addLibrarySearchPath_PEi386(pathchar* dll_path)
 {
     HINSTANCE hDLL = LoadLibraryW(L"Kernel32.DLL");
-    LPAddDLLDirectory AddDllDirectory = (LPAddDLLDirectory)GetProcAddress((HMODULE)hDLL, "AddDllDirectory");
+    LPAddDLLDirectory AddDllDirectory =
+        (LPAddDLLDirectory)GetProcAddress((HMODULE)hDLL, "AddDllDirectory");
 
     HsPtr result = NULL;
 
@@ -775,15 +777,19 @@ HsPtr addLibrarySearchPath_PEi386(pathchar* dll_path)
     int bufsize                      = init_buf_size;
 
     // Make sure the path is an absolute path
-    WCHAR* abs_path = malloc(sizeof(WCHAR) * init_buf_size);
-    DWORD wResult = GetFullPathNameW(dll_path, bufsize, abs_path, NULL);
+    WCHAR* abs_path = stgMallocBytes(sizeof(WCHAR) * init_buf_size,
+                                     "addLibrarySearchPath");
+    DWORD wResult   = GetFullPathNameW(dll_path, bufsize, abs_path, NULL);
     if (!wResult){
-        sysErrorBelch("addLibrarySearchPath[GetFullPathNameW]: %" PATH_FMT " (Win32 error %lu)", dll_path, GetLastError());
+        sysErrorBelch("addLibrarySearchPath[GetFullPathNameW]: %" PATH_FMT " "
+                      "(Win32 error %lu)", dll_path, GetLastError());
     }
     else if (wResult > init_buf_size) {
-        abs_path = realloc(abs_path, sizeof(WCHAR) * wResult);
+        abs_path = stgReallocBytes(abs_path, sizeof(WCHAR) * wResult,
+                                   "addLibrarySearchPath");
         if (!GetFullPathNameW(dll_path, bufsize, abs_path, NULL)) {
-            sysErrorBelch("addLibrarySearchPath[GetFullPathNameW]: %" PATH_FMT " (Win32 error %lu)", dll_path, GetLastError());
+            sysErrorBelch("addLibrarySearchPath[GetFullPathNameW]: %" PATH_FMT
+                          " (Win32 error %lu)", dll_path, GetLastError());
         }
     }
 
@@ -793,41 +799,49 @@ HsPtr addLibrarySearchPath_PEi386(pathchar* dll_path)
     else
     {
         warnMissingKBLibraryPaths();
-        WCHAR* str = malloc(sizeof(WCHAR) * init_buf_size);
-        wResult = GetEnvironmentVariableW(L"PATH", str, bufsize);
+        WCHAR* str = stgMallocBytes(sizeof(WCHAR) * init_buf_size,
+                                    "addLibrarySearchPath");
+        wResult    = GetEnvironmentVariableW(L"PATH", str, bufsize);
 
         if (wResult > init_buf_size) {
-            str = realloc(str, sizeof(WCHAR) * wResult);
+            str     = stgReallocBytes(str, sizeof(WCHAR) * wResult,
+                                      "addLibrarySearchPath");
             bufsize = wResult;
             wResult = GetEnvironmentVariableW(L"PATH", str, bufsize);
             if (!wResult) {
-                sysErrorBelch("addLibrarySearchPath[GetEnvironmentVariableW]: %" PATH_FMT " (Win32 error %lu)", dll_path, GetLastError());
+                sysErrorBelch("addLibrarySearchPath[GetEnvironmentVariableW]: %"
+                              PATH_FMT " (Win32 error %lu)",
+                              dll_path, GetLastError());
             }
         }
 
-        bufsize = wResult + 2 + pathlen(abs_path);
-        wchar_t* newPath = malloc(sizeof(wchar_t) * bufsize);
+        bufsize          = wResult + 2 + pathlen(abs_path);
+        wchar_t* newPath = stgMallocBytes(sizeof(wchar_t) * bufsize,
+                                          "addLibrarySearchPath");
 
         wcscpy(newPath, abs_path);
         wcscat(newPath, L";");
         wcscat(newPath, str);
         if (!SetEnvironmentVariableW(L"PATH", (LPCWSTR)newPath)) {
-            sysErrorBelch("addLibrarySearchPath[SetEnvironmentVariableW]: %" PATH_FMT " (Win32 error %lu)", abs_path, GetLastError());
+            sysErrorBelch("addLibrarySearchPath[SetEnvironmentVariableW]: %"
+                          PATH_FMT " (Win32 error %lu)", abs_path,
+                          GetLastError());
         }
 
-        free(newPath);
-        free(abs_path);
+        stgFree(newPath);
+        stgFree(abs_path);
 
         return str;
     }
 
     if (!result) {
-        sysErrorBelch("addLibrarySearchPath: %" PATH_FMT " (Win32 error %lu)", abs_path, GetLastError());
-        free(abs_path);
+        sysErrorBelch("addLibrarySearchPath: %" PATH_FMT " (Win32 error %lu)",
+                      abs_path, GetLastError());
+        stgFree(abs_path);
         return NULL;
     }
 
-    free(abs_path);
+    stgFree(abs_path);
     return result;
 }
 
@@ -837,7 +851,9 @@ bool removeLibrarySearchPath_PEi386(HsPtr dll_path_index)
 
     if (dll_path_index != NULL) {
         HINSTANCE hDLL = LoadLibraryW(L"Kernel32.DLL");
-        LPRemoveDLLDirectory RemoveDllDirectory = (LPRemoveDLLDirectory)GetProcAddress((HMODULE)hDLL, "RemoveDllDirectory");
+        LPRemoveDLLDirectory RemoveDllDirectory =
+            (LPRemoveDLLDirectory)GetProcAddress((HMODULE)hDLL,
+                                                 "RemoveDllDirectory");
 
         if (RemoveDllDirectory) {
             result = RemoveDllDirectory(dll_path_index);
@@ -851,7 +867,8 @@ bool removeLibrarySearchPath_PEi386(HsPtr dll_path_index)
         }
 
         if (!result) {
-            sysErrorBelch("removeLibrarySearchPath: (Win32 error %lu)", GetLastError());
+            sysErrorBelch("removeLibrarySearchPath: (Win32 error %lu)",
+                          GetLastError());
             return false;
         }
     }
@@ -863,8 +880,7 @@ bool removeLibrarySearchPath_PEi386(HsPtr dll_path_index)
  * This function checks the section alignment requirements for the sections
  * and returns the alignment for the section.
  */
-static uint32_t getSectionAlignment(
-        Section section) {
+static uint32_t getSectionAlignment(Section section) {
    uint32_t c = section.info->props;
    for(int i = 0; i < pe_alignments_cnt; i++)
    {
@@ -879,8 +895,7 @@ static uint32_t getSectionAlignment(
 /* ----------------------
  * return a memory location aligned to the section requirements
  */
-static uint8_t* getAlignedMemory(
-        uint8_t* value, Section section) {
+static uint8_t* getAlignedMemory(uint8_t* value, Section section) {
    uint32_t alignment = getSectionAlignment(section);
    uintptr_t mask = (uintptr_t)alignment - 1;
    return (uint8_t*)(((uintptr_t)value + mask) & ~mask);
@@ -889,8 +904,7 @@ static uint8_t* getAlignedMemory(
 /* ----------------------
  * return a value aligned to the section requirements
  */
-static size_t getAlignedValue(
-        size_t value, Section section) {
+static size_t getAlignedValue(size_t value, Section section) {
    uint32_t alignment = getSectionAlignment(section);
    uint32_t mask = (uint32_t)alignment - 1;
    return (size_t)((value + mask) & ~mask);
@@ -904,7 +918,7 @@ static size_t getAlignedValue(
  * This function must fail gracefully and if it does, the filestream needs to
  * be reset to what it was when the function was called.
  */
-bool checkAndLoadImportLibrary( pathchar* arch_name, char* member_name, FILE* f )
+bool checkAndLoadImportLibrary (pathchar* arch_name, char* member_name, FILE* f)
 {
     char* image;
     static bool load_dll_warn = false;
@@ -929,17 +943,20 @@ bool checkAndLoadImportLibrary( pathchar* arch_name, char* member_name, FILE* f 
         || hdr.Sig2 != IMPORT_OBJECT_HDR_SIG2
         || getObjectType ((char*)&hdr, arch_name) != COFF_IMPORT_LIB) {
         fseek(f, -(long int)sizeof_COFF_import_Header, SEEK_CUR);
-        IF_DEBUG(linker, debugBelch("loadArchive: Object `%s` is not an import lib. Skipping...\n", member_name));
+        IF_DEBUG(linker, debugBelch("loadArchive: Object `%s` is not an import "
+                                    "lib. Skipping...\n", member_name));
         return false;
     }
 
-    IF_DEBUG(linker, debugBelch("loadArchive: reading %lu bytes at %ld\n", hdr.SizeOfData, ftell(f)));
+    IF_DEBUG(linker, debugBelch("loadArchive: reading %lu bytes at %ld\n",
+                                hdr.SizeOfData, ftell(f)));
 
     image = stgMallocBytes(hdr.SizeOfData, "checkAndLoadImportLibrary(image)");
     n = fread(image, 1, hdr.SizeOfData, f);
     if (n != hdr.SizeOfData) {
-        errorBelch("loadArchive: error whilst reading `%s' header in `%" PATH_FMT "'. Did not read enough bytes.\n",
-            member_name, arch_name);
+        errorBelch("loadArchive: error whilst reading `%s' header in `%"
+                   PATH_FMT "'. Did not read enough bytes.\n",
+                   member_name, arch_name);
         fseek(f, -(n + sizeof_COFF_import_Header), SEEK_CUR);
         return false;
     }
@@ -955,7 +972,8 @@ bool checkAndLoadImportLibrary( pathchar* arch_name, char* member_name, FILE* f 
     mbstowcs(dll, dllName, nameLen);
     stgFree(dllName);
 
-    IF_DEBUG(linker, debugBelch("loadArchive: read symbol %s from lib `%" PATH_FMT "'\n", symbol, dll));
+    IF_DEBUG(linker, debugBelch("loadArchive: read symbol %s from lib `%"
+                                PATH_FMT "'\n", symbol, dll));
     const char* result = addDLL(dll);
 
     stgFree(image);
@@ -983,8 +1001,8 @@ printName ( uint8_t* name, ObjectCode* oc )
    } else {
       int i;
       for (i = 0; i < 8; i++) {
-         if (name[i] == 0) break;
-         debugBelch("%c", name[i] );
+        if (name[i] == 0) break;
+        debugBelch("%c", name[i] );
       }
    }
 }
@@ -1106,7 +1124,8 @@ lookupSymbolInDLLs ( const SymbolName* lbl )
                                  lbl + 6 + STRIP_LEADING_UNDERSCORE);
             if (sym != NULL) {
                 IndirectAddr* ret;
-                ret = stgMallocBytes( sizeof(IndirectAddr), "lookupSymbolInDLLs" );
+                ret = stgMallocBytes (sizeof(IndirectAddr),
+                                      "lookupSymbolInDLLs");
                 ret->addr = sym;
                 ret->next = indirects;
                 indirects = ret;
@@ -1144,13 +1163,12 @@ verifyCOFFHeader ( uint16_t machine, IMAGE_FILE_HEADER *hdr,
    errorBelch("PE/PE+ not supported on this arch.");
 #endif
 
-   if (!hdr)
-     return true;
+   if (!hdr) { return true; }
 
    if (hdr->SizeOfOptionalHeader != 0) {
       errorBelch("%" PATH_FMT ": PE/PE+ with nonempty optional header",
                  fileName);
-      return 0;
+      return false;
    }
    if ( (hdr->Characteristics & IMAGE_FILE_EXECUTABLE_IMAGE) ||
         (hdr->Characteristics & IMAGE_FILE_DLL             ) ||
@@ -1160,8 +1178,7 @@ verifyCOFFHeader ( uint16_t machine, IMAGE_FILE_HEADER *hdr,
    }
    if ( (hdr->Characteristics & IMAGE_FILE_BYTES_REVERSED_HI)) {
       errorBelch("%" PATH_FMT ": Invalid PE/PE+ word size or endianness: %d",
-                 fileName,
-                 (int)(hdr->Characteristics));
+                 fileName, (int)(hdr->Characteristics));
       return false;
    }
    return true;
@@ -1192,9 +1209,10 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
       but we need the Sections array initialized here already. */
    Section *sections;
    sections = (Section*)stgCallocBytes(
-       sizeof(Section),
-       info->numberOfSections + 1, /* +1 for the global BSS section see ocGetNames_PEi386 */
-       "ocVerifyImage_PEi386(sections)");
+        sizeof(Section),
+        /* +1 for the global BSS section see ocGetNames_PEi386.  */
+        info->numberOfSections + 1,
+        "ocVerifyImage_PEi386(sections)");
    oc->sections   = sections;
    oc->n_sections = info->numberOfSections + 1;
    oc->info       = stgCallocBytes (sizeof(struct ObjectCodeFormatInfo), 1,
@@ -1447,7 +1465,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
       SectionKind kind = SECTIONKIND_CODE_OR_RODATA;
       Section section  = oc->sections[i];
 
-      IF_DEBUG(linker, debugBelch("section name = %s\n", section.info->name ));
+      IF_DEBUG(linker, debugBelch ("section name = %s\n", section.info->name));
 
       /* The PE file section flag indicates whether the section
          contains code or data. */
@@ -1508,17 +1526,19 @@ ocGetNames_PEi386 ( ObjectCode* oc )
                               sname, (char*)addr));
           if (!ghciInsertSymbolTable(oc->fileName, symhash, sname,
                                      addr, false, oc)) {
-             releaseOcInfo (oc);
-             stgFree (oc->image);
-             oc->image = NULL;
-             return false;
+            releaseOcInfo (oc);
+            UnmapViewOfFile (oc->image);
+            CloseHandle (oc->file_handle);
+            oc->image = NULL;
+            return false;
           }
           setImportSymbol (oc, sname);
 
           /* Don't process this oc any futher. Just exit.  */
           oc->n_symbols = 0;
           oc->symbols   = NULL;
-          stgFree (oc->image);
+          UnmapViewOfFile (oc->image);
+          CloseHandle (oc->file_handle);
           oc->image = NULL;
           releaseOcInfo (oc);
           return true;
@@ -1570,7 +1590,9 @@ ocGetNames_PEi386 ( ObjectCode* oc )
 
       if (kind != SECTIONKIND_OTHER && end >= start) {
           /* See Note [Section alignment].  */
-          addCopySection(oc, &oc->sections[i], kind, SECTION_NOMEM, start, sz);
+          addSection(&oc->sections[i], kind, SECTION_MMAP,
+                     start, sz, (uintptr_t)oc->image - (uintptr_t)start,
+                     oc->image, oc->fileSize);
           addProddableBlock(oc, oc->sections[i].start, sz);
       }
    }
@@ -1611,7 +1633,8 @@ ocGetNames_PEi386 ( ObjectCode* oc )
 
    /* At this point we're done with oc->image and all relevant memory have
       been copied. Release it to free up the memory.  */
-   stgFree (oc->image);
+   UnmapViewOfFile (oc->image);
+   CloseHandle (oc->file_handle);
    oc->image = NULL;
 
    for (uint32_t i = 0; i < (uint32_t)oc->n_symbols; i++) {
@@ -1652,7 +1675,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
             Allocate zeroed space for it from the BSS section */
           addr = bss;
           bss  = (SymbolAddr*)((StgWord)bss + (StgWord)symValue);
-          IF_DEBUG(linker, debugBelch("bss symbol @ %p %u\n", addr, symValue));
+          IF_DEBUG(linker, debugBelch ("bss symbol @ %p %u\n", addr, symValue));
       }
       else if (secNumber > 0
                && section
@@ -1713,8 +1736,8 @@ ocGetNames_PEi386 ( ObjectCode* oc )
           sname[size-start]='\0';
           stgFree(tmp);
 
-          /* TODO: Technically we need to create a jump island here.  To ensure the
-             function is addressable within the small code model.  */
+          /* TODO: Technically we need to create a jump island here.  To ensure
+             the function is addressable within the small code model.  */
           if (!ghciInsertSymbolTable(oc->fileName, symhash, sname,
                                      addr, false, oc))
                return false;
@@ -1781,8 +1804,12 @@ makeSymbolExtra_PEi386( ObjectCode* oc, uint64_t index, size_t s, char* symbol )
     SymbolExtra *extra;
     curr_thunk = oc->first_symbol_extra + index;
     if (index >= oc->n_symbol_extras) {
-      IF_DEBUG(linker, debugBelch("makeSymbolExtra first:%d, num:%lu, member:%s, index:%llu\n", curr_thunk, oc->n_symbol_extras, oc->archiveMemberName, index));
-      barf("Can't allocate thunk for `%s' in `%" PATH_FMT "' with member `%s'", symbol, oc->fileName, oc->archiveMemberName);
+      IF_DEBUG(linker, debugBelch("makeSymbolExtra first:%d, num:%lu, "
+                                  "member:%s, index:%llu\n", curr_thunk,
+                                  oc->n_symbol_extras, oc->archiveMemberName,
+                                  index));
+      barf("Can't allocate thunk for `%s' in `%" PATH_FMT "' with member `%s'",
+           symbol, oc->fileName, oc->archiveMemberName);
     }
 
     extra = oc->symbol_extras + curr_thunk;
@@ -1885,10 +1912,12 @@ ocResolve_PEi386 ( ObjectCode* oc )
             S = ((size_t)(section.start))
               + ((size_t)(getSymValue (info, sym)));
          } else {
-            copyName ( getSymShortName (info, sym), oc, symbol, sizeof(symbol)-1 );
+            copyName (getSymShortName (info, sym), oc, symbol,
+                      sizeof(symbol)-1);
             S = (size_t) lookupSymbol_( (char*)symbol );
             if ((void*)S == NULL) {
-                errorBelch(" | %" PATH_FMT ": unknown symbol `%s'", oc->fileName, symbol);
+                errorBelch(" | %" PATH_FMT ": unknown symbol `%s'",
+                           oc->fileName, symbol);
                 releaseOcInfo (oc);
                 winmem_memory_protect (NULL);
                 return false;
@@ -1929,9 +1958,9 @@ ocResolve_PEi386 ( ObjectCode* oc )
                   Update: the reason why we're seeing these more elaborate
                   relocations is due to a switch in how the NCG compiles SRTs
                   and offsets to them from info tables. SRTs live in .(ro)data,
-                  while info tables live in .text, causing GAS to emit REL32/DISP32
-                  relocations with non-zero values. Adding the displacement is
-                  the right thing to do.
+                  while info tables live in .text, causing GAS to emit
+                  REL32/DISP32 relocations with non-zero values. Adding the
+                  displacement is the right thing to do.
                */
                *(uint32_t *)pP = ((uint32_t)S) + A - ((uint32_t)(size_t)pP) - 4;
                break;
@@ -1958,8 +1987,8 @@ ocResolve_PEi386 ( ObjectCode* oc )
                        /* And retry */
                        v = S + A;
                        if (v >> 32) {
-                           barf("IMAGE_REL_AMD64_ADDR32[NB]: High bits are set in %zx for %s",
-                                v, (char *)symbol);
+                           barf("IMAGE_REL_AMD64_ADDR32[NB]: High bits are set "
+                                "in %zx for %s", v, (char *)symbol);
                        }
                    }
                    *(uint32_t *)pP = (uint32_t)v;
@@ -1977,8 +2006,8 @@ ocResolve_PEi386 ( ObjectCode* oc )
                        /* And retry */
                        v = S + (int32_t)A - ((intptr_t)pP) - 4;
                        if ((v >> 32) && ((-v) >> 32)) {
-                           barf("IMAGE_REL_AMD64_REL32: High bits are set in %zx for %s",
-                                v, (char *)symbol);
+                           barf("IMAGE_REL_AMD64_REL32: High bits are set in "
+                                "%zx for %s", v, (char *)symbol);
                        }
                    }
                    *(uint32_t *)pP = (uint32_t)v;
@@ -1986,8 +2015,8 @@ ocResolve_PEi386 ( ObjectCode* oc )
                }
 #endif
             default:
-               debugBelch("%" PATH_FMT ": unhandled PEi386 relocation type %d\n",
-                     oc->fileName, reloc->Type);
+               debugBelch("%" PATH_FMT ": unhandled PEi386 relocation type "
+                          "%d\n", oc->fileName, reloc->Type);
                releaseOcInfo (oc);
                winmem_memory_protect (NULL);
                return false;
@@ -2015,13 +2044,14 @@ ocResolve_PEi386 ( ObjectCode* oc )
   Note [ELF constant in PE file]
 
   For some reason, the PE files produced by GHC contain a linux
-  relocation constant 17 (0x11) in the object files. As far as I (Phyx-) can tell
-  this constant doesn't seem like it's coming from GHC, or at least I could not find
-  anything in the .s output that GHC produces which specifies the relocation type.
+  relocation constant 17 (0x11) in the object files. As far as I (Phyx-) can
+  tell this constant doesn't seem like it's coming from GHC, or at least I could
+  not find anything in the .s output that GHC produces which specifies the
+  relocation type.
 
-  This leads me to believe that this is a bug in GAS. However because this constant is
-  there we must deal with it. This is done by mapping it to the equivalent in behaviour PE
-  relocation constant 0x03.
+  This leads me to believe that this is a bug in GAS. However because this
+  constant is there we must deal with it. This is done by mapping it to the
+  equivalent in behaviour PE relocation constant 0x03.
 
   See #9907
 */
@@ -2059,7 +2089,8 @@ SymbolAddr *lookupSymbol_PEi386(SymbolName *lbl)
     RtsSymbolInfo *pinfo;
 
     if (!ghciLookupSymbolInfo(symhash, lbl, &pinfo)) {
-        IF_DEBUG(linker, debugBelch("lookupSymbol: symbol '%s' not found\n", lbl));
+        IF_DEBUG(linker,
+                 debugBelch("lookupSymbol: symbol '%s' not found\n", lbl));
 
         SymbolAddr* sym;
 

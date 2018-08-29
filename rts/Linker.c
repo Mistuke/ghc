@@ -1192,6 +1192,15 @@ void freeObjectCode (ObjectCode *oc)
                              oc->sections[i].size);
                     break;
 #endif
+#if defined(mingw32_HOST_OS)
+                case SECTION_MMAP:
+                    if (!UnmapViewOfFile (oc->sections[i].mapped_start))
+                      errorBelch ("freeObjectCode: could not unmap view of "
+                                  "section %d for %s at %p\n.",
+                                  i, oc->archiveMemberName,
+                                  oc->sections[i].mapped_start);
+                    break;
+#endif
                 case SECTION_MALLOC:
                     stgFree(oc->sections[i].start);
                     break;
@@ -1248,7 +1257,7 @@ static void setOcInitialStatus(ObjectCode* oc) {
 }
 
 ObjectCode*
-mkOc( pathchar *path, char *image, int imageSize,
+mkOc( pathchar *path, void *file_handle, char *image, int imageSize,
       bool mapped, char *archiveMemberName, int misalignment ) {
    ObjectCode* oc;
 
@@ -1268,8 +1277,9 @@ mkOc( pathchar *path, char *image, int imageSize,
    barf("loadObj: not implemented on this platform");
 #  endif
 
-   oc->image = image;
-   oc->fileName = pathdup(path);
+   oc->image       = image;
+   oc->file_handle = file_handle;
+   oc->fileName    = pathdup(path);
 
    if (archiveMemberName) {
        oc->archiveMemberName = stgMallocBytes( strlen(archiveMemberName)+1,
@@ -1329,12 +1339,14 @@ isAlreadyLoaded( pathchar *path )
 static ObjectCode *
 preloadObjectFile (pathchar *path)
 {
-   int fileSize;
+   int64_t fileSize;
    struct_stat st;
    int r;
    void *image;
+   void *file_handle = NULL;
    ObjectCode *oc;
    int misalignment = 0;
+   bool mapped = false;
 
    r = pathstat(path, &st);
    if (r == -1) {
@@ -1381,7 +1393,26 @@ preloadObjectFile (pathchar *path)
    }
    // not 32-bit yet, we'll remap later
    close(fd);
+   mapped = true;
 
+#elif defined(mingw32_HOST_OS)
+   file_handle = CreateFileW (path, GENERIC_READ | GENERIC_EXECUTE,
+                              FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, NULL);
+   if (file_handle == INVALID_HANDLE_VALUE) {
+       errorBelch ("loadObj: could not open file `%" PATH_FMT "'. Reason: %lu\n",
+                   path, GetLastError ());
+   }
+   image = CreateFileMappingW (file_handle, NULL, PAGE_EXECUTE_READ,
+                               fileSize >> 32, fileSize & 0xFFFFFFFF, NULL);
+   CloseHandle (file_handle);
+   if (image == NULL) {
+       errorBelch ("loadObj: could not map file `%" PATH_FMT "'. Reason: %lu\n",
+                   path, GetLastError ());
+   }
+   file_handle = image;
+   image       = MapViewOfFile (image, FILE_MAP_READ, 0, 0, fileSize);
+   mapped      = true;
 #else /* !RTS_LINKER_USE_MMAP */
    FILE *f;
 
@@ -1426,7 +1457,7 @@ preloadObjectFile (pathchar *path)
 
 #endif /* RTS_LINKER_USE_MMAP */
 
-   oc = mkOc(path, image, fileSize, true, NULL, misalignment);
+   oc = mkOc(path, file_handle, image, fileSize, mapped, NULL, misalignment);
 
 #if defined(OBJFORMAT_MACHO)
    if (ocVerifyImage_MachO( oc ))

@@ -10,6 +10,9 @@
 /* Platform specific headers */
 #if defined(OBJFORMAT_PEi386)
 #  include "linker/PEi386.h"
+#  include <windows.h>
+#  include <io.h>
+#  include <fcntl.h>
 #elif defined(OBJFORMAT_MACHO)
 #  include "linker/MachO.h"
 #  include <regex.h>
@@ -247,9 +250,9 @@ static HsInt loadArchive_ (pathchar *path)
     ObjectCode* oc = NULL;
     char *image = NULL;
     HsInt retcode = 0;
-    int memberSize;
+    size_t memberSize;
     FILE *f = NULL;
-    int n;
+    size_t n;
     size_t thisFileNameSize = (size_t)-1; /* shut up bogus GCC warning */
     char *fileName;
     size_t fileNameSize;
@@ -258,6 +261,9 @@ static HsInt loadArchive_ (pathchar *path)
     char *gnuFileIndex;
     int gnuFileIndexSize;
     int misalignment = 0;
+    void *file_handle = NULL;
+    void *tmp_handle = NULL;
+    bool mapped = false;
 
     DEBUG_LOG("start\n");
     DEBUG_LOG("Loading archive `%" PATH_FMT" '\n", path);
@@ -279,9 +285,22 @@ static HsInt loadArchive_ (pathchar *path)
     isThin = 0;
     isImportLib = 0;
 
+#if defined(mingw32_HOST_OS)
+    file_handle = CreateFileW (path, GENERIC_READ | GENERIC_EXECUTE,
+                               FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file_handle == INVALID_HANDLE_VALUE) {
+       errorBelch ("loadArchive(image): could not open file `%" PATH_FMT "'. "
+                   "Reason: %lu\n", path, GetLastError ());
+    }
+    f = _wfdopen (_open_osfhandle ((intptr_t)file_handle, _O_RDONLY),
+                  WSTR("rb"));
+#else
     f = pathopen(path, WSTR("rb"));
+#endif
+
     if (!f)
-        FAIL("loadObj: can't read `%" PATH_FMT "'", path);
+        FAIL("loadArchive(image): can't read `%" PATH_FMT "'", path);
 
     /* Check if this is an archive by looking for the magic "!<arch>\n"
      * string.  Usually, if this fails, we belch an error and return.  On
@@ -372,7 +391,7 @@ static HsInt loadArchive_ (pathchar *path)
         tmp[n] = '\0';
         memberSize = atoi(tmp);
 
-        DEBUG_LOG("size of this archive member is %d\n", memberSize);
+        DEBUG_LOG("size of this archive member is %llu\n", memberSize);
         n = fread ( tmp, 1, 2, f );
         if (n != 2)
             FAIL("Failed reading magic from `%" PATH_FMT "'", path);
@@ -492,6 +511,7 @@ static HsInt loadArchive_ (pathchar *path)
 #if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
             if (RTS_LINKER_USE_MMAP)
                 image = mmapForLinker(memberSize, MAP_ANONYMOUS, -1, 0);
+                mapped = true;
             else {
                 /* See loadObj() */
                 misalignment = machoGetMisalignment(f);
@@ -499,7 +519,20 @@ static HsInt loadArchive_ (pathchar *path)
                                         "loadArchive(image)");
                 image += misalignment;
             }
-
+#elif defined (mingw32_HOST_OS)
+            image = CreateFileMappingW (file_handle, NULL, PAGE_EXECUTE_READ,
+                                        memberSize >> 32,
+                                        memberSize & 0xFFFFFFFF, NULL);
+            CloseHandle (file_handle);
+            if (image == NULL) {
+                errorBelch ("loadArchive(image): could not map file `%" PATH_FMT
+                            "'. Reason: %lu\n", path, GetLastError ());
+            }
+            uint64_t offset = ftell (f);
+            tmp_handle = image;
+            image      = MapViewOfFile (image, FILE_MAP_READ, offset >> 32,
+                                        offset & 0xFFFFFFFF, memberSize);
+            mapped     = true;
 #else // not darwin
             image = stgMallocBytes(memberSize, "loadArchive(image)");
 #endif
@@ -522,7 +555,7 @@ static HsInt loadArchive_ (pathchar *path)
             sprintf(archiveMemberName, "%" PATH_FMT "(%.*s)",
                     path, (int)thisFileNameSize, fileName);
 
-            oc = mkOc(path, image, memberSize, false, archiveMemberName
+            oc = mkOc(path, tmp_handle, image, memberSize, mapped, archiveMemberName
                      , misalignment);
 #if defined(OBJFORMAT_MACHO)
             ocInit_MachO( oc );
@@ -571,7 +604,7 @@ while reading filename from `%" PATH_FMT "'", path);
                           "Skipping...\n");
                 n = fseek(f, memberSize, SEEK_CUR);
                 if (n != 0)
-                    FAIL("error whilst seeking by %d in `%" PATH_FMT "'",
+                    FAIL("error whilst seeking by %llu in `%" PATH_FMT "'",
                     memberSize, path);
             }
 #endif
@@ -582,7 +615,7 @@ while reading filename from `%" PATH_FMT "'", path);
             if (!isThin || thisFileNameSize == 0) {
                 n = fseek(f, memberSize, SEEK_CUR);
                 if (n != 0)
-                    FAIL("error whilst seeking by %d in `%" PATH_FMT "'",
+                    FAIL("error whilst seeking by %llu in `%" PATH_FMT "'",
                          memberSize, path);
             }
         }
@@ -608,6 +641,9 @@ while reading filename from `%" PATH_FMT "'", path);
 fail:
     if (f != NULL)
         fclose(f);
+
+    if (file_handle)
+        CloseHandle (file_handle);
 
     if (fileName != NULL)
         stgFree(fileName);

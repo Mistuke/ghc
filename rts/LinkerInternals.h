@@ -159,6 +159,7 @@ typedef struct _ObjectCode {
 
     /* ptr to mem containing the object file image */
     char*      image;
+    void*      file_handle;
 
     /* A customizable type, that formats can use to augment ObjectCode
      * See Note [No typedefs for customizable types]
@@ -301,7 +302,7 @@ resolveSymbolAddr (pathchar* buffer, int size,
 
 HsInt isAlreadyLoaded( pathchar *path );
 HsInt loadOc( ObjectCode* oc );
-ObjectCode* mkOc( pathchar *path, char *image, int imageSize,
+ObjectCode* mkOc( pathchar *path, void* handle, char *image, int imageSize,
                   bool mapped, char *archiveMemberName,
                   int misalignment
                   );
