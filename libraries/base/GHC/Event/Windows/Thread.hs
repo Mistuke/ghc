@@ -17,8 +17,7 @@ import GHC.Event.Windows.Clock
 import GHC.Event.Windows
 
 ensureIOManagerIsRunning :: IO ()
-ensureIOManagerIsRunning = do _ <- getSystemManager
-                              return ()
+ensureIOManagerIsRunning = wakeupIOManager
 
 interruptIOManager :: IO ()
 interruptIOManager = interruptSystemManager

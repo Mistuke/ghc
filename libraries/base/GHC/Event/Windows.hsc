@@ -25,6 +25,7 @@ module GHC.Event.Windows (
     Manager,
     getSystemManager,
     interruptSystemManager,
+    wakeupIOManager,
 
     -- * Overlapped I/O
     associateHandle,
@@ -140,11 +141,13 @@ data Manager = Manager
     , mgrCallbacks    :: {-# UNPACK #-}
                          !(MVar (IT.IntTable CompletionData))
     , mgrEvntHandlers :: {-# UNPACK #-}
-                         !(Array Int (MVar EventData)) -- TODO: Make Handle
+                         !(MVar (IT.IntTable EventData))
     , mgrOverlappedEntries
                       :: {-#UNPACK #-} !(A.Array OVERLAPPED_ENTRY)
     }
 
+-- This needs to finish without making any calls to anything requiring the I/O
+-- manager otherwise we'll get into some weird synchronization issues.
 new :: IO Manager
 new = do
     debugIO "Starting io-manager..."
@@ -155,14 +158,8 @@ new = do
     mgrTimeouts     <- newIORef Q.empty
     mgrCallbacks    <- newMVar =<< IT.new callbackArraySize
     mgrOverlappedEntries <- A.new 64
-    -- TODO: find out how common these events are, if they're not very common
-    -- then no point in pre-allocating this buffer.  Based on the fact we didn't
-    -- miss them till now.. I guess they're not overly critical.
-    mgrEvntHandlers <- fmap (listArray (0, callbackArraySize-1)) $
-           replicateM callbackArraySize newEmptyMVar
+    mgrEvntHandlers <- newMVar =<< IT.new callbackArraySize
     let !mgr = Manager{..}
-    event <- c_getIOManagerEvent
-    startIOManagerThread (io_mngr_loop event mgr)
     return mgr
       where
         replicateM n x = sequence (replicate n x)
