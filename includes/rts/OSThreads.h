@@ -110,7 +110,7 @@ typedef DWORD ThreadLocalKey;
    your cache line.  They're also a lot faster than CriticalSections when
    multiple threads are involved.  */
 
-typedef PSRWLOCK Mutex;
+typedef SRWLOCK Mutex;
 
 #if defined(LOCK_DEBUG)
 
