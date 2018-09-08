@@ -52,8 +52,14 @@ module GHC.Event.Windows (
     ioFailed,
     getErrorCode,
 
-    -- * IO Result type
+    -- * I/O Result type
     IOResult(..),
+
+    -- * I/O Event notifications
+    HandleData,
+    HandleKey (handleValue),
+    registerHandle,
+    unregisterHandle,
 
     -- * Console events
     module GHC.Event.Windows.ConsoleEvent
@@ -69,6 +75,7 @@ import GHC.Event.Internal.Types
 import qualified GHC.Event.Windows.FFI    as FFI
 import qualified GHC.Event.PSQ            as Q
 import qualified GHC.Event.IntTable       as IT
+import qualified GHC.Event.Internal as I
 
 import {-# SOURCE #-} Control.Concurrent
 import Control.Concurrent.MVar
@@ -77,8 +84,11 @@ import Data.IORef
 import Data.Foldable (mapM_)
 import Data.Maybe
 import Data.Word
+import Data.Semigroup.Internal (stimesMonoid)
+import Data.OldList (deleteBy)
 import Foreign       hiding (new)
 import Foreign.C
+import Foreign.Ptr (ptrToIntPtr)
 import Foreign.ForeignPtr.Unsafe
 import qualified GHC.Event.Array    as A
 import GHC.Arr (Array, (!), listArray, numElements)
@@ -127,8 +137,17 @@ data CompletionData = CompletionData {-# UNPACK #-} !(ForeignPtr OVERLAPPED)
                                      !HANDLE !IOCallback
 
 -- I don't expect a lot of events, so a simple linked lists should be enough.
-type EventElements = [(Event, IOCallback)]
-data EventData = EventData !Event !EventElements
+type EventElements = [(Event, HandleData)]
+data EventData = EventData { evtTopLevel :: !Event, evtElems :: !EventElements }
+
+instance Monoid EventData where
+  mempty  = EventData evtNothing []
+  mappend = \a b -> EventData (evtTopLevel a <> evtTopLevel b)
+                              (evtElems a ++ evtElems b)
+
+instance Semigroup EventData where
+  (<>)   = mappend
+  stimes = stimesMonoid
 
 data IOResult a
   = IOSuccess { ioValue :: a }
@@ -738,6 +757,58 @@ foreign import WINDOWS_CCONV "WaitForSingleObject"
    c_WaitForSingleObject :: HANDLE -> DWORD -> IO DWORD
 
 foreign import ccall unsafe "rtsSupportsBoundThreads" threaded :: Bool
+
+
+-- ---------------------------------------------------------------------------
+-- I/O manager event notifications
+
+
+data HandleData = HandleData {
+      tokenKey        :: {-# UNPACK #-} !HandleKey
+    , tokenEvents     :: {-# UNPACK #-} !EventLifetime
+    , _handleCallback :: !EventCallback
+    }
+
+-- | A file handle registration cookie.
+data HandleKey = HandleKey {
+      handleValue  :: {-# UNPACK #-} !HANDLE
+    , handleUnique :: {-# UNPACK #-} !Unique
+    } deriving ( Eq   -- ^ @since 4.4.0.0
+               , Show -- ^ @since 4.4.0.0
+               )
+
+-- | Callback invoked on I/O events.
+type EventCallback = HandleKey -> Event -> IO ()
+
+registerHandle :: Manager -> EventCallback -> HANDLE -> Event -> Lifetime
+               -> IO HandleKey
+registerHandle mgr@(Manager{..}) cb hwnd evs lt = do
+  u <- newUnique mgrUniqueSource
+  let reg   = HandleKey hwnd u
+      hwnd' = fromIntegral $ ptrToIntPtr hwnd
+      el    = I.eventLifetime evs lt
+      !hwdd = HandleData reg el cb
+      event = EventData evs [(evs, hwdd)]
+  _ <- withMVar mgrEvntHandlers $ \evts -> do
+          IT.insertWith mappend hwnd' event evts
+  wakeupIOManager
+  return reg
+
+unregisterHandle :: Manager -> HandleKey -> IO ()
+unregisterHandle mgr@(Manager{..}) key@HandleKey{..} = do
+  withMVar mgrEvntHandlers $ \evts -> do
+    let hwnd' = fromIntegral $ ptrToIntPtr handleValue
+    val <- IT.lookup hwnd' evts
+    case val of
+      Nothing -> return ()
+      Just (EventData evs lst) -> do
+        let cmp (_, a) (_, b) = tokenKey a == tokenKey b
+            key'    = (undefined, HandleData key undefined undefined)
+            updated = deleteBy cmp key' lst
+            new_lst = EventData evs updated
+        _ <- IT.updateWith (\_ -> return new_lst) hwnd' evts
+        return ()
+
 
 -- ---------------------------------------------------------------------------
 -- debugging

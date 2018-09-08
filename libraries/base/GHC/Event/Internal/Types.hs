@@ -21,6 +21,7 @@ module GHC.Event.Internal.Types
     , evtRead
     , evtWrite
     , evtClose
+    , evtNothing
     , eventIs
     -- * Lifetimes
     , Lifetime(..)
