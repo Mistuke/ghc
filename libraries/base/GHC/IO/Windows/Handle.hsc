@@ -461,17 +461,17 @@ hwndReadNonBlocking hwnd ptr offset bytes
                         (fromIntegral bytes) nullPtr lpOverlapped
       err <- fmap fromIntegral getErrorCode
 
+      -- Check to see if the operation was completed on a
+      -- non-overlapping handle. e.g. stdio redirection or similar.
+      success <- overlappedIOStatus lpOverlapped
+
       case () of
-        _ | err == #{const ERROR_IO_PENDING} -> return Mgr.CbPending
-          | err == #{const ERROR_HANDLE_EOF} -> return Mgr.CbDone
-          | not ret                          -> return (Mgr.CbError err)
-          | otherwise -> do
-              success <- overlappedIOStatus lpOverlapped
-          -- Check to see if the operation was completed on a
-          -- non-overlapping handle. e.g. stdio redirection or similar.
-              if success == #{const ERROR_SUCCESS}
-                  then return Mgr.CbDone
-                  else return (Mgr.CbError err)
+        _ | success == #{const ERROR_SUCCESS} -> return Mgr.CbDone
+          | success == #{const STATUS_END_OF_FILE} -> return Mgr.CbDone
+          | err == #{const ERROR_IO_PENDING}  -> return Mgr.CbPending
+          | err == #{const ERROR_HANDLE_EOF}  -> return Mgr.CbDone
+          | not ret                           -> return (Mgr.CbError err)
+          | otherwise                         -> return (Mgr.CbError err)
 
     completionCB err dwBytes
       | err == #{const ERROR_SUCCESS}      = Mgr.ioSuccess $ fromIntegral dwBytes

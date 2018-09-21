@@ -115,15 +115,16 @@ getQueuedCompletionStatusEx iocp arr timeout =
             debugIO $ "-- call getQueuedCompletionStatusEx "
             -- don't block the call if the rts is not supporting threads.
             -- this would block the entire program.
+            let alertable = False -- not rtsSupportsBoundThreads
             ok <- c_GetQueuedCompletionStatusEx iocp oes (fromIntegral cap)
-                  num_removed_ptr timeout (not rtsSupportsBoundThreads)
+                  num_removed_ptr timeout alertable
             debugIO $ "-- call getQueuedCompletionStatusEx: " ++ show ok
             err <- getLastError
             nc <- (peek num_removed_ptr)
             debugIO $ "-- getQueuedCompletionStatusEx: n=" ++ show nc ++ " ,err=" ++ show err
             if ok then fromIntegral `fmap` peek num_removed_ptr
             else do debugIO $ "failed getQueuedCompletionStatusEx: " ++ show err
-                    if err == #{const WAIT_TIMEOUT} then return 0
+                    if err == #{const WAIT_TIMEOUT} || alertable then return 0
                     else failWith "GetQueuedCompletionStatusEx" err
 
 overlappedIOStatus :: LPOVERLAPPED -> IO ErrCode

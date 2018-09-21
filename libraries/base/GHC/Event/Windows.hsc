@@ -61,6 +61,7 @@ module GHC.Event.Windows (
 
 ##include "windows_cconv.h"
 #include <windows.h>
+#include <ntstatus.h>
 
 import GHC.Event.Windows.Clock   (Clock, Seconds, getClock, getTime)
 import GHC.Event.Windows.FFI     (OVERLAPPED, LPOVERLAPPED, OVERLAPPED_ENTRY(..))
@@ -341,7 +342,7 @@ getErrorCode :: IO ErrCode
 getErrorCode = do
     err <- getLastError
     -- See Note [RTS Scheduler error propagation]
-    when (err /= 0) $ FFI.setLastError 0
+    -- when (err /= 0) $ FFI.setLastError 0
     return err
 
 -- | Start an overlapped I/O operation, and wait for its completion.  If
@@ -378,17 +379,32 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
                         (CbError `fmap` Win32.getLastError) >>= \result -> do
           case result of
             CbPending   -> do
-              _ <- withMVar (callbackTableVar mgr) $ \tbl ->
-                      IT.insertWith (flip const) (lpoverlappedToInt lpol)
-                                    (CompletionData fptr h completionCB') tbl
-              reqs <- addRequest
-              debugIO $ "+1.. " ++ show reqs ++ " requests queued. | " ++ show lpol
-              wakeupIOManager
-            CbError err -> signalThrow (Just err)
-            CbDone      -> debugIO "request handled immediately, not queued."
-          return result
+              -- | Before we enqueue check to see if operation finished in the
+              -- mean time, since called may not have done this.
+              finished <- FFI.getOverlappedResult h lpol False
+              debugIO $ "== " ++ show (finished)
+              status <- FFI.overlappedIOStatus lpol
+              debugIO $ "== >< " ++ show (status)
+              let done_early =  status == #{const ERROR_SUCCESS}
+                             || status == #{const STATUS_END_OF_FILE}
+              case (finished, done_early) of
+                (Nothing, False) -> do
+                    _ <- withMVar (callbackTableVar mgr) $ \tbl ->
+                            IT.insertWith (flip const) (lpoverlappedToInt lpol)
+                                          (CompletionData fptr h completionCB') tbl
+                    reqs <- addRequest
+                    debugIO $ "+1.. " ++ show reqs ++ " requests queued. | " ++ show lpol
+                    wakeupIOManager
+                    return result
+                _ -> do debugIO "request handled immediately, not queued."
+                        return CbDone
+            CbError err -> signalThrow (Just err) >> return result
+            CbDone      -> debugIO "request handled immediately, not queued." >> return result
 
         let cancel = do uninterruptibleMask_ $ FFI.cancelIoEx h lpol
+                        -- we need to wait for the cancellation before removing
+                        -- the pointer.
+                        FFI.getOverlappedResult h lpol True
                         withMVar (callbackTableVar mgr) $ \tbl ->
                           IT.delete (lpoverlappedToInt lpol) tbl
                         reqs <- removeRequest
@@ -405,8 +421,6 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
         case execute of
           CbPending   -> runner
           CbDone      -> do
-            -- It's safe to block here since the operation completed it will
-            -- return immediately.
             bytes <- FFI.getOverlappedResult h lpol True
             case bytes of
               Just res -> completionCB 0 res
@@ -613,6 +627,9 @@ step maxDelay mgr@Manager{..} = do
             Just (CompletionData _fptr _hwnd cb) -> do
               reqs <- removeRequest
               debugIO $ "-1.. " ++ show reqs ++ " requests queued."
+              -- It's safe to block here since the operation completed it will
+              -- return immediately in most cases.
+              -- _ <- FFI.getOverlappedResult _hwnd (lpOverlapped oe) True
               status <- FFI.overlappedIOStatus (lpOverlapped oe)
               cb status (dwNumberOfBytesTransferred oe)
 
@@ -634,7 +651,7 @@ step maxDelay mgr@Manager{..} = do
     debugIO $ "outstanding requests: " ++ show reqs
     let more = reqs > 0
     debugIO $ "has more: " ++ show more ++ " - removed: " ++  show n
-    return (more || isJust delay, delay)
+    return (more || (isJust delay && threaded), delay)
 
 io_mngr_loop :: HANDLE -> Manager -> IO ()
 io_mngr_loop event mgr = go False
