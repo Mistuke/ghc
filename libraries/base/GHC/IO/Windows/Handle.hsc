@@ -413,7 +413,9 @@ type LPSECURITY_ATTRIBUTES = LPVOID
 -- Reading and Writing
 
 -- For this to actually block, the file handle must have
--- been created with FILE_FLAG_OVERLAPPED not set.
+-- been created with FILE_FLAG_OVERLAPPED not set. As an implementation note I
+-- choosing never to let this block. But this can be easily accomplished by
+-- a getOverlappedResult call with True
 hwndRead :: Io NativeHandle -> Ptr Word8 -> Word64 -> Int -> IO Int
 hwndRead hwnd ptr offset bytes
   = fmap fromIntegral $ Mgr.withException "hwndRead" $
@@ -423,20 +425,7 @@ hwndRead hwnd ptr offset bytes
       debugIO ":: hwndRead"
       ret <- c_ReadFile (toHANDLE hwnd) (castPtr outBuf)
                         (fromIntegral bytes) nullPtr lpOverlapped
-      err <- getErrorCode
-      let err' = fromIntegral err
-
-      case () of
-        _ | err == #{const ERROR_IO_PENDING} -> return Mgr.CbPending
-          | err == #{const ERROR_HANDLE_EOF} -> return Mgr.CbDone
-          | not ret                          -> return (Mgr.CbError err')
-          | otherwise -> do
-              success <- overlappedIOStatus lpOverlapped
-          -- Check to see if the operation was completed on a
-          -- non-overlapping handle. e.g. stdio redirection or similar.
-              if success == #{const ERROR_SUCCESS}
-                  then return Mgr.CbDone
-                  else return (Mgr.CbError err')
+      return $ Mgr.CbNone ret
 
     completionCB err dwBytes
       | err == #{const ERROR_SUCCESS}      = Mgr.ioSuccess $ fromIntegral dwBytes
@@ -459,19 +448,7 @@ hwndReadNonBlocking hwnd ptr offset bytes
       debugIO ":: hwndReadNonBlocking"
       ret <- c_ReadFile (toHANDLE hwnd) (castPtr inputBuf)
                         (fromIntegral bytes) nullPtr lpOverlapped
-      err <- fmap fromIntegral getErrorCode
-
-      -- Check to see if the operation was completed on a
-      -- non-overlapping handle. e.g. stdio redirection or similar.
-      success <- overlappedIOStatus lpOverlapped
-
-      case () of
-        _ | success == #{const ERROR_SUCCESS} -> return Mgr.CbDone
-          | success == #{const STATUS_END_OF_FILE} -> return Mgr.CbDone
-          | err == #{const ERROR_IO_PENDING}  -> return Mgr.CbPending
-          | err == #{const ERROR_HANDLE_EOF}  -> return Mgr.CbDone
-          | not ret                           -> return (Mgr.CbError err)
-          | otherwise                         -> return (Mgr.CbError err)
+      return $ Mgr.CbNone ret
 
     completionCB err dwBytes
       | err == #{const ERROR_SUCCESS}      = Mgr.ioSuccess $ fromIntegral dwBytes
@@ -490,13 +467,7 @@ hwndWrite hwnd ptr offset bytes
       debugIO ":: hwndWrite"
       ret <- c_WriteFile (toHANDLE hwnd) (castPtr outBuf)
                          (fromIntegral bytes) nullPtr lpOverlapped
-      err <- fmap fromIntegral getErrorCode
-
-      case () of
-        _ | err == #{const ERROR_SUCCESS}    -> return Mgr.CbDone
-          | ret                              -> return Mgr.CbPending
-          | err == #{const ERROR_IO_PENDING} -> return Mgr.CbPending
-          | otherwise                        -> return (Mgr.CbError err)
+      return $ Mgr.CbNone ret
 
     completionCB err dwBytes
         | err == #{const ERROR_SUCCESS}  =   Mgr.ioSuccess $ fromIntegral dwBytes
@@ -513,13 +484,7 @@ hwndWriteNonBlocking hwnd ptr offset bytes
       debugIO ":: hwndWriteNonBlocking"
       ret <- c_WriteFile (toHANDLE hwnd) (castPtr outBuf)
                          (fromIntegral bytes) nullPtr lpOverlapped
-      err <- fmap fromIntegral getErrorCode
-
-      case () of
-        _ | err == #{const ERROR_SUCCESS}    -> return Mgr.CbDone
-          | ret                              -> return Mgr.CbPending
-          | err == #{const ERROR_IO_PENDING} -> return Mgr.CbPending
-          | otherwise                        -> return (Mgr.CbError err)
+      return $ Mgr.CbNone ret
 
     completionCB err dwBytes
         | err == #{const ERROR_SUCCESS}    = Mgr.ioSuccess $ fromIntegral dwBytes

@@ -228,20 +228,7 @@ lockImplWinIO h ctx mode block = do
       startCB wh lpOverlapped = do
         ret <- c_LockFileEx wh flags 0 #{const INFINITE} #{const INFINITE}
                             lpOverlapped
-
-        err <- Mgr.getErrorCode
-        let err' = fromIntegral err
-        do case () of
-            _ | err == #{const ERROR_IO_PENDING} -> return Mgr.CbPending
-              | ret                              -> return Mgr.CbDone
-              | err == #{const ERROR_SUCCESS}    -> do
-                  success <- overlappedIOStatus lpOverlapped
-                  -- Check to see if the operation was completed on a
-                  -- non-overlapping handle.
-                  if success == #{const ERROR_SUCCESS}
-                    then return Mgr.CbDone
-                    else return $ Mgr.CbError err'
-              | otherwise -> return $ Mgr.CbError err'
+        return $ Mgr.CbNone ret
 
       completionCB err dwBytes
         | err == #{const ERROR_SUCCESS} = Mgr.ioSuccess 0
@@ -286,20 +273,7 @@ unlockImplWinIO h = do
       startCB wh lpOverlapped = do
         ret <- c_UnlockFileEx wh 0 #{const INFINITE} #{const INFINITE}
                               lpOverlapped
-
-        err <- Mgr.getErrorCode
-        let err' = fromIntegral err
-        do case () of
-            _ | err == #{const ERROR_IO_PENDING} -> return Mgr.CbPending
-              | ret                              -> return Mgr.CbDone
-              | err == #{const ERROR_SUCCESS}    -> do
-                  success <- overlappedIOStatus lpOverlapped
-                  -- Check to see if the operation was completed on a
-                  -- non-overlapping handle.
-                  if success == #{const ERROR_SUCCESS}
-                    then return Mgr.CbDone
-                    else return $ Mgr.CbError err'
-              | otherwise -> return $ Mgr.CbError err'
+        return $ Mgr.CbNone ret
 
       completionCB err dwBytes
         | err == #{const ERROR_SUCCESS} = Mgr.ioSuccess 0

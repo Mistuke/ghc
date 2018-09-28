@@ -296,9 +296,11 @@ type StartIOCallback a = StartCallback (CbResult a)
 
 -- | CallBack result type to disambiguate between the different states
 -- an I/O Completion call could be in.
-data CbResult a = CbDone    -- ^ Request was handled immediately, no queue.
-                | CbPending -- ^ Queued and handled by I/O manager
-                | CbError a -- ^ I/O request abort, return failure immediately
+data CbResult a = CbDone (Maybe DWORD) -- ^ Request was handled immediately, no queue.
+                | CbPending            -- ^ Queued and handled by I/O manager
+                | CbError a            -- ^ I/O request abort, return failure immediately
+                | CbNone Bool          -- ^ The caller did not do any checking, the I/O
+                                       --   manager will perform additional checks.
 
 -- | Called when the completion is delivered.
 type CompletionCallback a = ErrCode   -- ^ 0 indicates success
@@ -377,7 +379,26 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
 
         execute <- startCB lpol `onException`
                         (CbError `fmap` Win32.getLastError) >>= \result -> do
-          case result of
+          -- Check to see if the operation was completed on a
+          -- non-overlapping handle or was completed immediately.
+          -- e.g. stdio redirection or data in cache, FAST I/O.
+          success <- FFI.overlappedIOStatus lpol
+          err     <- fmap fromIntegral getErrorCode
+          -- Determine if the caller has done any checking.  If not then check
+          -- to see if the request was completed on synchronously.  We have to
+          -- in order to prevent deadlocks as if it has completed synchronously
+          -- the completion wouldn't have been queued.
+          let result' =
+                case result of
+                  CbNone ret | success == #{const ERROR_SUCCESS}      -> CbDone Nothing
+                             | success == #{const STATUS_END_OF_FILE} -> CbDone Nothing
+                             | err     == #{const ERROR_IO_PENDING}   -> CbPending
+                             | err     == #{const ERROR_HANDLE_EOF}   -> CbDone Nothing
+                             | not ret                                -> CbError err
+                             | otherwise                              -> CbPending
+                  _                                                   -> result
+          case result' of
+            CbNone    _ -> error "shouldn't happen."
             CbPending   -> do
               -- | Before we enqueue check to see if operation finished in the
               -- mean time, since called may not have done this.
@@ -389,24 +410,25 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
                              || status == #{const STATUS_END_OF_FILE}
               case (finished, done_early) of
                 (Nothing, False) -> do
-                    _ <- withMVar (callbackTableVar mgr) $ \tbl ->
+                    _ <- withMVar (callbackTableVar mgr) $
                             IT.insertWith (flip const) (lpoverlappedToInt lpol)
-                                          (CompletionData fptr h completionCB') tbl
+                                          (CompletionData fptr h completionCB')
                     reqs <- addRequest
                     debugIO $ "+1.. " ++ show reqs ++ " requests queued. | " ++ show lpol
                     wakeupIOManager
-                    return result
-                _ -> do debugIO "request handled immediately, not queued."
-                        return CbDone
-            CbError err -> signalThrow (Just err) >> return result
-            CbDone      -> debugIO "request handled immediately, not queued." >> return result
+                    return result'
+                _                -> do
+                  debugIO "request handled immediately (o/b), not queued."
+                  return $ CbDone Nothing
+            CbError err -> signalThrow (Just err) >> return result'
+            CbDone  _   -> debugIO "request handled immediately (o), not queued." >> return result'
 
         let cancel = do uninterruptibleMask_ $ FFI.cancelIoEx h lpol
                         -- we need to wait for the cancellation before removing
                         -- the pointer.
                         FFI.getOverlappedResult h lpol True
-                        withMVar (callbackTableVar mgr) $ \tbl ->
-                          IT.delete (lpoverlappedToInt lpol) tbl
+                        withMVar (callbackTableVar mgr) $
+                          IT.delete (lpoverlappedToInt lpol)
                         reqs <- removeRequest
                         debugIO $ "-1.. " ++ show reqs ++ " requests queued after error."
         let runner = do debugIO $ (dbg ":: waiting ") ++ " | "  ++ show lpol
@@ -419,15 +441,19 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
         -- Sometimes we shouldn't bother with the I/O manager as the call has
         -- failed or is done.
         case execute of
-          CbPending   -> runner
-          CbDone      -> do
-            bytes <- FFI.getOverlappedResult h lpol True
+          CbPending    -> runner
+          CbDone rdata -> do
+            debugIO $ dbg $ ":: done " ++ show lpol ++ " - " ++ show rdata
+            bytes <- if isJust rdata
+                        then return rdata
+                        else FFI.getOverlappedResult h lpol False
             case bytes of
               Just res -> completionCB 0 res
               Nothing  -> do err <- FFI.overlappedIOStatus lpol
                              completionCB err 0
-          CbError err -> do let err' = fromIntegral err
-                            completionCB err' 0
+          CbError err  -> do let err' = fromIntegral err
+                             completionCB err' 0
+          _            -> do error "unexpected case in `execute'"
 
 -- This will block the current haskell thread
 -- but will allow you to cancel the operation from
