@@ -427,7 +427,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
             CbNone    _ -> error "shouldn't happen."
             CbPending   -> do
               -- | Before we enqueue check to see if operation finished in the
-              -- mean time, since called may not have done this.
+              -- mean time, since caller may not have done this.
               finished <- FFI.getOverlappedResult h lpol False
               debugIO $ "== " ++ show (finished)
               status <- FFI.overlappedIOStatus lpol
@@ -701,7 +701,8 @@ io_mngr_loop event mgr = go False
              case () of
                _ | exit -> do setStatus WinIODone
                               debugIO "I/O manager shutting down."
-               _ | not threaded -> debugIO "I/O manager single threaded halt."
+               _ | not threaded -> do setStatus WinIOBlocked
+                                      debugIO "I/O manager single threaded halt."
                _ | isJust delay -> go False
                -- We seem to have more work but no ETA for it.
                -- So just retry until we run out of work.

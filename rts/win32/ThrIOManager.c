@@ -16,12 +16,6 @@
 // Here's the Event that we use to wake up the IO manager thread
 static HANDLE io_manager_event = INVALID_HANDLE_VALUE;
 
-// must agree with values in GHC.Conc:
-#define IO_MANAGER_WAKEUP 0xffffffff
-#define IO_MANAGER_DIE    0xfffffffe
-// spurious wakeups are returned as zero.
-// console events are ((event<<1) | 1)
-
 #define EVENT_BUFSIZ 256
 Mutex event_buf_mutex;
 StgWord32 event_buf[EVENT_BUFSIZ];

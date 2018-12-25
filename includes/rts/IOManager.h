@@ -15,6 +15,12 @@
 
 #if defined(mingw32_HOST_OS)
 
+/* must agree with values in GHC.Conc:.  */
+#define IO_MANAGER_WAKEUP 0xffffffff
+#define IO_MANAGER_DIE    0xfffffffe
+/* spurious wakeups are returned as zero.  */
+/* console events are ((event<<1) | 1).  */
+
 int  rts_InstallConsoleEvent ( int action, StgStablePtr *handler );
 void rts_ConsoleHandlerDone  ( int ev );
 extern StgInt console_handler;
