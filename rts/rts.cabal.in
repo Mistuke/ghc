@@ -338,6 +338,13 @@ library
          -- This symbol is useful in gdb, but not referred to anywhere,
          -- so we need to force it to be included in the binary.
          "-Wl,-u,findPtr"
+    if os(windows)
+      if flag(leading-underscore)
+        ld-options:
+           "-Wl,-u,_base_GHCziEventziWindows_processRemoteCompletion_closure"
+      else
+        ld-options:
+           "-Wl,-u,base_GHCziEventziWindows_processRemoteCompletion_closure"
 
     if os(osx)
       ld-options: "-Wl,-search_paths_first"

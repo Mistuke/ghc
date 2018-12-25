@@ -12,6 +12,11 @@
 
 #include "Rts.h"
 #include <stdbool.h>
+#include <windows.h>
 
-extern bool  startupAsyncWinIO(void);
+extern bool startupAsyncWinIO(void);
 extern void shutdownAsyncWinIO(bool wait_threads);
+extern void registerNewIOCPHandle (HANDLE port);
+extern void registerAlertableWait (HANDLE port, DWORD mssec);
+
+extern OVERLAPPED_ENTRY* getOverlappedEntries (uint32_t *num);

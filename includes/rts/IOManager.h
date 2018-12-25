@@ -37,7 +37,7 @@ void     setIOManagerWakeupFd   (int fd);
 // Win32 implementation in win32/ThrIOManager.c
 //
 void ioManagerWakeup (void);
-#if defined(THREADED_RTS)
+#if defined(THREADED_RTS) || defined(mingw32_HOST_OS)
 void ioManagerDie (void);
 void ioManagerStart (void);
 #endif

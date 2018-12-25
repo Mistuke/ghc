@@ -282,6 +282,8 @@ hs_init_ghc(int *argc, char **argv[], RtsConfig rts_config)
 #if !defined(mingw32_HOST_OS)
     getStablePtr((StgPtr)blockedOnBadFD_closure);
     getStablePtr((StgPtr)runHandlersPtr_closure);
+#else
+    getStablePtr((StgPtr)processRemoteCompletion_closure);
 #endif
 
     // Initialize the top-level handler system

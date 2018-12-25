@@ -26,6 +26,7 @@ module GHC.Event.Windows (
     getSystemManager,
     interruptSystemManager,
     wakeupIOManager,
+    processRemoteCompletion,
 
     -- * Overlapped I/O
     associateHandle,
@@ -128,6 +129,15 @@ ioManagerThread = unsafePerformIO $ do
 foreign import ccall unsafe "getOrSetGHCConcWindowsIOManagerThreadStore"
     getOrSetGHCConcWindowsIOManagerThreadStore :: Ptr a -> IO (Ptr a)
 
+foreign import ccall safe "registerNewIOCPHandle"
+    registerNewIOCPHandle :: FFI.IOCP -> IO ()
+
+foreign import ccall safe "registerAlertableWait"
+    registerAlertableWait :: FFI.IOCP -> DWORD -> IO ()
+
+foreign import ccall safe "getOverlappedEntries"
+    getOverlappedEntries :: Ptr DWORD -> IO (Ptr OVERLAPPED_ENTRY)
+
 ------------------------------------------------------------------------
 -- Manager
 
@@ -172,6 +182,8 @@ new :: IO Manager
 new = do
     debugIO "Starting io-manager..."
     mgrIOCP         <- FFI.newIOCP
+    when (not threaded) $
+      registerNewIOCPHandle mgrIOCP
     debugIO $ "iocp: " ++ show mgrIOCP
     mgrClock        <- getClock
     mgrUniqueSource <- newSource
@@ -249,29 +261,23 @@ removeRequest = modifyMVar requests (\x -> return (x - 1, x - 1))
 outstandingRequests :: IO Word64
 outstandingRequests = withMVar requests return
 
-getSystemManager :: IO (Maybe Manager)
+getSystemManager :: IO Manager
 getSystemManager = readMVar managerRef
 
-managerRef :: MVar (Maybe Manager)
-managerRef = unsafePerformIO $
-  if threaded
-     then new >>= newMVar . Just
-     else new >>= newMVar . Just -- newIORef Nothing
+managerRef :: MVar Manager
+managerRef = unsafePerformIO $ new >>= newMVar
 {-# NOINLINE managerRef #-}
 
 interruptSystemManager :: IO ()
 interruptSystemManager = do
   mgr <- getSystemManager
   status <- getStatus
-  case mgr of
-    Nothing -> return ()
-    Just mgr' -> do
-      when (status /= WinIORunning) $
-            do debugIO "interrupt received.."
-               FFI.postQueuedCompletionStatus (mgrIOCP mgr') 0 0 nullPtr
-      when (status == WinIODone) $
-            do debugIO $  "I/O manager is dead. You need to revive it first. "
-                       ++ "Try wakeupIOManager instead."
+  when (status /= WinIORunning) $
+        do debugIO "interrupt received.."
+           FFI.postQueuedCompletionStatus (mgrIOCP mgr) 0 0 nullPtr
+  when (status == WinIODone) $
+        do debugIO $  "I/O manager is dead. You need to revive it first. "
+                   ++ "Try wakeupIOManager instead."
 
 
 -- must be power of 2
@@ -329,7 +335,7 @@ type CompletionCallback a = ErrCode   -- ^ 0 indicates success
 associateHandle' :: HANDLE -> IO ()
 associateHandle' hwnd
   = do mngr <- getSystemManager
-       maybe (return ()) (flip associateHandle hwnd) mngr
+       associateHandle mngr hwnd
 
 -- | Associate a 'HANDLE' with the I/O manager's completion port.  This must be
 -- done before using the handle with 'withOverlapped'.
@@ -373,15 +379,15 @@ getErrorCode = do
 -- 'withOverlapped' waits for a completion to arrive before returning or
 -- throwing an exception.  This means you can use functions like
 -- 'Foreign.Marshal.Alloc.alloca' to allocate buffers for the operation.
-withOverlappedThreaded_ :: Manager
-                        -> String
-                        -> HANDLE
-                        -> Word64 -- ^ Value to use for the @OVERLAPPED@
-                                  --   structure's Offset/OffsetHigh members.
-                        -> StartIOCallback Int
-                        -> CompletionCallback (IOResult a)
-                        -> IO (IOResult a)
-withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
+withOverlappedEx :: Manager
+                 -> String
+                 -> HANDLE
+                 -> Word64 -- ^ Value to use for the @OVERLAPPED@
+                           --   structure's Offset/OffsetHigh members.
+                 -> StartIOCallback Int
+                 -> CompletionCallback (IOResult a)
+                 -> IO (IOResult a)
+withOverlappedEx mgr fname h offset startCB completionCB = do
     signal <- newEmptyMVar :: IO (MVar (IOResult a))
     let dbg s = s ++ " (" ++ show h ++ ":" ++ show offset ++ ")"
     let signalReturn a = failIfFalse_ (dbg "signalReturn") $
@@ -409,13 +415,14 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
           -- the completion wouldn't have been queued.
           let result' =
                 case result of
-                  CbNone ret | success == #{const ERROR_SUCCESS}      -> CbDone Nothing
-                             | success == #{const STATUS_END_OF_FILE} -> CbDone Nothing
-                             | err     == #{const ERROR_IO_PENDING}   -> CbPending
-                             | err     == #{const ERROR_HANDLE_EOF}   -> CbDone Nothing
-                             | not ret                                -> CbError err
-                             | otherwise                              -> CbPending
-                  _                                                   -> result
+                  CbNone ret | success == #{const ERROR_SUCCESS}       -> CbDone Nothing
+                             | success == #{const STATUS_END_OF_FILE}  -> CbDone Nothing
+                             | err     == #{const ERROR_IO_PENDING}    -> CbPending
+                             | err     == #{const ERROR_IO_INCOMPLETE} -> CbPending
+                             | err     == #{const ERROR_HANDLE_EOF}    -> CbDone Nothing
+                             | not ret                                 -> CbError err
+                             | otherwise                               -> CbPending
+                  _                                                    -> result
           case result' of
             CbNone    _ -> error "shouldn't happen."
             CbPending   -> do
@@ -427,6 +434,8 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
               debugIO $ "== >< " ++ show (status)
               let done_early =  status == #{const ERROR_SUCCESS}
                              || status == #{const STATUS_END_OF_FILE}
+
+              debugIO $ "== >*< " ++ show (finished, done_early)
               case (finished, done_early) of
                 (Nothing, False) -> do
                     _ <- withMVar (callbackTableVar mgr) $
@@ -442,7 +451,10 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
             CbError err -> signalThrow (Just err) >> return result'
             CbDone  _   -> debugIO "request handled immediately (o), not queued." >> return result'
 
-        let cancel = do uninterruptibleMask_ $ FFI.cancelIoEx h lpol
+        let cancel e = do
+                        debugIO $ "## Exception occurred. Cancelling request... "
+                        debugIO $ show (e :: SomeException)
+                        uninterruptibleMask_ $ FFI.cancelIoEx h lpol
                         -- we need to wait for the cancellation before removing
                         -- the pointer.
                         FFI.getOverlappedResult h lpol True
@@ -450,8 +462,9 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
                           IT.delete (lpoverlappedToInt lpol)
                         reqs <- removeRequest
                         debugIO $ "-1.. " ++ show reqs ++ " requests queued after error."
+                        return $ IOFailed Nothing
         let runner = do debugIO $ (dbg ":: waiting ") ++ " | "  ++ show lpol
-                        res <- takeMVar signal `onException` cancel
+                        res <- takeMVar signal `catch` cancel
                         debugIO $ dbg ":: signaled "
                         case res of
                           IOFailed err -> FFI.throwWinErr fname (maybe 0 fromIntegral err)
@@ -474,39 +487,6 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
                              completionCB err' 0
           _            -> do error "unexpected case in `execute'"
 
--- This will block the current haskell thread
--- but will allow you to cancel the operation from
--- another haskell thread since they are on the same
--- OS thread.
-withOverlappedNonThreaded_ :: String
-                           -> HANDLE
-                           -> Word64 -- ^ Value to use for the @OVERLAPPED@
-                                     --   structure's Offset/OffsetHigh members.
-                           -> StartIOCallback Int
-                           -> CompletionCallback (IOResult a)
-                           -> IO (IOResult a)
-withOverlappedNonThreaded_ _fname h offset startCB completionCB = do
-    let signalReturn a = return $ IOSuccess a
-        signalThrow ex = return $ IOFailed ex
-    mask_ $ do
-        let completionCB' e b = completionCB e b >>= \result ->
-                                  case result of
-                                    IOSuccess val -> signalReturn val
-                                    IOFailed  err -> signalThrow err
-        fptr <- FFI.allocOverlapped offset
-        let lpol = unsafeForeignPtrToPtr fptr
-
-        startCB lpol `onException`
-            (Just `fmap` Win32.getLastError) >>= \result ->
-          case result of
-            CbError err -> signalThrow $ Just err
-            _           -> do
-              bytes <- FFI.getOverlappedResult h lpol True
-              case bytes of
-                Just num_bytes -> completionCB' 0 num_bytes
-                Nothing        -> do err <- FFI.overlappedIOStatus lpol
-                                     completionCB' err 0
-
 -- Safe version of function
 withOverlapped :: String
                -> HANDLE
@@ -517,26 +497,7 @@ withOverlapped :: String
                -> IO (IOResult a)
 withOverlapped fname h offset startCB completionCB = do
   mngr <- getSystemManager
-  case mngr of
-    Nothing    ->
-      withOverlappedNonThreaded_    fname h offset startCB completionCB
-    Just mngr' ->
-      withOverlappedThreaded_ mngr' fname h offset startCB completionCB
-
-withOverlappedEx :: Maybe Manager
-                 -> String
-                 -> HANDLE
-                 -> Word64 -- ^ Value to use for the @OVERLAPPED@
-                           --   structure's Offset/OffsetHigh members.
-                 -> StartIOCallback Int
-                 -> CompletionCallback (IOResult a)
-                 -> IO (IOResult a)
-withOverlappedEx mngr fname h offset startCB completionCB = do
-  case mngr of
-    Nothing    ->
-      withOverlappedNonThreaded_    fname h offset startCB completionCB
-    Just mngr' ->
-      withOverlappedThreaded_ mngr' fname h offset startCB completionCB
+  withOverlappedEx mngr fname h offset startCB completionCB
 
 ------------------------------------------------------------------------
 -- I/O Utilities
@@ -655,8 +616,14 @@ step maxDelay mgr@Manager{..} = do
                              debugIO "I/O manager pausing."
       (True , Nothing) -> do setStatus WinIOBlocked
                              debugIO "I/O manager deep sleep."
-    n <- FFI.getQueuedCompletionStatusEx mgrIOCP mgrOverlappedEntries timer
+    n <- if threaded
+            then FFI.getQueuedCompletionStatusEx mgrIOCP mgrOverlappedEntries timer
+            else registerAlertableWait mgrIOCP timer >> return 0
     setStatus WinIORunning
+    processCompletion mgr n delay
+
+processCompletion :: Manager -> Int -> Maybe Seconds -> IO (Bool, Maybe Seconds)
+processCompletion mgr@Manager{..} n delay = do
     debugIO $ "completed completions: " ++ show n
 
     -- If some completions are done, we need to process them and call their
@@ -678,13 +645,13 @@ step maxDelay mgr@Manager{..} = do
               status <- FFI.overlappedIOStatus (lpOverlapped oe)
               cb status (dwNumberOfBytesTransferred oe)
 
-      -- clear the array so we don't erronously interpret the output, in
+      -- clear the array so we don't erroneously interpret the output, in
       -- certain circumstances like lockFileEx the code could return 1 entry
       -- removed but the file data not been filled in.
       -- TODO: Maybe not needed..
       A.clear mgrOverlappedEntries
 
-      -- Check to see if we received the maximum amount of entried we could
+      -- Check to see if we received the maximum amount of entries we could
       -- this likely indicates a high number of I/O requests have been queued.
       -- In which case we should process more at a time.
       cap <- A.capacity mgrOverlappedEntries
@@ -697,6 +664,19 @@ step maxDelay mgr@Manager{..} = do
     let more = reqs > 0
     debugIO $ "has more: " ++ show more ++ " - removed: " ++  show n
     return (more || (isJust delay && threaded), delay)
+
+processRemoteCompletion :: IO ()
+processRemoteCompletion = do
+  alloca $ \ptr_n -> do
+    debugIO "processRemoteCompletion :: start ()"
+    entries <- getOverlappedEntries ptr_n
+    n <- fromIntegral `fmap` peek ptr_n
+    completed <- peekArray n entries
+    mngr <- getSystemManager
+    let arr = mgrOverlappedEntries mngr
+    A.unsafeSplat arr entries n
+    _ <- processCompletion mngr n Nothing
+    return ()
 
 io_mngr_loop :: HANDLE -> Manager -> IO ()
 io_mngr_loop event mgr = go False
@@ -721,6 +701,7 @@ io_mngr_loop event mgr = go False
              case () of
                _ | exit -> do setStatus WinIODone
                               debugIO "I/O manager shutting down."
+               _ | not threaded -> debugIO "I/O manager single threaded halt."
                _ | isJust delay -> go False
                -- We seem to have more work but no ETA for it.
                -- So just retry until we run out of work.
@@ -740,9 +721,7 @@ wakeupIOManager
        when (status /= WinIORunning) $ do
          event <- c_getIOManagerEvent
          debugIO "waking up I/O manager."
-         case mngr of
-           Nothing  -> error "cannot happen."
-           Just mgr -> startIOManagerThread (io_mngr_loop event mgr)
+         startIOManagerThread (io_mngr_loop event mngr)
 
 foreign import ccall unsafe "getIOManagerEvent" -- in the RTS (ThrIOManager.c)
   c_getIOManagerEvent :: IO HANDLE

@@ -25,7 +25,7 @@ interruptIOManager = interruptSystemManager
 threadDelay :: Int -> IO ()
 threadDelay usecs = mask_ $ do
     m <- newEmptyMVar
-    Just mgr <- getSystemManager
+    mgr <- getSystemManager
     reg <- registerTimeout mgr secs $ putMVar m ()
     takeMVar m `onException` unregisterTimeout mgr reg
   where
@@ -34,7 +34,7 @@ threadDelay usecs = mask_ $ do
 registerDelay :: Int -> IO (TVar Bool)
 registerDelay usecs = do
     t <- newTVarIO False
-    Just mgr <- getSystemManager
+    mgr <- getSystemManager
     _ <- registerTimeout mgr secs $ atomically $ writeTVar t True
     return t
   where
