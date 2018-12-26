@@ -27,6 +27,7 @@ module GHC.Event.Windows.FFI (
 
     -- * Cancel pending I/O
     cancelIoEx,
+    cancelIoEx',
 
     -- * Monotonic time
 
@@ -214,13 +215,16 @@ pokeOffsetOverlapped lpol offset = do
 
 -- | CancelIo shouldn't block, but cancellation happens infrequently,
 -- so we might as well be on the safe side.
-foreign import WINDOWS_CCONV safe "windows.h CancelIoEx"
+foreign import WINDOWS_CCONV unsafe "windows.h CancelIoEx"
     c_CancelIoEx :: HANDLE -> LPOVERLAPPED -> IO BOOL
 
 -- | Cancel all pending overlapped I/O for the given file that was initiated by
 -- the current OS thread.
 cancelIoEx :: HANDLE -> LPOVERLAPPED -> IO ()
 cancelIoEx h o = failIfFalse_ "CancelIoEx" . c_CancelIoEx h $ o
+
+cancelIoEx' :: HANDLE -> LPOVERLAPPED -> IO Bool
+cancelIoEx' = c_CancelIoEx
 
 ------------------------------------------------------------------------
 -- Monotonic time

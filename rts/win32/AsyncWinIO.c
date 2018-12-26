@@ -13,6 +13,7 @@
 #include "AsyncWinIO.h"
 #include "Prelude.h"
 #include "Capability.h"
+#include "Schedule.h"
 
 #include <stdbool.h>
 #include <windows.h>
@@ -23,6 +24,8 @@ static HANDLE completionPortHandle = INVALID_HANDLE_VALUE;
 uint64_t outstanding_requests = 0;
 uint64_t completed_requests = 0;
 bool running = false;
+bool outstanding_service_requests = false;
+bool queue_full = false;
 DWORD timeout = INFINITE;
 DWORD WINAPI runner (LPVOID lpParam);
 HANDLE workerThread = NULL;
@@ -91,29 +94,29 @@ void registerNewIOCPHandle (HANDLE port)
 
   ReleaseSRWLockExclusive (&lock);
 }
-void registerAlertableWait (HANDLE port, DWORD mssec)
+void registerAlertableWait (HANDLE port, DWORD mssec, uint64_t num_req)
 {
-  fprintf (stderr, "$ registerAlertableWait: %p (%ld)\n", port, mssec);
+  fprintf (stderr, "$ registerAlertableWait: %p (%ld) %lld\n", port, mssec, num_req);
   bool interrupt = false;
   bool wakeup = false;
   AcquireSRWLockExclusive (&lock);
 
-  outstanding_requests++;
+  /* Decide if we may have to wake up the I/O manager.  */
+  wakeup = outstanding_requests == 0; // && num_req > 0;
+
+  outstanding_requests = num_req;
   if (timeout > mssec)
     {
       timeout = mssec;
       interrupt = outstanding_requests > 1;
     }
 
-  /* Decide if we may have to wake up the I/O manager.  */
-  wakeup = outstanding_requests == 1;
-
   ReleaseSRWLockExclusive (&lock);
 
-  if (interrupt)
-    PostQueuedCompletionStatus (port, 0, 0, NULL);
   if (wakeup)
     WakeConditionVariable (&wakeEvent);
+  else if (interrupt)
+    PostQueuedCompletionStatus (port, 0, 0, NULL);
 }
 
 OVERLAPPED_ENTRY* getOverlappedEntries (uint32_t *num)
@@ -130,11 +133,40 @@ static void notifyRtsOfFinishedCall (uint32_t num)
   Capability *cap = &MainCapability;
   StgTSO * tso = createStrictIOThread (cap, RtsFlags.GcFlags.initialStkSize,
                                        processRemoteCompletion_closure);
+  AcquireSRWLockExclusive (&lock);
+  outstanding_service_requests = true;
+  ReleaseSRWLockExclusive (&lock);
+
   scheduleThread (cap, tso);
 #endif
   fprintf (stderr, "$ rts notified of %d completions.\n", num);
 }
 
+void servicedIOEntries (uint64_t remaining)
+{
+  fprintf (stderr, "$ runner:servicedIOEntries %lld\n", remaining);
+
+  AcquireSRWLockExclusive (&lock);
+
+  outstanding_requests = remaining;
+  if (outstanding_requests <= 0)
+    timeout = INFINITE;
+  outstanding_service_requests = false;
+
+  if (queue_full)
+  {
+    num_callbacks *= 2;
+    OVERLAPPED_ENTRY *new
+      = realloc (entries,
+                  sizeof (OVERLAPPED_ENTRY) * num_callbacks);
+    if (new)
+      entries = new;
+  }
+
+  ReleaseSRWLockExclusive (&lock);
+
+  WakeConditionVariable (&wakeEvent);
+}
 DWORD WINAPI runner (LPVOID lpParam STG_UNUSED)
 {
   while (running)
@@ -143,7 +175,8 @@ DWORD WINAPI runner (LPVOID lpParam STG_UNUSED)
 
       lastEvent = readIOManagerEvent ();
       while (completionPortHandle == INVALID_HANDLE_VALUE
-             || lastEvent == IO_MANAGER_DIE)
+             || lastEvent == IO_MANAGER_DIE
+             || outstanding_service_requests)
         {
           fprintf (stderr, "$ runner:SleepConditionVariableSRW\n");
           SleepConditionVariableSRW (&wakeEvent, &lock, INFINITE, 0);
@@ -155,36 +188,14 @@ DWORD WINAPI runner (LPVOID lpParam STG_UNUSED)
       fprintf (stderr, "$ runner:GetQueuedCompletionStatusEx\n");
 
       ULONG num_removed = -1;
-      /* Temporary hack, instead have this block until the haskell side has
-         services the call and also have the haskell side decrement the
-         outstanding field.  */
-      ZeroMemory (entries, sizeof (OVERLAPPED_ENTRY) * num_callbacks);
       if (GetQueuedCompletionStatusEx (completionPortHandle, entries,
                                        num_callbacks, &num_removed, timeout,
                                        false))
         {
-          /* Check to see if we really did finish something or if this was an
-             interrupt.  */
-          if (num_removed == 1
-              && (entries[0].lpOverlapped == NULL
-                  || entries[0].dwNumberOfBytesTransferred == 0))
-            {
-              fprintf (stderr, "$ runner:servicing interrupt call.\n");
-              num_removed = -1;
-            }
-
           if (num_removed > 0)
             {
               notifyRtsOfFinishedCall (num_removed);
-              if (num_removed == num_callbacks)
-                {
-                  num_callbacks *= 2;
-                  OVERLAPPED_ENTRY *new
-                    = realloc (entries,
-                               sizeof (OVERLAPPED_ENTRY) * num_callbacks);
-                  if (new)
-                    entries = new;
-                }
+              queue_full = num_removed == num_callbacks;
             }
         }
       else if (WAIT_TIMEOUT == GetLastError ())
@@ -194,11 +205,6 @@ DWORD WINAPI runner (LPVOID lpParam STG_UNUSED)
         }
 
       AcquireSRWLockExclusive (&lock);
-
-      if (num_removed > 0)
-        outstanding_requests -= num_removed;
-      if (outstanding_requests <= 0)
-        timeout = INFINITE;
 
       fprintf (stderr, "$ runner:running: %d, num_removed: %ld, oustanding: %lld, timeout: 0x%lx\n",
                running, num_removed, outstanding_requests, timeout);

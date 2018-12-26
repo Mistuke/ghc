@@ -127,16 +127,19 @@ ioManagerThread = unsafePerformIO $ do
    sharedCAF m getOrSetGHCConcWindowsIOManagerThreadStore
 
 foreign import ccall unsafe "getOrSetGHCConcWindowsIOManagerThreadStore"
-    getOrSetGHCConcWindowsIOManagerThreadStore :: Ptr a -> IO (Ptr a)
+  getOrSetGHCConcWindowsIOManagerThreadStore :: Ptr a -> IO (Ptr a)
 
 foreign import ccall safe "registerNewIOCPHandle"
-    registerNewIOCPHandle :: FFI.IOCP -> IO ()
+  registerNewIOCPHandle :: FFI.IOCP -> IO ()
 
 foreign import ccall safe "registerAlertableWait"
-    registerAlertableWait :: FFI.IOCP -> DWORD -> IO ()
+  registerAlertableWait :: FFI.IOCP -> DWORD -> Word64 -> IO ()
 
 foreign import ccall safe "getOverlappedEntries"
-    getOverlappedEntries :: Ptr DWORD -> IO (Ptr OVERLAPPED_ENTRY)
+  getOverlappedEntries :: Ptr DWORD -> IO (Ptr OVERLAPPED_ENTRY)
+
+foreign import ccall safe "servicedIOEntries"
+  servicedIOEntries :: Word64 -> IO ()
 
 ------------------------------------------------------------------------
 -- Manager
@@ -454,14 +457,23 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
         let cancel e = do
                         debugIO $ "## Exception occurred. Cancelling request... "
                         debugIO $ show (e :: SomeException)
-                        uninterruptibleMask_ $ FFI.cancelIoEx h lpol
+                        _ <- uninterruptibleMask_ $ FFI.cancelIoEx' h lpol
                         -- we need to wait for the cancellation before removing
                         -- the pointer.
+                        debugIO $ "## Waiting for cancellation record... "
                         FFI.getOverlappedResult h lpol True
-                        withMVar (callbackTableVar mgr) $
-                          IT.delete (lpoverlappedToInt lpol)
-                        reqs <- removeRequest
-                        debugIO $ "-1.. " ++ show reqs ++ " requests queued after error."
+                        mCD <- withMVar (callbackTableVar mgr) $
+                                IT.delete (lpoverlappedToInt lpol)
+                        case mCD of
+                          Nothing                              -> return ()
+                          Just (CompletionData _fptr _hwnd cb) -> do
+                            reqs <- removeRequest
+                            debugIO $ "-1.. " ++ show reqs ++ " requests queued after error."
+                            status <- fmap fromIntegral getErrorCode
+                            cb status 0
+                        when (not threaded) $
+                          do num_remaining <- outstandingRequests
+                             servicedIOEntries num_remaining
                         return $ IOFailed Nothing
         let runner = do debugIO $ (dbg ":: waiting ") ++ " | "  ++ show lpol
                         res <- takeMVar signal `catch` cancel
@@ -618,7 +630,9 @@ step maxDelay mgr@Manager{..} = do
                              debugIO "I/O manager deep sleep."
     n <- if threaded
             then FFI.getQueuedCompletionStatusEx mgrIOCP mgrOverlappedEntries timer
-            else registerAlertableWait mgrIOCP timer >> return 0
+            else do num_req <- outstandingRequests
+                    registerAlertableWait mgrIOCP timer num_req
+                    return 0
     setStatus WinIORunning
     processCompletion mgr n delay
 
@@ -659,7 +673,7 @@ processCompletion mgr@Manager{..} n delay = do
 
     -- Keep running if we still have some work queued or
     -- if we have a pending delay.
-    reqs <-outstandingRequests
+    reqs <- outstandingRequests
     debugIO $ "outstanding requests: " ++ show reqs
     let more = reqs > 0
     debugIO $ "has more: " ++ show more ++ " - removed: " ++  show n
@@ -676,6 +690,9 @@ processRemoteCompletion = do
     let arr = mgrOverlappedEntries mngr
     A.unsafeSplat arr entries n
     _ <- processCompletion mngr n Nothing
+    num_left <- outstandingRequests
+    servicedIOEntries num_left
+    debugIO "processRemoteCompletion :: done ()"
     return ()
 
 io_mngr_loop :: HANDLE -> Manager -> IO ()
