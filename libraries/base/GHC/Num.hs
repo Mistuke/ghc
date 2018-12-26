@@ -36,22 +36,22 @@ default ()              -- Double isn't available yet,
 
 -- | Basic numeric class.
 --
--- The Haskell Report defines no laws for 'Num'. However, '(+)' and '(*)' are
+-- The Haskell Report defines no laws for 'Num'. However, @('+')@ and @('*')@ are
 -- customarily expected to define a ring and have the following properties:
 --
--- [__Associativity of (+)__]: @(x + y) + z@ = @x + (y + z)@
--- [__Commutativity of (+)__]: @x + y@ = @y + x@
--- [__@fromInteger 0@ is the additive identity__]: @x + fromInteger 0@ = @x@
+-- [__Associativity of @('+')@__]: @(x + y) + z@ = @x + (y + z)@
+-- [__Commutativity of @('+')@__]: @x + y@ = @y + x@
+-- [__@'fromInteger' 0@ is the additive identity__]: @x + fromInteger 0@ = @x@
 -- [__'negate' gives the additive inverse__]: @x + negate x@ = @fromInteger 0@
--- [__Associativity of (*)__]: @(x * y) * z@ = @x * (y * z)@
--- [__@fromInteger 1@ is the multiplicative identity__]:
+-- [__Associativity of @('*')@__]: @(x * y) * z@ = @x * (y * z)@
+-- [__@'fromInteger' 1@ is the multiplicative identity__]:
 -- @x * fromInteger 1@ = @x@ and @fromInteger 1 * x@ = @x@
--- [__Distributivity of (*) with respect to (+)__]:
+-- [__Distributivity of @('*')@ with respect to @('+')@__]:
 -- @a * (b + c)@ = @(a * b) + (a * c)@ and @(b + c) * a@ = @(b * a) + (c * a)@
 --
 -- Note that it /isn't/ customarily expected that a type instance of both 'Num'
--- and 'Ord' implement an ordered ring. Indeed, in 'base' only 'Integer' and
--- 'Rational' do.
+-- and 'Ord' implement an ordered ring. Indeed, in @base@ only 'Integer' and
+-- 'Data.Ratio.Rational' do.
 class  Num a  where
     {-# MINIMAL (+), (*), abs, signum, fromInteger, (negate | (-)) #-}
 

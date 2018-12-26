@@ -48,6 +48,8 @@ import Reg
 # define fake4 20
 # define fake5 21
 
+-- N.B. XMM, YMM, and ZMM are all aliased to the same hardware registers hence
+-- being assigned the same RegNos.
 # define xmm0  24
 # define xmm1  25
 # define xmm2  26
@@ -65,39 +67,39 @@ import Reg
 # define xmm14 38
 # define xmm15 39
 
-# define ymm0  40
-# define ymm1  41
-# define ymm2  42
-# define ymm3  43
-# define ymm4  44
-# define ymm5  45
-# define ymm6  46
-# define ymm7  47
-# define ymm8  48
-# define ymm9  49
-# define ymm10 50
-# define ymm11 51
-# define ymm12 52
-# define ymm13 53
-# define ymm14 54
-# define ymm15 55
+# define ymm0  24
+# define ymm1  25
+# define ymm2  26
+# define ymm3  27
+# define ymm4  28
+# define ymm5  29
+# define ymm6  30
+# define ymm7  31
+# define ymm8  32
+# define ymm9  33
+# define ymm10 34
+# define ymm11 35
+# define ymm12 36
+# define ymm13 37
+# define ymm14 38
+# define ymm15 39
 
-# define zmm0  56
-# define zmm1  57
-# define zmm2  58
-# define zmm3  59
-# define zmm4  60
-# define zmm5  61
-# define zmm6  62
-# define zmm7  63
-# define zmm8  64
-# define zmm9  65
-# define zmm10 66
-# define zmm11 67
-# define zmm12 68
-# define zmm13 69
-# define zmm14 70
-# define zmm15 71
+# define zmm0  24
+# define zmm1  25
+# define zmm2  26
+# define zmm3  27
+# define zmm4  28
+# define zmm5  29
+# define zmm6  30
+# define zmm7  31
+# define zmm8  32
+# define zmm9  33
+# define zmm10 34
+# define zmm11 35
+# define zmm12 36
+# define zmm13 37
+# define zmm14 38
+# define zmm15 39
 
 -- Note: these are only needed for ARM/ARM64 because globalRegMaybe is now used in CmmSink.hs.
 -- Since it's only used to check 'isJust', the actual values don't matter, thus
@@ -835,15 +837,16 @@ freeReg :: RegNo -> Bool
 
 # if defined(MACHREGS_i386)
 freeReg esp = False -- %esp is the C stack pointer
-freeReg esi = False -- Note [esi/edi not allocatable]
+freeReg esi = False -- Note [esi/edi/ebp not allocatable]
 freeReg edi = False
+freeReg ebp = False
 # endif
 # if defined(MACHREGS_x86_64)
 freeReg rsp = False  --        %rsp is the C stack pointer
 # endif
 
 {-
-Note [esi/edi not allocatable]
+Note [esi/edi/ebp not allocatable]
 
 %esi is mapped to R1, so %esi would normally be allocatable while it
 is not being used for R1.  However, %esi has no 8-bit version on x86,
@@ -853,7 +856,7 @@ graph-colouring allocator also cannot handle this - it was designed
 with more flexibility in mind, but the current implementation is
 restricted to the same set of classes as the linear allocator.
 
-Hence, on x86 esi and edi are treated as not allocatable.
+Hence, on x86 esi, edi and ebp are treated as not allocatable.
 -}
 
 -- split patterns in two functions to prevent overlaps

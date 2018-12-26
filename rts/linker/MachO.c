@@ -1530,6 +1530,7 @@ ocGetNames_MachO(ObjectCode* oc)
                 secArray[i].info->macho_section = section;
                 secArray[i].info->relocation_info
                 = (MachORelocationInfo*)(oc->image + section->reloff);
+                FALLTHROUGH;
             }
             default: {
                 // just set the pointer to the loaded image.
@@ -1608,18 +1609,20 @@ ocGetNames_MachO(ObjectCode* oc)
      */
     IF_DEBUG(linker, debugBelch("ocGetNames_MachO: %d external symbols\n",
                                 oc->n_symbols));
-    oc->symbols = stgMallocBytes(oc->n_symbols * sizeof(SymbolName*),
+    oc->symbols = stgMallocBytes(oc->n_symbols * sizeof(Symbol_t),
                                    "ocGetNames_MachO(oc->symbols)");
 
     if (oc->info->symCmd) {
         for (size_t i = 0; i < oc->info->n_macho_symbols; i++) {
+            SymbolName* nm = oc->info->macho_symbols[i].name;
             if(oc->info->nlist[i].n_type & N_STAB)
-                ;
+            {
+                IF_DEBUG(linker, debugBelch("ocGetNames_MachO: Skip STAB: %s\n", nm));
+            }
             else if((oc->info->nlist[i].n_type & N_TYPE) == N_SECT)
             {
                 if(oc->info->nlist[i].n_type & N_EXT)
                 {
-                    SymbolName* nm = oc->info->macho_symbols[i].name;
                     if (   (oc->info->nlist[i].n_desc & N_WEAK_DEF)
                         && lookupSymbol_(nm)) {
                         // weak definition, and we already have a definition
@@ -1637,18 +1640,19 @@ ocGetNames_MachO(ObjectCode* oc)
                                                  , HS_BOOL_FALSE
                                                  , oc);
 
-                            oc->symbols[curSymbol] = nm;
+                            oc->symbols[curSymbol].name = nm;
+                            oc->symbols[curSymbol].addr = addr;
                             curSymbol++;
                     }
                 }
                 else
                 {
-                    IF_DEBUG(linker, debugBelch("ocGetNames_MachO: \t...not external, skipping\n"));
+                    IF_DEBUG(linker, debugBelch("ocGetNames_MachO: \t...not external, skipping %s\n", nm));
                 }
             }
             else
             {
-                IF_DEBUG(linker, debugBelch("ocGetNames_MachO: \t...not defined in this section, skipping\n"));
+                IF_DEBUG(linker, debugBelch("ocGetNames_MachO: \t...not defined in this section, skipping %s\n", nm));
             }
         }
     }
@@ -1658,15 +1662,15 @@ ocGetNames_MachO(ObjectCode* oc)
     commonCounter = (unsigned long)commonStorage;
 
     if (oc->info->symCmd) {
-        for (int i = 0; i < oc->n_symbols; i++) {
-            if((oc->info->nlist[i].n_type & N_TYPE) == N_UNDF
-             && (oc->info->nlist[i].n_type & N_EXT)
-             && (oc->info->nlist[i].n_value != 0)) {
+        for (size_t i = 0; i < oc->info->n_macho_symbols; i++) {
+            SymbolName* nm = oc->info->macho_symbols[i].name;
+            MachONList *nlist = &oc->info->nlist[i];
+            if((nlist->n_type & N_TYPE) == N_UNDF
+             && (nlist->n_type & N_EXT)
+             && (nlist->n_value != 0)) {
+                unsigned long sz = nlist->n_value;
 
-                SymbolName* nm = oc->info->macho_symbols[i].name;
-                unsigned long sz = oc->info->nlist[i].n_value;
-
-                oc->info->nlist[i].n_value = commonCounter;
+                nlist->n_value = commonCounter;
 
                 /* also set the final address to the macho_symbol */
                 oc->info->macho_symbols[i].addr = (void*)commonCounter;
@@ -1674,7 +1678,8 @@ ocGetNames_MachO(ObjectCode* oc)
                 IF_DEBUG(linker, debugBelch("ocGetNames_MachO: inserting common symbol: %s\n", nm));
                 ghciInsertSymbolTable(oc->fileName, symhash, nm,
                                        (void*)commonCounter, HS_BOOL_FALSE, oc);
-                oc->symbols[curSymbol] = nm;
+                oc->symbols[curSymbol].name = nm;
+                oc->symbols[curSymbol].addr = oc->info->macho_symbols[i].addr;
                 curSymbol++;
 
                 commonCounter += sz;

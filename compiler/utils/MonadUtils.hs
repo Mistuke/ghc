@@ -21,6 +21,7 @@ module MonadUtils
         , foldlM, foldlM_, foldrM
         , maybeMapM
         , whenM, unlessM
+        , filterOutM
         ) where
 
 -------------------------------------------------------------------------------
@@ -29,8 +30,7 @@ module MonadUtils
 
 import GhcPrelude
 
-import Maybes
-
+import Control.Applicative
 import Control.Monad
 import Control.Monad.Fix
 import Control.Monad.IO.Class
@@ -142,9 +142,10 @@ mapSndM f ((a,b):xs) = do { c <- f b; rs <- mapSndM f xs; return ((a,c):rs) }
 concatMapM :: Monad m => (a -> m [b]) -> [a] -> m [b]
 concatMapM f xs = liftM concat (mapM f xs)
 
--- | Monadic version of mapMaybe
-mapMaybeM :: (Monad m) => (a -> m (Maybe b)) -> [a] -> m [b]
-mapMaybeM f = liftM catMaybes . mapM f
+-- | Applicative version of mapMaybe
+mapMaybeM :: Applicative m => (a -> m (Maybe b)) -> [a] -> m [b]
+mapMaybeM f = foldr g (pure [])
+  where g a = liftA2 (maybe id (:)) (f a)
 
 -- | Monadic version of fmap
 fmapMaybeM :: (Monad m) => (a -> m b) -> Maybe a -> m (Maybe b)
@@ -199,3 +200,8 @@ whenM mb thing = do { b <- mb
 unlessM :: Monad m => m Bool -> m () -> m ()
 unlessM condM acc = do { cond <- condM
                        ; unless cond acc }
+
+-- | Like 'filterM', only it reverses the sense of the test.
+filterOutM :: (Applicative m) => (a -> m Bool) -> [a] -> m [a]
+filterOutM p =
+  foldr (\ x -> liftA2 (\ flg -> if flg then id else (x:)) (p x)) (pure [])

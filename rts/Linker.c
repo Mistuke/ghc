@@ -22,7 +22,7 @@
 #include "StgPrimFloat.h" // for __int_encodeFloat etc.
 #include "Proftimer.h"
 #include "GetEnv.h"
-#include "Stable.h"
+#include "StablePtr.h"
 #include "RtsSymbols.h"
 #include "RtsSymbolInfo.h"
 #include "Profiling.h"
@@ -964,7 +964,7 @@ void ghci_enquire(SymbolAddr* addr)
 
    for (oc = objects; oc; oc = oc->next) {
       for (i = 0; i < oc->n_symbols; i++) {
-         sym = oc->symbols[i];
+         sym = oc->symbols[i].name;
          if (sym == NULL) continue;
          a = NULL;
          if (a == NULL) {
@@ -1106,8 +1106,8 @@ static void removeOcSymbols (ObjectCode *oc)
     // Remove all the mappings for the symbols within this object..
     int i;
     for (i = 0; i < oc->n_symbols; i++) {
-        if (oc->symbols[i] != NULL) {
-            ghciRemoveSymbolTable(symhash, oc->symbols[i], oc);
+        if (oc->symbols[i].name != NULL) {
+            ghciRemoveSymbolTable(symhash, oc->symbols[i].name, oc);
         }
     }
 
@@ -1235,6 +1235,12 @@ void freeObjectCode (ObjectCode *oc)
 * Sets the initial status of a fresh ObjectCode
 */
 static void setOcInitialStatus(ObjectCode* oc) {
+    /* If a target has requested the ObjectCode not to be resolved then
+       honor this requests.  Usually this means the ObjectCode has not been
+       initialized and can't be.  */
+    if (oc->status == OBJECT_DONT_RESOLVE)
+      return;
+
     if (oc->archiveMemberName == NULL) {
         oc->status = OBJECT_NEEDED;
     } else {
@@ -1497,6 +1503,19 @@ HsInt loadOc (ObjectCode* oc)
        return r;
    }
 
+   /* Note [loadOc orderings]
+      ocAllocateSymbolsExtras has only two pre-requisites, it must run after
+      preloadObjectFile and ocVerify.   Neither have changed.   On most targets
+      allocating the extras is independent on parsing the section data, so the
+      order between these two never mattered.
+
+      On Windows, when we have an import library we (for now, as we don't honor
+      the lazy loading semantics of the library and instead GHCi is already
+      lazy) don't use the library after ocGetNames as it just populates the
+      symbol table.  Allocating space for jump tables in ocAllocateSymbolExtras
+      would just be a waste then as we'll be stopping further processing of the
+      library in the next few steps.  */
+
    /* build the symbol list for this image */
 #  if defined(OBJFORMAT_ELF)
    r = ocGetNames_ELF ( oc );
@@ -1563,12 +1582,13 @@ int ocTryLoad (ObjectCode* oc) {
         symbols. Duplicate symbols are distinguished by name and oc.
     */
     int x;
-    SymbolName* symbol;
+    Symbol_t symbol;
     for (x = 0; x < oc->n_symbols; x++) {
         symbol = oc->symbols[x];
-        if (   symbol
-            && !ghciInsertSymbolTable(oc->fileName, symhash, symbol, NULL,
-                                      isSymbolWeak(oc, symbol), oc)) {
+        if (   symbol.name
+            && !ghciInsertSymbolTable(oc->fileName, symhash, symbol.name,
+                                      symbol.addr,
+                                      isSymbolWeak(oc, symbol.name), oc)) {
             return 0;
         }
     }

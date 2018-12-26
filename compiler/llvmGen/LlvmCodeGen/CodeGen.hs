@@ -38,7 +38,6 @@ import Util
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Writer
 
-import Data.Semigroup   ( Semigroup )
 import qualified Data.Semigroup as Semigroup
 import Data.List ( nub )
 import Data.Maybe ( catMaybes )
@@ -761,6 +760,10 @@ cmmPrimOpFunctions mop = do
     MO_F32_Cosh   -> fsLit "coshf"
     MO_F32_Tanh   -> fsLit "tanhf"
 
+    MO_F32_Asinh  -> fsLit "asinhf"
+    MO_F32_Acosh  -> fsLit "acoshf"
+    MO_F32_Atanh  -> fsLit "atanhf"
+
     MO_F64_Exp    -> fsLit "exp"
     MO_F64_Log    -> fsLit "log"
     MO_F64_Sqrt   -> fsLit "llvm.sqrt.f64"
@@ -778,6 +781,10 @@ cmmPrimOpFunctions mop = do
     MO_F64_Sinh   -> fsLit "sinh"
     MO_F64_Cosh   -> fsLit "cosh"
     MO_F64_Tanh   -> fsLit "tanh"
+
+    MO_F64_Asinh  -> fsLit "asinh"
+    MO_F64_Acosh  -> fsLit "acosh"
+    MO_F64_Atanh  -> fsLit "atanh"
 
     MO_Memcpy _   -> fsLit $ "llvm.memcpy."  ++ intrinTy1
     MO_Memmove _  -> fsLit $ "llvm.memmove." ++ intrinTy1
@@ -1188,6 +1195,9 @@ genMachOp _ op [x] = case op of
     MO_UU_Conv from to
         -> sameConv from (widthToLlvmInt to) LM_Trunc LM_Zext
 
+    MO_XX_Conv from to
+        -> sameConv from (widthToLlvmInt to) LM_Trunc LM_Zext
+
     MO_FF_Conv from to
         -> sameConv from (widthToLlvmFloat to) LM_Fptrunc LM_Fpext
 
@@ -1449,6 +1459,7 @@ genMachOp_slow opt op [x, y] = case op of
     MO_FS_Conv _ _ -> panicOp
     MO_SS_Conv _ _ -> panicOp
     MO_UU_Conv _ _ -> panicOp
+    MO_XX_Conv _ _ -> panicOp
     MO_FF_Conv _ _ -> panicOp
 
     MO_V_Insert  {} -> panicOp

@@ -41,3 +41,11 @@ test('T13031', normal, run_command,
 
 test('T13077', normal, compile, [''])
 test('T13077a', normal, compile, [''])
+
+# T15627
+#   Absent bindings of unlifted types should be WW'ed away.
+#   The idea is to check that both $wmutVar and $warray
+#   don't mention MutVar# and Array# anymore.
+test('T15627',  [ grep_errmsg(r'(wmutVar|warray).*Int#') ], compile, ['-dppr-cols=200 -ddump-simpl'])
+
+test('T16029', normal, run_command, ['$MAKE -s --no-print-directory T16029'])

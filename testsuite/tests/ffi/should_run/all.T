@@ -87,6 +87,8 @@ test('ffi018', [omit_ways(['ghci'])], compile_and_run, ['ffi018_c.c'])
 test('ffi018_ghci',
      [extra_files(['ffi018.h']),
       only_ways(['ghci']),
+      # This test is fragile when unregisterised; see #16085
+      when(unregisterised(), skip),
       pre_cmd('$MAKE -s --no-print-directory ffi018_ghci_setup')],
      compile_and_run, ['ffi018_ghci_c.o'])
 
@@ -188,3 +190,11 @@ test('ffi023', [ omit_ways(['ghci']),
 test('T12134', [omit_ways(['ghci'])], compile_and_run, ['T12134_c.c'])
 
 test('T12614', [omit_ways(['ghci'])], compile_and_run, ['T12614_c.c'])
+
+test('PrimFFIInt8', [omit_ways(['ghci'])], compile_and_run, ['PrimFFIInt8_c.c'])
+
+test('PrimFFIWord8', [omit_ways(['ghci'])], compile_and_run, ['PrimFFIWord8_c.c'])
+
+test('PrimFFIInt16', [omit_ways(['ghci'])], compile_and_run, ['PrimFFIInt16_c.c'])
+
+test('PrimFFIWord16', [omit_ways(['ghci'])], compile_and_run, ['PrimFFIWord16_c.c'])

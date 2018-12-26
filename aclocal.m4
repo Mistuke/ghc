@@ -958,16 +958,10 @@ else
 fi;
 changequote([, ])dnl
 ])
-FP_COMPARE_VERSIONS([$fptools_cv_alex_version],[-ge],[3.0],
-  [Alex3=YES],[Alex3=NO])
-if test ! -f compiler/cmm/CmmLex.hs || test ! -f compiler/parser/Lexer.hs
-then
-    FP_COMPARE_VERSIONS([$fptools_cv_alex_version],[-lt],[3.1.0],
-      [AC_MSG_ERROR([Alex version 3.1.0 or later is required to compile GHC.])])[]
-fi
+FP_COMPARE_VERSIONS([$fptools_cv_alex_version],[-lt],[3.1.7],
+  [AC_MSG_ERROR([Alex version 3.1.7 or later is required to compile GHC.])])[]
 AlexVersion=$fptools_cv_alex_version;
 AC_SUBST(AlexVersion)
-AC_SUBST(Alex3)
 ])
 
 
@@ -1296,6 +1290,24 @@ AC_SUBST(GccIsClang)
 rm -f conftest.txt
 ])
 
+# FP_GCC_SUPPORTS__ATOMICS
+# ------------------------
+# Does gcc support the __atomic_* family of builtins?
+AC_DEFUN([FP_GCC_SUPPORTS__ATOMICS],
+[
+   AC_REQUIRE([AC_PROG_CC])
+   AC_MSG_CHECKING([whether GCC supports __atomic_ builtins])
+   echo 'int test(int *x) { int y; __atomic_load(x, &y, __ATOMIC_SEQ_CST); return y; }' > conftest.c
+   if $CC -c conftest.c > /dev/null 2>&1; then
+       CONF_GCC_SUPPORTS__ATOMICS=YES
+       AC_MSG_RESULT([yes])
+   else
+       CONF_GCC_SUPPORTS__ATOMICS=NO
+       AC_MSG_RESULT([no])
+   fi
+   rm -f conftest.c conftest.o
+])
+
 # FP_GCC_SUPPORTS_NO_PIE
 # ----------------------
 # Does gcc support the -no-pie option? If so we should pass it to gcc when
@@ -1518,7 +1530,7 @@ if test "$RELEASE" = "NO"; then
     if test -f VERSION_DATE; then
         PACKAGE_VERSION=${PACKAGE_VERSION}.`cat VERSION_DATE`
         AC_MSG_RESULT(given $PACKAGE_VERSION)
-    elif test -d .git; then
+    elif test -e .git; then
         changequote(, )dnl
         ver_posixtime=`git log -1 --pretty=format:%ct`
         ver_date=`perl -MPOSIX -e "print strftime('%Y%m%d', gmtime($ver_posixtime));"`
@@ -2396,7 +2408,11 @@ AC_DEFUN([FIND_LD],[
                    FP_CC_LINKER_FLAG_TRY(bfd, $2) ;;
               "GNU gold"*)
                    FP_CC_LINKER_FLAG_TRY(gold, $2)
-                   LD_NO_GOLD=ld
+                   if test "$cross_compiling" = "yes"; then
+                       AC_MSG_NOTICE([Using ld.gold and assuming that it is not affected by binutils issue 22266]);
+                   else
+                       LD_NO_GOLD=ld;
+                   fi
                    ;;
               "LLD"*)
                    FP_CC_LINKER_FLAG_TRY(lld, $2) ;;
@@ -2417,7 +2433,7 @@ AC_DEFUN([FIND_LD],[
         # Fallback
         AC_CHECK_TARGET_TOOL([LD], [ld])
         # This isn't entirely safe since $LD may have been discovered to be
-        $ ld.gold, but what else can we do?
+        # ld.gold, but what else can we do?
         if test "x$LD_NO_GOLD" = "x"; then LD_NO_GOLD=$LD; fi
     }
 

@@ -362,18 +362,18 @@ mkFloatingRelOpRule nm cmp
 
 -- common constants
 zeroi, onei, zerow, onew :: DynFlags -> Literal
-zeroi dflags = mkMachInt  dflags 0
-onei  dflags = mkMachInt  dflags 1
-zerow dflags = mkMachWord dflags 0
-onew  dflags = mkMachWord dflags 1
+zeroi dflags = mkLitInt  dflags 0
+onei  dflags = mkLitInt  dflags 1
+zerow dflags = mkLitWord dflags 0
+onew  dflags = mkLitWord dflags 1
 
 zerof, onef, twof, zerod, oned, twod :: Literal
-zerof = mkMachFloat 0.0
-onef  = mkMachFloat 1.0
-twof  = mkMachFloat 2.0
-zerod = mkMachDouble 0.0
-oned  = mkMachDouble 1.0
-twod  = mkMachDouble 2.0
+zerof = mkLitFloat 0.0
+onef  = mkLitFloat 1.0
+twof  = mkLitFloat 2.0
+zerod = mkLitDouble 0.0
+oned  = mkLitDouble 1.0
+twod  = mkLitDouble 2.0
 
 cmpOp :: DynFlags -> (forall a . Ord a => a -> a -> Bool)
       -> Literal -> Literal -> Maybe CoreExpr
@@ -383,9 +383,9 @@ cmpOp dflags cmp = go
     done False = Just $ falseValInt dflags
 
     -- These compares are at different types
-    go (MachChar i1)   (MachChar i2)   = done (i1 `cmp` i2)
-    go (MachFloat i1)  (MachFloat i2)  = done (i1 `cmp` i2)
-    go (MachDouble i1) (MachDouble i2) = done (i1 `cmp` i2)
+    go (LitChar i1)   (LitChar i2)   = done (i1 `cmp` i2)
+    go (LitFloat i1)  (LitFloat i2)  = done (i1 `cmp` i2)
+    go (LitDouble i1) (LitDouble i2) = done (i1 `cmp` i2)
     go (LitNumber nt1 i1 _) (LitNumber nt2 i2 _)
       | nt1 /= nt2 = Nothing
       | otherwise  = done (i1 `cmp` i2)
@@ -394,10 +394,10 @@ cmpOp dflags cmp = go
 --------------------------
 
 negOp :: DynFlags -> Literal -> Maybe CoreExpr  -- Negate
-negOp _      (MachFloat 0.0)  = Nothing  -- can't represent -0.0 as a Rational
-negOp dflags (MachFloat f)    = Just (mkFloatVal dflags (-f))
-negOp _      (MachDouble 0.0) = Nothing
-negOp dflags (MachDouble d)   = Just (mkDoubleVal dflags (-d))
+negOp _      (LitFloat 0.0)  = Nothing  -- can't represent -0.0 as a Rational
+negOp dflags (LitFloat f)    = Just (mkFloatVal dflags (-f))
+negOp _      (LitDouble 0.0) = Nothing
+negOp dflags (LitDouble d)   = Just (mkDoubleVal dflags (-d))
 negOp dflags (LitNumber nt i t)
    | litNumIsSigned nt = Just (Lit (mkLitNumberWrap dflags nt (-i) t))
 negOp _      _                = Nothing
@@ -463,7 +463,10 @@ wordOpC2 op dflags (LitNumber LitNumWord w1 _) (LitNumber LitNumWord w2 _) =
 wordOpC2 _ _ _ _ = Nothing  -- Could find LitLit
 
 shiftRule :: (DynFlags -> Integer -> Int -> Integer) -> RuleM CoreExpr
-                 -- Shifts take an Int; hence third arg of op is Int
+-- Shifts take an Int; hence third arg of op is Int
+-- Used for shift primops
+--    ISllOp, ISraOp, ISrlOp :: Word# -> Int# -> Word#
+--    SllOp, SrlOp           :: Word# -> Int# -> Word#
 -- See Note [Guarding against silly shifts]
 shiftRule shift_op
   = do { dflags <- getDynFlags
@@ -490,7 +493,7 @@ wordSizeInBits dflags = toInteger (platformWordSize (targetPlatform dflags) `shi
 floatOp2 :: (Rational -> Rational -> Rational)
          -> DynFlags -> Literal -> Literal
          -> Maybe (Expr CoreBndr)
-floatOp2 op dflags (MachFloat f1) (MachFloat f2)
+floatOp2 op dflags (LitFloat f1) (LitFloat f2)
   = Just (mkFloatVal dflags (f1 `op` f2))
 floatOp2 _ _ _ _ = Nothing
 
@@ -498,7 +501,7 @@ floatOp2 _ _ _ _ = Nothing
 doubleOp2 :: (Rational -> Rational -> Rational)
           -> DynFlags -> Literal -> Literal
           -> Maybe (Expr CoreBndr)
-doubleOp2 op dflags (MachDouble f1) (MachDouble f2)
+doubleOp2 op dflags (LitDouble f1) (LitDouble f2)
   = Just (mkDoubleVal dflags (f1 `op` f2))
 doubleOp2 _ _ _ _ = Nothing
 
@@ -570,7 +573,7 @@ mkRuleFn dflags Le _ (Lit lit) | isMaxBound dflags lit = Just $ trueValInt  dfla
 mkRuleFn _ _ _ _                                       = Nothing
 
 isMinBound :: DynFlags -> Literal -> Bool
-isMinBound _      (MachChar c)       = c == minBound
+isMinBound _      (LitChar c)        = c == minBound
 isMinBound dflags (LitNumber nt i _) = case nt of
    LitNumInt     -> i == tARGET_MIN_INT dflags
    LitNumInt64   -> i == toInteger (minBound :: Int64)
@@ -581,7 +584,7 @@ isMinBound dflags (LitNumber nt i _) = case nt of
 isMinBound _      _                  = False
 
 isMaxBound :: DynFlags -> Literal -> Bool
-isMaxBound _      (MachChar c)       = c == maxBound
+isMaxBound _      (LitChar c)       = c == maxBound
 isMaxBound dflags (LitNumber nt i _) = case nt of
    LitNumInt     -> i == tARGET_MAX_INT dflags
    LitNumInt64   -> i == toInteger (maxBound :: Int64)
@@ -597,7 +600,7 @@ intResult :: DynFlags -> Integer -> Maybe CoreExpr
 intResult dflags result = Just (intResult' dflags result)
 
 intResult' :: DynFlags -> Integer -> CoreExpr
-intResult' dflags result = Lit (mkMachIntWrap dflags result)
+intResult' dflags result = Lit (mkLitIntWrap dflags result)
 
 -- | Create an unboxed pair of an Int literal expression, ensuring the given
 -- Integer is in the target Int range and the corresponding overflow flag
@@ -606,7 +609,7 @@ intCResult :: DynFlags -> Integer -> Maybe CoreExpr
 intCResult dflags result = Just (mkPair [Lit lit, Lit c])
   where
     mkPair = mkCoreUbxTup [intPrimTy, intPrimTy]
-    (lit, b) = mkMachIntWrapC dflags result
+    (lit, b) = mkLitIntWrapC dflags result
     c = if b then onei dflags else zeroi dflags
 
 -- | Create a Word literal expression while ensuring the given Integer is in the
@@ -615,7 +618,7 @@ wordResult :: DynFlags -> Integer -> Maybe CoreExpr
 wordResult dflags result = Just (wordResult' dflags result)
 
 wordResult' :: DynFlags -> Integer -> CoreExpr
-wordResult' dflags result = Lit (mkMachWordWrap dflags result)
+wordResult' dflags result = Lit (mkLitWordWrap dflags result)
 
 -- | Create an unboxed pair of a Word literal expression, ensuring the given
 -- Integer is in the target Word range and the corresponding carry flag
@@ -624,7 +627,7 @@ wordCResult :: DynFlags -> Integer -> Maybe CoreExpr
 wordCResult dflags result = Just (mkPair [Lit lit, Lit c])
   where
     mkPair = mkCoreUbxTup [wordPrimTy, intPrimTy]
-    (lit, b) = mkMachWordWrapC dflags result
+    (lit, b) = mkLitWordWrapC dflags result
     c = if b then onei dflags else zeroi dflags
 
 inversePrimOp :: PrimOp -> RuleM CoreExpr
@@ -690,13 +693,32 @@ Shift.$wgo = \ (w_sCS :: GHC.Prim.Int#) (w1_sCT :: [GHC.Types.Bool]) ->
                 } } } }
 
 Note the massive shift on line "!!!!".  It can't happen, because we've checked
-that w < 64, but the optimiser didn't spot that. We DO NO want to constant-fold this!
+that w < 64, but the optimiser didn't spot that. We DO NOT want to constant-fold this!
 Moreover, if the programmer writes (n `uncheckedShiftL` 9223372036854775807), we
 can't constant fold it, but if it gets to the assember we get
      Error: operand type mismatch for `shl'
 
 So the best thing to do is to rewrite the shift with a call to error,
 when the second arg is stupid.
+
+There are two cases:
+
+- Shifting fixed-width things: the primops ISll, Sll, etc
+  These are handled by shiftRule.
+
+  We are happy to shift by any amount up to wordSize but no more.
+
+- Shifting Integers: the function shiftLInteger, shiftRInteger
+  from the 'integer' library.   These are handled by rule_shift_op,
+  and match_Integer_shift_op.
+
+  Here we could in principle shift by any amount, but we arbitary
+  limit the shift to 4 bits; in particualr we do not want shift by a
+  huge amount, which can happen in code like that above.
+
+The two cases are more different in their code paths that is comfortable,
+but that is only a historical accident.
+
 
 ************************************************************************
 *                                                                      *
@@ -876,21 +898,21 @@ nonZeroLit n = getLiteral n >>= guard . not . isZeroLit
 -- Rational value to that of Float/Double. We confuse host architecture
 -- and target architecture here, but it's convenient (and wrong :-).
 convFloating :: DynFlags -> Literal -> Literal
-convFloating dflags (MachFloat  f) | not (gopt Opt_ExcessPrecision dflags) =
-   MachFloat  (toRational (fromRational f :: Float ))
-convFloating dflags (MachDouble d) | not (gopt Opt_ExcessPrecision dflags) =
-   MachDouble (toRational (fromRational d :: Double))
+convFloating dflags (LitFloat  f) | not (gopt Opt_ExcessPrecision dflags) =
+   LitFloat  (toRational (fromRational f :: Float ))
+convFloating dflags (LitDouble d) | not (gopt Opt_ExcessPrecision dflags) =
+   LitDouble (toRational (fromRational d :: Double))
 convFloating _ l = l
 
 guardFloatDiv :: RuleM ()
 guardFloatDiv = do
-  [Lit (MachFloat f1), Lit (MachFloat f2)] <- getArgs
+  [Lit (LitFloat f1), Lit (LitFloat f2)] <- getArgs
   guard $ (f1 /=0 || f2 > 0) -- see Note [negative zero]
        && f2 /= 0            -- avoid NaN and Infinity/-Infinity
 
 guardDoubleDiv :: RuleM ()
 guardDoubleDiv = do
-  [Lit (MachDouble d1), Lit (MachDouble d2)] <- getArgs
+  [Lit (LitDouble d1), Lit (LitDouble d2)] <- getArgs
   guard $ (d1 /=0 || d2 > 0) -- see Note [negative zero]
        && d2 /= 0            -- avoid NaN and Infinity/-Infinity
 -- Note [negative zero] Avoid (0 / -d), otherwise 0/(-1) reduces to
@@ -939,11 +961,11 @@ eqVal = Var ordEQDataConId
 gtVal = Var ordGTDataConId
 
 mkIntVal :: DynFlags -> Integer -> Expr CoreBndr
-mkIntVal dflags i = Lit (mkMachInt dflags i)
+mkIntVal dflags i = Lit (mkLitInt dflags i)
 mkFloatVal :: DynFlags -> Rational -> Expr CoreBndr
-mkFloatVal dflags f = Lit (convFloating dflags (MachFloat  f))
+mkFloatVal dflags f = Lit (convFloating dflags (LitFloat  f))
 mkDoubleVal :: DynFlags -> Rational -> Expr CoreBndr
-mkDoubleVal dflags d = Lit (convFloating dflags (MachDouble d))
+mkDoubleVal dflags d = Lit (convFloating dflags (LitDouble d))
 
 matchPrimOpId :: PrimOp -> Id -> RuleM ()
 matchPrimOpId op id = do
@@ -998,7 +1020,7 @@ tagToEnumRule = do
 
 ------------------------------
 dataToTagRule :: RuleM CoreExpr
--- Rules for dataToTag#
+-- See Note [dataToTag#] in primops.txt.pp
 dataToTagRule = a `mplus` b
   where
     -- dataToTag (tagToEnum x)   ==>   x
@@ -1007,19 +1029,6 @@ dataToTagRule = a `mplus` b
       guard $ tag_to_enum `hasKey` tagToEnumKey
       guard $ ty1 `eqType` ty2
       return tag
-
-    -- Why don't we simplify tagToEnum# (dataToTag# x) to x? We would
-    -- like to, but it seems tricky. See #14282. The trouble is that
-    -- we never actually see tagToEnum# (dataToTag# x). Because dataToTag#
-    -- is can_fail, this expression is immediately transformed into
-    --
-    --   case dataToTag# @T x of wild
-    --     { __DEFAULT -> tagToEnum# @T wild }
-    --
-    -- and wild has no unfolding. Simon Peyton Jones speculates one way around
-    -- might be to arrange to give unfoldings to case binders of CONLIKE
-    -- applications and mark dataToTag# CONLIKE, but he doubts it's really
-    -- worth the trouble.
 
     -- dataToTag (K e1 e2)  ==>   tag-of K
     -- This also works (via exprIsConApp_maybe) for
@@ -1033,7 +1042,36 @@ dataToTagRule = a `mplus` b
       ASSERT( not (isNewTyCon (dataConTyCon dc)) ) return ()
       return $ mkIntVal dflags (toInteger (dataConTagZ dc))
 
-{-
+{- Note [dataToTag# magic]
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+The primop dataToTag# is unusual because it evaluates its argument.
+Only `SeqOp` shares that property.  (Other primops do not do anything
+as fancy as argument evaluation.)  The special handling for dataToTag#
+is:
+
+* CoreUtils.exprOkForSpeculation has a special case for DataToTagOp,
+  (actually in app_ok).  Most primops with lifted arguments do not
+  evaluate those arguments, but DataToTagOp and SeqOp are two
+  exceptions.  We say that they are /never/ ok-for-speculation,
+  regardless of the evaluated-ness of their argument.
+  See CoreUtils Note [exprOkForSpeculation and SeqOp/DataToTagOp]
+
+* There is a special case for DataToTagOp in StgCmmExpr.cgExpr,
+  that evaluates its argument and then extracts the tag from
+  the returned value.
+
+* An application like (dataToTag# (Just x)) is optimised by
+  dataToTagRule in PrelRules.
+
+* A case expression like
+     case (dataToTag# e) of <alts>
+  gets transformed t
+     case e of <transformed alts>
+  by PrelRules.caseRules; see Note [caseRules for dataToTag]
+
+See Trac #15696 for a long saga.
+
+
 ************************************************************************
 *                                                                      *
 \subsection{Rules for seq# and spark#}
@@ -1088,7 +1126,7 @@ Implementing seq#.  The compiler has magic for SeqOp in
 - StgCmmExpr.cgExpr, and cgCase: special case for seq#
 
 - CoreUtils.exprOkForSpeculation;
-  see Note [seq# and expr_ok] in CoreUtils
+  see Note [exprOkForSpeculation and SeqOp/DataToTagOp] in CoreUtils
 
 - Simplify.addEvals records evaluated-ness for the result; see
   Note [Adding evaluatedness info to pattern-bound variables]
@@ -1215,8 +1253,8 @@ builtinIntegerRules =
   rule_binop          "orInteger"           orIntegerName           (.|.),
   rule_binop          "xorInteger"          xorIntegerName          xor,
   rule_unop           "complementInteger"   complementIntegerName   complement,
-  rule_Int_binop      "shiftLInteger"       shiftLIntegerName       shiftL,
-  rule_Int_binop      "shiftRInteger"       shiftRIntegerName       shiftR,
+  rule_shift_op       "shiftLInteger"       shiftLIntegerName       shiftL,
+  rule_shift_op       "shiftRInteger"       shiftRIntegerName       shiftR,
   rule_bitInteger     "bitInteger"          bitIntegerName,
   -- See Note [Integer division constant folding] in libraries/base/GHC/Real.hs
   rule_divop_one      "quotInteger"         quotIntegerName         quot,
@@ -1266,9 +1304,9 @@ builtinIntegerRules =
           rule_divop_one str name op
            = BuiltinRule { ru_name = fsLit str, ru_fn = name, ru_nargs = 2,
                            ru_try = match_Integer_divop_one op }
-          rule_Int_binop str name op
+          rule_shift_op str name op
            = BuiltinRule { ru_name = fsLit str, ru_fn = name, ru_nargs = 2,
-                           ru_try = match_Integer_Int_binop op }
+                           ru_try = match_Integer_shift_op op }
           rule_binop_Prim str name op
            = BuiltinRule { ru_name = fsLit str, ru_fn = name, ru_nargs = 2,
                            ru_try = match_Integer_binop_Prim op }
@@ -1333,11 +1371,11 @@ match_append_lit _ id_unf _
         ]
   | unpk `hasKey` unpackCStringFoldrIdKey &&
     c1 `cheapEqExpr` c2
-  , Just (MachStr s1) <- exprIsLiteral_maybe id_unf lit1
-  , Just (MachStr s2) <- exprIsLiteral_maybe id_unf lit2
+  , Just (LitString s1) <- exprIsLiteral_maybe id_unf lit1
+  , Just (LitString s2) <- exprIsLiteral_maybe id_unf lit2
   = ASSERT( ty1 `eqType` ty2 )
     Just (Var unpk `App` Type ty1
-                   `App` Lit (MachStr (s1 `BS.append` s2))
+                   `App` Lit (LitString (s1 `BS.append` s2))
                    `App` c1
                    `App` n)
 
@@ -1352,8 +1390,8 @@ match_eq_string _ id_unf _
         [Var unpk1 `App` lit1, Var unpk2 `App` lit2]
   | unpk1 `hasKey` unpackCStringIdKey
   , unpk2 `hasKey` unpackCStringIdKey
-  , Just (MachStr s1) <- exprIsLiteral_maybe id_unf lit1
-  , Just (MachStr s2) <- exprIsLiteral_maybe id_unf lit2
+  , Just (LitString s1) <- exprIsLiteral_maybe id_unf lit1
+  , Just (LitString s2) <- exprIsLiteral_maybe id_unf lit2
   = Just (if s1 == s2 then trueValBool else falseValBool)
 
 match_eq_string _ _ _ _ = Nothing
@@ -1569,12 +1607,18 @@ match_Integer_divop_one divop _ id_unf _ [xl,yl]
   = Just (Lit (mkLitInteger (x `divop` y) i))
 match_Integer_divop_one _ _ _ _ _ = Nothing
 
-match_Integer_Int_binop :: (Integer -> Int -> Integer) -> RuleFun
-match_Integer_Int_binop binop _ id_unf _ [xl,yl]
+match_Integer_shift_op :: (Integer -> Int -> Integer) -> RuleFun
+-- Used for shiftLInteger, shiftRInteger :: Integer -> Int# -> Integer
+-- See Note [Guarding against silly shifts]
+match_Integer_shift_op binop _ id_unf _ [xl,yl]
   | Just (LitNumber LitNumInteger x i) <- exprIsLiteral_maybe id_unf xl
   , Just (LitNumber LitNumInt y _)     <- exprIsLiteral_maybe id_unf yl
+  , y >= 0
+  , y <= 4   -- Restrict constant-folding of shifts on Integers, somewhat
+             -- arbitrary.  We can get huge shifts in inaccessible code
+             -- (Trac #15673)
   = Just (Lit (mkLitInteger (x `binop` fromIntegral y) i))
-match_Integer_Int_binop _ _ _ _ _ = Nothing
+match_Integer_shift_op _ _ _ _ _ = Nothing
 
 match_Integer_binop_Prim :: (Integer -> Integer -> Bool) -> RuleFun
 match_Integer_binop_Prim binop dflags id_unf _ [xl, yl]
@@ -1624,7 +1668,7 @@ match_rationalTo _ _ _ _ _ = Nothing
 
 match_decodeDouble :: RuleFun
 match_decodeDouble dflags id_unf fn [xl]
-  | Just (MachDouble x) <- exprIsLiteral_maybe id_unf xl
+  | Just (LitDouble x) <- exprIsLiteral_maybe id_unf xl
   = case splitFunTy_maybe (idType fn) of
     Just (_, res)
       | Just [_lev1, _lev2, integerTy, intHashTy] <- tyConAppArgs_maybe res
@@ -1632,7 +1676,7 @@ match_decodeDouble dflags id_unf fn [xl]
            (y, z) ->
              Just $ mkCoreUbxTup [integerTy, intHashTy]
                                  [Lit (mkLitInteger y integerTy),
-                                  Lit (mkMachInt dflags (toInteger z))]
+                                  Lit (mkLitInt dflags (toInteger z))]
     _ ->
         pprPanic "match_decodeDouble: Id has the wrong type"
           (ppr fn <+> dcolon <+> ppr (idType fn))
@@ -1783,7 +1827,7 @@ numFoldingRules op dict = do
      (v   :-: L y) :-: (w :-: L x) -> return $ mkL (x-y)   `add` (v `sub` w)
      (v   :-: L y) :-: (L x :-: w) -> return $ mkL (0-x-y) `add` (v `add` w)
      (L y :-:   v) :-: (w :-: L x) -> return $ mkL (x+y)   `sub` (v `add` w)
-     (L y :-:   v) :-: (L x :-: w) -> return $ mkL (y-x)   `add` (w `add` v)
+     (L y :-:   v) :-: (L x :-: w) -> return $ mkL (y-x)   `add` (w `sub` v)
      (x :++: w)    :-: (y :++: v)  -> return $ mkL (x-y)   `add` (w `sub` v)
      (w :-: L x)   :-: (y :++: v)  -> return $ mkL (0-y-x) `add` (w `sub` v)
      (L x :-: w)   :-: (y :++: v)  -> return $ mkL (x-y)   `sub` (v `add` w)
@@ -1989,7 +2033,7 @@ tx_lit_con :: DynFlags -> (Integer -> Integer) -> AltCon -> Maybe AltCon
 tx_lit_con _      _      DEFAULT    = Just DEFAULT
 tx_lit_con dflags adjust (LitAlt l) = Just $ LitAlt (mapLitValue dflags adjust l)
 tx_lit_con _      _      alt        = pprPanic "caseRules" (ppr alt)
-   -- NB: mapLitValue uses mkMachIntWrap etc, to ensure that the
+   -- NB: mapLitValue uses mkLitIntWrap etc, to ensure that the
    -- literal alternatives remain in Word/Int target ranges
    -- (See Note [Word/Int underflow/overflow] in Literal and #13172).
 
@@ -2031,7 +2075,7 @@ tx_con_tte :: DynFlags -> AltCon -> Maybe AltCon
 tx_con_tte _      DEFAULT         = Just DEFAULT
 tx_con_tte _      alt@(LitAlt {}) = pprPanic "caseRules" (ppr alt)
 tx_con_tte dflags (DataAlt dc)  -- See Note [caseRules for tagToEnum]
-  = Just $ LitAlt $ mkMachInt dflags $ toInteger $ dataConTagZ dc
+  = Just $ LitAlt $ mkLitInt dflags $ toInteger $ dataConTagZ dc
 
 tx_con_dtt :: Type -> AltCon -> Maybe AltCon
 tx_con_dtt _  DEFAULT = Just DEFAULT
@@ -2090,6 +2134,8 @@ Instead, we deal with turning one branch into DEFAULT in SimplUtils
 
 Note [caseRules for dataToTag]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+See also Note [dataToTag#] in primpops.txt.pp
+
 We want to transform
   case dataToTag x of
     DEFAULT -> e1

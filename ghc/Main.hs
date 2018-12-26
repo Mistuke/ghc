@@ -56,6 +56,7 @@ import Util
 import Panic
 import UniqSupply
 import MonadUtils       ( liftIO )
+import DynamicLoading   ( initializePlugins )
 
 -- Imports for --abi-hash
 import LoadIface           ( loadUserInterface )
@@ -259,8 +260,9 @@ main' postLoadMode dflags0 args flagWarnings = do
        DoMake                 -> doMake srcs
        DoMkDependHS           -> doMkDependHS (map fst srcs)
        StopBefore p           -> liftIO (oneShot hsc_env p srcs)
-       DoInteractive          -> ghciUI srcs Nothing
-       DoEval exprs           -> ghciUI srcs $ Just $ reverse exprs
+       DoInteractive          -> ghciUI hsc_env dflags6 srcs Nothing
+       DoEval exprs           -> ghciUI hsc_env dflags6 srcs $ Just $
+                                   reverse exprs
        DoAbiHash              -> abiHash (map fst srcs)
        ShowPackages           -> liftIO $ showPackages dflags6
        DoFrontend f           -> doFrontend f srcs
@@ -268,11 +270,16 @@ main' postLoadMode dflags0 args flagWarnings = do
 
   liftIO $ dumpFinalStats dflags6
 
-ghciUI :: [(FilePath, Maybe Phase)] -> Maybe [String] -> Ghc ()
+ghciUI :: HscEnv -> DynFlags -> [(FilePath, Maybe Phase)] -> Maybe [String]
+       -> Ghc ()
 #if !defined(GHCI)
-ghciUI _ _ = throwGhcException (CmdLineError "not built for interactive use")
+ghciUI _ _ _ _ =
+  throwGhcException (CmdLineError "not built for interactive use")
 #else
-ghciUI     = interactiveUI defaultGhciSettings
+ghciUI hsc_env dflags0 srcs maybe_expr = do
+  dflags1 <- liftIO (initializePlugins hsc_env dflags0)
+  _ <- GHC.setSessionDynFlags dflags1
+  interactiveUI defaultGhciSettings srcs maybe_expr
 #endif
 
 -- -----------------------------------------------------------------------------
@@ -805,14 +812,21 @@ dumpFinalStats dflags =
 
 dumpFastStringStats :: DynFlags -> IO ()
 dumpFastStringStats dflags = do
-  buckets <- getFastStringTable
-  let (entries, longest, has_z) = countFS 0 0 0 buckets
-      msg = text "FastString stats:" $$
-            nest 4 (vcat [text "size:           " <+> int (length buckets),
-                          text "entries:        " <+> int entries,
-                          text "longest chain:  " <+> int longest,
-                          text "has z-encoding: " <+> (has_z `pcntOf` entries)
-                         ])
+  segments <- getFastStringTable
+  let buckets = concat segments
+      bucketsPerSegment = map length segments
+      entriesPerBucket = map length buckets
+      entries = sum entriesPerBucket
+      hasZ = sum $ map (length . filter hasZEncoding) buckets
+      msg = text "FastString stats:" $$ nest 4 (vcat
+        [ text "segments:         " <+> int (length segments)
+        , text "buckets:          " <+> int (sum bucketsPerSegment)
+        , text "entries:          " <+> int entries
+        , text "largest segment:  " <+> int (maximum bucketsPerSegment)
+        , text "smallest segment: " <+> int (minimum bucketsPerSegment)
+        , text "longest bucket:   " <+> int (maximum entriesPerBucket)
+        , text "has z-encoding:   " <+> (hasZ `pcntOf` entries)
+        ])
         -- we usually get more "has z-encoding" than "z-encoded", because
         -- when we z-encode a string it might hash to the exact same string,
         -- which is not counted as "z-encoded".  Only strings whose
@@ -821,17 +835,6 @@ dumpFastStringStats dflags = do
   putMsg dflags msg
   where
    x `pcntOf` y = int ((x * 100) `quot` y) Outputable.<> char '%'
-
-countFS :: Int -> Int -> Int -> [[FastString]] -> (Int, Int, Int)
-countFS entries longest has_z [] = (entries, longest, has_z)
-countFS entries longest has_z (b:bs) =
-  let
-        len = length b
-        longest' = max len longest
-        entries' = entries + len
-        has_zs = length (filter hasZEncoding b)
-  in
-        countFS entries' longest' (has_z + has_zs) bs
 
 showPackages, dumpPackages, dumpPackagesSimple :: DynFlags -> IO ()
 showPackages       dflags = putStrLn (showSDoc dflags (pprPackages dflags))

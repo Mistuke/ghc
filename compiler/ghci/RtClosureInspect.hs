@@ -39,7 +39,7 @@ import Var
 import TcRnMonad
 import TcType
 import TcMType
-import TcHsSyn ( zonkTcTypeToType, mkEmptyZonkEnv )
+import TcHsSyn ( zonkTcTypeToTypeX, mkEmptyZonkEnv, ZonkFlexi( RuntimeUnkFlexi ) )
 import TcUnify
 import TcEnv
 
@@ -57,16 +57,15 @@ import TysWiredIn
 import DynFlags
 import Outputable as Ppr
 import GHC.Char
-import GHC.Exts
 import GHC.Exts.Heap
-import GHC.IO ( IO(..) )
 import SMRep ( roundUpTo )
 
 import Control.Monad
-import Data.Array.Base
 import Data.Maybe
 import Data.List
 #if defined(INTEGER_GMP)
+import GHC.Exts
+import Data.Array.Base
 import GHC.Integer.GMP.Internals
 #endif
 import qualified Data.Sequence as Seq
@@ -328,9 +327,7 @@ cPprTermBase y =
   , ifTerm' (isTyCon charTyCon   . ty) ppr_char
   , ifTerm' (isTyCon floatTyCon  . ty) ppr_float
   , ifTerm' (isTyCon doubleTyCon . ty) ppr_double
-#if defined(INTEGER_GMP)
   , ifTerm' (isIntegerTy         . ty) ppr_integer
-#endif
   ]
  where
    ifTerm :: (Term -> Bool)
@@ -692,12 +689,24 @@ cvObtainTerm hsc_env max_depth force old_ty hval = runTR hsc_env $ do
          traceTR (text "Forcing a " <> text (show (fmap (const ()) t)))
          liftIO $ GHCi.seqHValue hsc_env a
          go (pred max_depth) my_ty old_ty a
--- Blackholes are indirections iff the payload is not TSO or BLOCKING_QUEUE.  So we
--- treat them like indirections; if the payload is TSO or BLOCKING_QUEUE, we'll end up
--- showing '_' which is what we want.
+-- Blackholes are indirections iff the payload is not TSO or BLOCKING_QUEUE. If
+-- the indirection is a TSO or BLOCKING_QUEUE, we return the BLACKHOLE itself as
+-- the suspension so that entering it in GHCi will enter the BLACKHOLE instead
+-- of entering the TSO or BLOCKING_QUEUE (which leads to runtime panic).
       BlackholeClosure{indirectee=ind} -> do
          traceTR (text "Following a BLACKHOLE")
-         go max_depth my_ty old_ty ind
+         ind_clos <- trIO (GHCi.getClosure hsc_env ind)
+         let return_bh_value = return (Suspension BLACKHOLE my_ty a Nothing)
+         case ind_clos of
+           -- TSO and BLOCKING_QUEUE cases
+           BlockingQueueClosure{} -> return_bh_value
+           OtherClosure info _ _
+             | tipe info == TSO -> return_bh_value
+           UnsupportedClosure info
+             | tipe info == TSO -> return_bh_value
+           -- Otherwise follow the indirectee
+           -- (NOTE: This code will break if we support TSO in ghc-heap one day)
+           _ -> go max_depth my_ty old_ty ind
 -- We always follow indirections
       IndClosure{indirectee=ind} -> do
          traceTR (text "Following an indirection" )
@@ -712,7 +721,7 @@ cvObtainTerm hsc_env max_depth force old_ty hval = runTR hsc_env $ do
                   -- MutVar# :: contents_ty -> MutVar# s contents_ty
          traceTR (text "Following a MutVar")
          contents_tv <- newVar liftedTypeKind
-         ASSERT(isUnliftedType my_ty) return ()
+         MASSERT(isUnliftedType my_ty)
          (mutvar_ty,_) <- instScheme $ quantifyType $ mkFunTy
                             contents_ty (mkTyConApp tycon [world,contents_ty])
          addConstraint (mkFunTy contents_tv my_ty) mutvar_ty
@@ -1002,6 +1011,9 @@ getDataConArgTys dc con_app_ty
   = do { let rep_con_app_ty = unwrapType con_app_ty
        ; traceTR (text "getDataConArgTys 1" <+> (ppr con_app_ty $$ ppr rep_con_app_ty
                    $$ ppr (tcSplitTyConApp_maybe rep_con_app_ty)))
+       ; ASSERT( all isTyVar ex_tvs ) return ()
+                 -- ex_tvs can only be tyvars as data types in source
+                 -- Haskell cannot mention covar yet (Aug 2018)
        ; (subst, _) <- instTyVars (univ_tvs ++ ex_tvs)
        ; addConstraint rep_con_app_ty (substTy subst (dataConOrigResTy dc))
               -- See Note [Constructor arg types]
@@ -1010,7 +1022,7 @@ getDataConArgTys dc con_app_ty
        ; return con_arg_tys }
   where
     univ_tvs = dataConUnivTyVars dc
-    ex_tvs   = dataConExTyVars dc
+    ex_tvs   = dataConExTyCoVars dc
 
 {- Note [Constructor arg types]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1257,17 +1269,9 @@ zonkTerm = foldTermM (TermFoldM
 
 zonkRttiType :: TcType -> TcM Type
 -- Zonk the type, replacing any unbound Meta tyvars
--- by skolems, safely out of Meta-tyvar-land
-zonkRttiType = zonkTcTypeToType (mkEmptyZonkEnv zonk_unbound_meta)
-  where
-    zonk_unbound_meta tv
-      = ASSERT( isTcTyVar tv )
-        do { tv' <- skolemiseRuntimeUnk tv
-             -- This is where RuntimeUnks are born:
-             -- otherwise-unconstrained unification variables are
-             -- turned into RuntimeUnks as they leave the
-             -- typechecker's monad
-           ; return (mkTyVarTy tv') }
+-- by RuntimeUnk skolems, safely out of Meta-tyvar-land
+zonkRttiType ty= do { ze <- mkEmptyZonkEnv RuntimeUnkFlexi
+                    ; zonkTcTypeToTypeX ze ty }
 
 --------------------------------------------------------------------------------
 -- Restore Class predicates out of a representation type

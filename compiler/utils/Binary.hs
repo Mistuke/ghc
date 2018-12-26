@@ -409,6 +409,15 @@ instance Binary a => Binary [a] where
             loop n = do a <- get bh; as <- loop (n-1); return (a:as)
         loop len
 
+instance (Ix a, Binary a, Binary b) => Binary (Array a b) where
+    put_ bh arr = do
+        put_ bh $ bounds arr
+        put_ bh $ elems arr
+    get bh = do
+        bounds <- get bh
+        xs <- get bh
+        return $ listArray bounds xs
+
 instance (Binary a, Binary b) => Binary (a,b) where
     put_ bh (a,b) = do put_ bh a; put_ bh b
     get bh        = do a <- get bh
@@ -637,6 +646,12 @@ instance Binary RuntimeRep where
     put_ bh AddrRep         = putByte bh 9
     put_ bh FloatRep        = putByte bh 10
     put_ bh DoubleRep       = putByte bh 11
+#if __GLASGOW_HASKELL__ >= 807
+    put_ bh Int8Rep         = putByte bh 12
+    put_ bh Word8Rep        = putByte bh 13
+    put_ bh Int16Rep        = putByte bh 14
+    put_ bh Word16Rep       = putByte bh 15
+#endif
 
     get bh = do
         tag <- getByte bh
@@ -653,6 +668,12 @@ instance Binary RuntimeRep where
           9  -> pure AddrRep
           10 -> pure FloatRep
           11 -> pure DoubleRep
+#if __GLASGOW_HASKELL__ >= 807
+          12 -> pure Int8Rep
+          13 -> pure Word8Rep
+          14 -> pure Int16Rep
+          15 -> pure Word16Rep
+#endif
           _  -> fail "Binary.putRuntimeRep: invalid tag"
 
 instance Binary KindRep where
@@ -937,6 +958,17 @@ instance Binary LeftOrRight where
                    0 -> return CLeft
                    _ -> return CRight }
 
+instance Binary PromotionFlag where
+   put_ bh NotPromoted = putByte bh 0
+   put_ bh IsPromoted  = putByte bh 1
+
+   get bh = do
+       n <- getByte bh
+       case n of
+         0 -> return NotPromoted
+         1 -> return IsPromoted
+         _ -> fail "Binary(IsPromoted): fail)"
+
 instance Binary Fingerprint where
   put_ h (Fingerprint w1 w2) = do put_ h w1; put_ h w2
   get  h = do w1 <- get h; w2 <- get h; return (Fingerprint w1 w2)
@@ -1114,7 +1146,7 @@ instance Binary StringLiteral where
             fs <- get bh
             return (StringLiteral st fs)
 
-instance Binary a => Binary (GenLocated SrcSpan a) where
+instance Binary a => Binary (Located a) where
     put_ bh (L l x) = do
             put_ bh l
             put_ bh x
@@ -1124,14 +1156,27 @@ instance Binary a => Binary (GenLocated SrcSpan a) where
             x <- get bh
             return (L l x)
 
+instance Binary RealSrcSpan where
+  put_ bh ss = do
+            put_ bh (srcSpanFile ss)
+            put_ bh (srcSpanStartLine ss)
+            put_ bh (srcSpanStartCol ss)
+            put_ bh (srcSpanEndLine ss)
+            put_ bh (srcSpanEndCol ss)
+
+  get bh = do
+            f <- get bh
+            sl <- get bh
+            sc <- get bh
+            el <- get bh
+            ec <- get bh
+            return (mkRealSrcSpan (mkRealSrcLoc f sl sc)
+                                  (mkRealSrcLoc f el ec))
+
 instance Binary SrcSpan where
   put_ bh (RealSrcSpan ss) = do
           putByte bh 0
-          put_ bh (srcSpanFile ss)
-          put_ bh (srcSpanStartLine ss)
-          put_ bh (srcSpanStartCol ss)
-          put_ bh (srcSpanEndLine ss)
-          put_ bh (srcSpanEndCol ss)
+          put_ bh ss
 
   put_ bh (UnhelpfulSpan s) = do
           putByte bh 1
@@ -1140,13 +1185,8 @@ instance Binary SrcSpan where
   get bh = do
           h <- getByte bh
           case h of
-            0 -> do f <- get bh
-                    sl <- get bh
-                    sc <- get bh
-                    el <- get bh
-                    ec <- get bh
-                    return (mkSrcSpan (mkSrcLoc f sl sc)
-                                      (mkSrcLoc f el ec))
+            0 -> do ss <- get bh
+                    return (RealSrcSpan ss)
             _ -> do s <- get bh
                     return (UnhelpfulSpan s)
 

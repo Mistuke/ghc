@@ -24,8 +24,7 @@ module HsTypes (
         HsWildCardBndrs(..),
         LHsSigType, LHsSigWcType, LHsWcType,
         HsTupleSort(..),
-        Promoted(..),
-        HsContext, LHsContext,
+        HsContext, LHsContext, noLHsContext,
         HsTyLit(..),
         HsIPName(..), hsIPNameFS,
 
@@ -63,9 +62,9 @@ module HsTypes (
         hsLTyVarBndrToType, hsLTyVarBndrsToTypes,
 
         -- Printing
-        pprHsType, pprHsForAll, pprHsForAllTvs, pprHsForAllExtra,
-        pprHsContext, pprHsContextNoArrow, pprHsContextMaybe,
-        hsTypeNeedsParens, parenthesizeHsType
+        pprHsType, pprHsForAll, pprHsForAllExtra, pprHsExplicitForAll,
+        pprLHsContext,
+        hsTypeNeedsParens, parenthesizeHsType, parenthesizeHsContext
     ) where
 
 import GhcPrelude
@@ -91,7 +90,6 @@ import FastString
 import Maybes( isJust )
 
 import Data.Data hiding ( Fixity, Prefix, Infix )
-import Data.Maybe ( fromMaybe )
 
 {-
 ************************************************************************
@@ -244,17 +242,36 @@ the a in the code. Thus, GHC does a *stable topological sort* on the variables.
 By "stable", we mean that any two variables who do not depend on each other
 preserve their existing left-to-right ordering.
 
-Implicitly bound variables are collected by extractHsTysRdrTyVars and friends
-in RnTypes. These functions thus promise to keep left-to-right ordering.
+Implicitly bound variables are collected by the extract- family of functions
+(extractHsTysRdrTyVars, extractHsTyVarBndrsKVs, etc.) in RnTypes.
+These functions thus promise to keep left-to-right ordering.
 Look for pointers to this note to see the places where the action happens.
 
+Note that we also maintain this ordering in kind signatures. Even though
+there's no visible kind application (yet), having implicit variables be
+quantified in left-to-right order in kind signatures is nice since:
+
+* It's consistent with the treatment for type signatures.
+* It can affect how types are displayed with -fprint-explicit-kinds (see
+  #15568 for an example), which is a situation where knowing the order in
+  which implicit variables are quantified can be useful.
+* In the event that visible kind application is implemented, the order in
+  which we would expect implicit variables to be ordered in kinds will have
+  already been established.
 -}
 
 -- | Located Haskell Context
 type LHsContext pass = Located (HsContext pass)
       -- ^ 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnUnit'
-
       -- For details on above see note [Api annotations] in ApiAnnotation
+
+noLHsContext :: LHsContext pass
+-- Use this when there is no context in the original program
+-- It would really be more kosher to use a Maybe, to distinguish
+--     class () => C a where ...
+-- from
+--     class C a where ...
+noLHsContext = noLoc []
 
 -- | Haskell Context
 type HsContext pass = [LHsType pass]
@@ -336,6 +353,7 @@ data HsImplicitBndrs pass thing   -- See Note [HsType binders]
                                          -- Implicitly-bound kind & type vars
                                          -- Order is important; see
                                          -- Note [Ordering of implicit variables]
+                                         -- in RnTypes
 
          , hsib_body :: thing            -- Main payload (type or list of types)
     }
@@ -501,10 +519,10 @@ data HsType pass
       , hst_ctxt  :: LHsContext pass       -- Context C => blah
       , hst_body  :: LHsType pass }
 
-  | HsTyVar             (XTyVar pass)
-                        Promoted -- whether explicitly promoted, for the pretty
-                                 -- printer
-                        (Located (IdP pass))
+  | HsTyVar  (XTyVar pass)
+              PromotionFlag    -- Whether explicitly promoted,
+                               -- for the pretty printer
+             (Located (IdP pass))
                   -- Type variable, type constructor, or data constructor
                   -- see Note [Promotions (HsTyVar)]
                   -- See Note [Located RdrNames] in HsExpr
@@ -627,7 +645,7 @@ data HsType pass
 
   | HsExplicitListTy       -- A promoted explicit list
         (XExplicitListTy pass)
-        Promoted           -- whether explcitly promoted, for pretty printer
+        PromotionFlag      -- whether explcitly promoted, for pretty printer
         [LHsType pass]
       -- ^ - 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnOpen' @"'["@,
       --         'ApiAnnotation.AnnClose' @']'@
@@ -840,12 +858,6 @@ data HsTupleSort = HsUnboxedTuple
                  | HsBoxedOrConstraintTuple
                  deriving Data
 
-
--- | Promoted data types.
-data Promoted = Promoted
-              | NotPromoted
-              deriving (Data, Eq, Show)
-
 -- | Located Constructor Declaration Field
 type LConDeclField pass = Located (ConDeclField pass)
       -- ^ May have 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnComma' when
@@ -976,14 +988,14 @@ hsAllLTyVarNames (HsQTvs { hsq_ext = HsQTvsRn { hsq_implicit = kvs }
 hsAllLTyVarNames (XLHsQTyVars _) = panic "hsAllLTyVarNames"
 
 hsLTyVarLocName :: LHsTyVarBndr pass -> Located (IdP pass)
-hsLTyVarLocName = fmap hsTyVarName
+hsLTyVarLocName = onHasSrcSpan hsTyVarName
 
 hsLTyVarLocNames :: LHsQTyVars pass -> [Located (IdP pass)]
 hsLTyVarLocNames qtvs = map hsLTyVarLocName (hsQTvExplicit qtvs)
 
 -- | Convert a LHsTyVarBndr to an equivalent LHsType.
 hsLTyVarBndrToType :: LHsTyVarBndr (GhcPass p) -> LHsType (GhcPass p)
-hsLTyVarBndrToType = fmap cvt
+hsLTyVarBndrToType = onHasSrcSpan cvt
   where cvt (UserTyVar _ n) = HsTyVar noExt NotPromoted n
         cvt (KindedTyVar _ (L name_loc n) kind)
           = HsKindSig noExt
@@ -1033,7 +1045,7 @@ mkHsAppTy t1 t2
 
 mkHsAppTys :: LHsType (GhcPass p) -> [LHsType (GhcPass p)]
            -> LHsType (GhcPass p)
-mkHsAppTys = foldl mkHsAppTy
+mkHsAppTys = foldl' mkHsAppTy
 
 {-
 ************************************************************************
@@ -1120,7 +1132,7 @@ splitLHsForAllTy body              = ([], body)
 splitLHsQualTy :: LHsType pass -> (LHsContext pass, LHsType pass)
 splitLHsQualTy (L _ (HsParTy _ ty)) = splitLHsQualTy ty
 splitLHsQualTy (L _ (HsQualTy { hst_ctxt = ctxt, hst_body = body })) = (ctxt,     body)
-splitLHsQualTy body              = (noLoc [], body)
+splitLHsQualTy body              = (noLHsContext, body)
 
 splitLHsInstDeclTy :: LHsSigType GhcRn
                    -> ([Name], LHsContext GhcRn, LHsType GhcRn)
@@ -1284,6 +1296,8 @@ instance Outputable HsWildCardInfo where
 pprAnonWildCard :: SDoc
 pprAnonWildCard = char '_'
 
+-- | Prints a forall; When passed an empty list, prints @forall.@ only when
+-- @-dppr-debug@
 pprHsForAll :: (OutputableBndrId (GhcPass p))
             => [LHsTyVarBndr (GhcPass p)] -> LHsContext (GhcPass p) -> SDoc
 pprHsForAll = pprHsForAllExtra Nothing
@@ -1299,46 +1313,40 @@ pprHsForAllExtra :: (OutputableBndrId (GhcPass p))
                  => Maybe SrcSpan -> [LHsTyVarBndr (GhcPass p)]
                  -> LHsContext (GhcPass p) -> SDoc
 pprHsForAllExtra extra qtvs cxt
-  = pprHsForAllTvs qtvs <+> pprHsContextExtra show_extra (unLoc cxt)
+  = pp_forall <+> pprLHsContextExtra (isJust extra) cxt
   where
-    show_extra = isJust extra
+    pp_forall | null qtvs = whenPprDebug (forAllLit <> dot)
+              | otherwise = forAllLit <+> interppSP qtvs <> dot
 
-pprHsForAllTvs :: (OutputableBndrId (GhcPass p))
-               => [LHsTyVarBndr (GhcPass p)] -> SDoc
-pprHsForAllTvs qtvs
-  | null qtvs = whenPprDebug (forAllLit <+> dot)
-  | otherwise = forAllLit <+> interppSP qtvs <> dot
+-- | Version of 'pprHsForall' or 'pprHsForallExtra' that will always print
+-- @forall.@ when passed @Just []@. Prints nothing if passed 'Nothing'
+pprHsExplicitForAll :: (OutputableBndrId (GhcPass p))
+               => Maybe [LHsTyVarBndr (GhcPass p)] -> SDoc
+pprHsExplicitForAll (Just qtvs) = forAllLit <+> interppSP qtvs <> dot
+pprHsExplicitForAll Nothing     = empty
 
-pprHsContext :: (OutputableBndrId (GhcPass p)) => HsContext (GhcPass p) -> SDoc
-pprHsContext = maybe empty (<+> darrow) . pprHsContextMaybe
-
-pprHsContextNoArrow :: (OutputableBndrId (GhcPass p))
-                    => HsContext (GhcPass p) -> SDoc
-pprHsContextNoArrow = fromMaybe empty . pprHsContextMaybe
-
-pprHsContextMaybe :: (OutputableBndrId (GhcPass p))
-                  => HsContext (GhcPass p) -> Maybe SDoc
-pprHsContextMaybe []         = Nothing
-pprHsContextMaybe [L _ pred] = Just $ ppr_mono_ty pred
-pprHsContextMaybe cxt        = Just $ parens (interpp'SP cxt)
+pprLHsContext :: (OutputableBndrId (GhcPass p))
+              => LHsContext (GhcPass p) -> SDoc
+pprLHsContext lctxt
+  | null (unLoc lctxt) = empty
+  | otherwise          = pprLHsContextAlways lctxt
 
 -- For use in a HsQualTy, which always gets printed if it exists.
-pprHsContextAlways :: (OutputableBndrId (GhcPass p))
-                   => HsContext (GhcPass p) -> SDoc
-pprHsContextAlways []  = parens empty <+> darrow
-pprHsContextAlways [L _ ty] = ppr_mono_ty ty <+> darrow
-pprHsContextAlways cxt = parens (interpp'SP cxt) <+> darrow
+pprLHsContextAlways :: (OutputableBndrId (GhcPass p))
+                    => LHsContext (GhcPass p) -> SDoc
+pprLHsContextAlways (L _ ctxt)
+  = case ctxt of
+      []       -> parens empty             <+> darrow
+      [L _ ty] -> ppr_mono_ty ty           <+> darrow
+      _        -> parens (interpp'SP ctxt) <+> darrow
 
 -- True <=> print an extra-constraints wildcard, e.g. @(Show a, _) =>@
-pprHsContextExtra :: (OutputableBndrId (GhcPass p))
-                  => Bool -> HsContext (GhcPass p) -> SDoc
-pprHsContextExtra show_extra ctxt
-  | not show_extra
-  = pprHsContext ctxt
-  | null ctxt
-  = char '_' <+> darrow
-  | otherwise
-  = parens (sep (punctuate comma ctxt')) <+> darrow
+pprLHsContextExtra :: (OutputableBndrId (GhcPass p))
+                   => Bool -> LHsContext (GhcPass p) -> SDoc
+pprLHsContextExtra show_extra lctxt@(L _ ctxt)
+  | not show_extra = pprLHsContext lctxt
+  | null ctxt      = char '_' <+> darrow
+  | otherwise      = parens (sep (punctuate comma ctxt')) <+> darrow
   where
     ctxt' = map ppr ctxt ++ [char '_']
 
@@ -1376,18 +1384,16 @@ ppr_mono_lty ty = ppr_mono_ty (unLoc ty)
 
 ppr_mono_ty :: (OutputableBndrId (GhcPass p)) => HsType (GhcPass p) -> SDoc
 ppr_mono_ty (HsForAllTy { hst_bndrs = tvs, hst_body = ty })
-  = sep [pprHsForAllTvs tvs, ppr_mono_lty ty]
+  = sep [pprHsForAll tvs noLHsContext, ppr_mono_lty ty]
 
-ppr_mono_ty (HsQualTy { hst_ctxt = L _ ctxt, hst_body = ty })
-  = sep [pprHsContextAlways ctxt, ppr_mono_lty ty]
+ppr_mono_ty (HsQualTy { hst_ctxt = ctxt, hst_body = ty })
+  = sep [pprLHsContextAlways ctxt, ppr_mono_lty ty]
 
 ppr_mono_ty (HsBangTy _ b ty)   = ppr b <> ppr_mono_lty ty
 ppr_mono_ty (HsRecTy _ flds)      = pprConDeclFields flds
-ppr_mono_ty (HsTyVar _ NotPromoted (L _ name))= pprPrefixOcc name
-ppr_mono_ty (HsTyVar _ Promoted (L _ name))
-  = space <> quote (pprPrefixOcc name)
-                         -- We need a space before the ' above, so the parser
-                         -- does not attach it to the previous symbol
+ppr_mono_ty (HsTyVar _ prom (L _ name))
+  | isPromoted prom = quote (pprPrefixOcc name)
+  | otherwise       = pprPrefixOcc name
 ppr_mono_ty (HsFunTy _ ty1 ty2)   = ppr_fun_ty ty1 ty2
 ppr_mono_ty (HsTupleTy _ con tys) = tupleParens std_con (pprWithCommas ppr tys)
   where std_con = case con of
@@ -1396,15 +1402,15 @@ ppr_mono_ty (HsTupleTy _ con tys) = tupleParens std_con (pprWithCommas ppr tys)
 ppr_mono_ty (HsSumTy _ tys)
   = tupleParens UnboxedTuple (pprWithBars ppr tys)
 ppr_mono_ty (HsKindSig _ ty kind)
-  = parens (ppr_mono_lty ty <+> dcolon <+> ppr kind)
+  = ppr_mono_lty ty <+> dcolon <+> ppr kind
 ppr_mono_ty (HsListTy _ ty)       = brackets (ppr_mono_lty ty)
 ppr_mono_ty (HsIParamTy _ n ty)   = (ppr n <+> dcolon <+> ppr_mono_lty ty)
 ppr_mono_ty (HsSpliceTy _ s)      = pprSplice s
-ppr_mono_ty (HsExplicitListTy _ Promoted tys)
-  = quote $ brackets (interpp'SP tys)
-ppr_mono_ty (HsExplicitListTy _ NotPromoted tys)
-  = brackets (interpp'SP tys)
-ppr_mono_ty (HsExplicitTupleTy _ tys) = quote $ parens (interpp'SP tys)
+ppr_mono_ty (HsExplicitListTy _ prom tys)
+  | isPromoted prom = quote $ brackets (maybeAddSpace tys $ interpp'SP tys)
+  | otherwise       = brackets (interpp'SP tys)
+ppr_mono_ty (HsExplicitTupleTy _ tys)
+  = quote $ parens (maybeAddSpace tys $ interpp'SP tys)
 ppr_mono_ty (HsTyLit _ t)       = ppr_tylit t
 ppr_mono_ty (HsWildCardTy {})   = char '_'
 
@@ -1438,7 +1444,7 @@ ppr_fun_ty ty1 ty2
   = let p1 = ppr_mono_lty ty1
         p2 = ppr_mono_lty ty2
     in
-    sep [p1, text "->" <+> p2]
+    sep [p1, arrow <+> p2]
 
 --------------------------
 ppr_tylit :: HsTyLit -> SDoc
@@ -1459,7 +1465,7 @@ hsTypeNeedsParens p = go
     go (HsFunTy{})           = p >= funPrec
     go (HsTupleTy{})         = False
     go (HsSumTy{})           = False
-    go (HsKindSig{})         = False
+    go (HsKindSig{})         = p >= sigPrec
     go (HsListTy{})          = False
     go (HsIParamTy{})        = p > topPrec
     go (HsSpliceTy{})        = False
@@ -1474,6 +1480,46 @@ hsTypeNeedsParens p = go
     go (HsDocTy _ (L _ t) _) = go t
     go (XHsType{})           = False
 
+maybeAddSpace :: [LHsType pass] -> SDoc -> SDoc
+-- See Note [Printing promoted type constructors]
+-- in IfaceType.  This code implements the same
+-- logic for printing HsType
+maybeAddSpace tys doc
+  | (ty : _) <- tys
+  , lhsTypeHasLeadingPromotionQuote ty = space <> doc
+  | otherwise                          = doc
+
+lhsTypeHasLeadingPromotionQuote :: LHsType pass -> Bool
+lhsTypeHasLeadingPromotionQuote ty
+  = goL ty
+  where
+    goL (L _ ty) = go ty
+
+    go (HsForAllTy{})        = False
+    go (HsQualTy{ hst_ctxt = ctxt, hst_body = body})
+      | L _ (c:_) <- ctxt    = goL c
+      | otherwise            = goL body
+    go (HsBangTy{})          = False
+    go (HsRecTy{})           = False
+    go (HsTyVar _ p _)       = isPromoted p
+    go (HsFunTy _ arg _)     = goL arg
+    go (HsListTy{})          = False
+    go (HsTupleTy{})         = False
+    go (HsSumTy{})           = False
+    go (HsOpTy _ t1 _ _)     = goL t1
+    go (HsKindSig _ t _)     = goL t
+    go (HsIParamTy{})        = False
+    go (HsSpliceTy{})        = False
+    go (HsExplicitListTy _ p _) = isPromoted p
+    go (HsExplicitTupleTy{}) = True
+    go (HsTyLit{})           = False
+    go (HsWildCardTy{})      = False
+    go (HsStarTy{})          = False
+    go (HsAppTy _ t _)       = goL t
+    go (HsParTy{})           = False
+    go (HsDocTy _ t _)       = goL t
+    go (XHsType{})           = False
+
 -- | @'parenthesizeHsType' p ty@ checks if @'hsTypeNeedsParens' p ty@ is
 -- true, and if so, surrounds @ty@ with an 'HsParTy'. Otherwise, it simply
 -- returns @ty@.
@@ -1481,3 +1527,15 @@ parenthesizeHsType :: PprPrec -> LHsType (GhcPass p) -> LHsType (GhcPass p)
 parenthesizeHsType p lty@(L loc ty)
   | hsTypeNeedsParens p ty = L loc (HsParTy NoExt lty)
   | otherwise              = lty
+
+-- | @'parenthesizeHsContext' p ctxt@ checks if @ctxt@ is a single constraint
+-- @c@ such that @'hsTypeNeedsParens' p c@ is true, and if so, surrounds @c@
+-- with an 'HsParTy' to form a parenthesized @ctxt@. Otherwise, it simply
+-- returns @ctxt@ unchanged.
+parenthesizeHsContext :: PprPrec
+                      -> LHsContext (GhcPass p) -> LHsContext (GhcPass p)
+parenthesizeHsContext p lctxt@(L loc ctxt) =
+  case ctxt of
+    [c] -> L loc [parenthesizeHsType p c]
+    _   -> lctxt -- Other contexts are already "parenthesized" by virtue of
+                 -- being tuples.

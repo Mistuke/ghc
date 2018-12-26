@@ -167,46 +167,6 @@ Why can we allow such flexibility for data families but not for type families?
 Because data families can be decomposed -- that is, they are generative and
 injective. A Type family is neither and so always must be applied to all its
 arguments.
-
-Note [Eta reduction for data families]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Consider this
-   data family T a b :: *
-   newtype instance T Int a = MkT (IO a) deriving( Monad )
-We'd like this to work.
-
-From the 'newtype instance' you might think we'd get:
-   newtype TInt a = MkT (IO a)
-   axiom ax1 a :: T Int a ~ TInt a   -- The newtype-instance part
-   axiom ax2 a :: TInt a ~ IO a      -- The newtype part
-
-But now what can we do?  We have this problem
-   Given:   d  :: Monad IO
-   Wanted:  d' :: Monad (T Int) = d |> ????
-What coercion can we use for the ???
-
-Solution: eta-reduce both axioms, thus:
-   axiom ax1 :: T Int ~ TInt
-   axiom ax2 :: TInt ~ IO
-Now
-   d' = d |> Monad (sym (ax2 ; ax1))
-
-This eta reduction happens for data instances as well as newtype
-instances. Here we want to eta-reduce the data family axiom.
-All this is done in TcInstDcls.tcDataFamInstDecl.
-
-See also Note [Newtype eta] in TyCon.
-
-Bottom line:
-  For a FamInst with fi_flavour = DataFamilyInst rep_tc,
-  - fi_tvs may be shorter than tyConTyVars of rep_tc.
-  - fi_tys may be shorter than tyConArity of the family tycon
-       i.e. LHS is unsaturated
-  - fi_rhs will be (rep_tc fi_tvs)
-       i.e. RHS is un-saturated
-
-  But when fi_flavour = SynFamilyInst,
-  - fi_tys has the exact arity of the family tycon
 -}
 
 -- Obtain the axiom of a family instance
@@ -257,55 +217,28 @@ instance NamedThing FamInst where
 instance Outputable FamInst where
    ppr = pprFamInst
 
--- Prints the FamInst as a family instance declaration
--- NB: FamInstEnv.pprFamInst is used only for internal, debug printing
---     See pprTyThing.pprFamInst for printing for the user
 pprFamInst :: FamInst -> SDoc
-pprFamInst famInst
-  = hang (pprFamInstHdr famInst) 2 (whenPprDebug debug_stuff)
+-- Prints the FamInst as a family instance declaration
+-- NB: This function, FamInstEnv.pprFamInst, is used only for internal,
+--     debug printing. See PprTyThing.pprFamInst for printing for the user
+pprFamInst (FamInst { fi_flavor = flavor, fi_axiom = ax
+                    , fi_tvs = tvs, fi_tys = tys, fi_rhs = rhs })
+  = hang (ppr_tc_sort <+> text "instance"
+             <+> pprCoAxBranchUser (coAxiomTyCon ax) (coAxiomSingleBranch ax))
+       2 (whenPprDebug debug_stuff)
   where
-    ax = fi_axiom famInst
-    debug_stuff = vcat [ text "Coercion axiom:" <+> ppr ax
-                       , text "Tvs:" <+> ppr (fi_tvs famInst)
-                       , text "LHS:" <+> ppr (fi_tys famInst)
-                       , text "RHS:" <+> ppr (fi_rhs famInst) ]
-
-pprFamInstHdr :: FamInst -> SDoc
-pprFamInstHdr fi@(FamInst {fi_flavor = flavor})
-  = pprTyConSort <+> pp_instance <+> pp_head
-  where
-    -- For *associated* types, say "type T Int = blah"
-    -- For *top level* type instances, say "type instance T Int = blah"
-    pp_instance
-      | isTyConAssoc fam_tc = empty
-      | otherwise           = text "instance"
-
-    (fam_tc, etad_lhs_tys) = famInstSplitLHS fi
-    vanilla_pp_head = pprTypeApp fam_tc etad_lhs_tys
-
-    pp_head | DataFamilyInst rep_tc <- flavor
-            , isAlgTyCon rep_tc
-            , let extra_tvs = dropList etad_lhs_tys (tyConTyVars rep_tc)
-            , not (null extra_tvs)
-            = getPprStyle $ \ sty ->
-              if debugStyle sty
-              then vanilla_pp_head   -- With -dppr-debug just show it as-is
-              else pprTypeApp fam_tc (etad_lhs_tys ++ mkTyVarTys extra_tvs)
-                     -- Without -dppr-debug, eta-expand
-                     -- See Trac #8674
-                     -- (This is probably over the top now that we use this
-                     --  only for internal debug printing; PprTyThing.pprFamInst
-                     --  is used for user-level printing.)
-            | otherwise
-            = vanilla_pp_head
-
-    pprTyConSort = case flavor of
-                     SynFamilyInst        -> text "type"
+    ppr_tc_sort = case flavor of
+                     SynFamilyInst             -> text "type"
                      DataFamilyInst tycon
                        | isDataTyCon     tycon -> text "data"
                        | isNewTyCon      tycon -> text "newtype"
                        | isAbstractTyCon tycon -> text "data"
                        | otherwise             -> text "WEIRD" <+> ppr tycon
+
+    debug_stuff = vcat [ text "Coercion axiom:" <+> ppr ax
+                       , text "Tvs:" <+> ppr tvs
+                       , text "LHS:" <+> ppr tys
+                       , text "RHS:" <+> ppr rhs ]
 
 pprFamInsts :: [FamInst] -> SDoc
 pprFamInsts finsts = vcat (map pprFamInst finsts)
@@ -458,7 +391,7 @@ familyInstances (pkg_fie, home_fie) fam
                 Nothing                      -> []
 
 extendFamInstEnvList :: FamInstEnv -> [FamInst] -> FamInstEnv
-extendFamInstEnvList inst_env fis = foldl extendFamInstEnv inst_env fis
+extendFamInstEnvList inst_env fis = foldl' extendFamInstEnv inst_env fis
 
 extendFamInstEnv :: FamInstEnv -> FamInst -> FamInstEnv
 extendFamInstEnv inst_env
@@ -542,13 +475,42 @@ find a branch that matches the target, but then we make sure that the target
 is apart from every previous *incompatible* branch. We don't check the
 branches that are compatible with the matching branch, because they are either
 irrelevant (clause 1 of compatible) or benign (clause 2 of compatible).
+
+Note [Compatibility of eta-reduced axioms]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In newtype instances of data families we eta-reduce the axioms,
+See Note [Eta reduction for data families] in FamInstEnv. This means that
+we sometimes need to test compatibility of two axioms that were eta-reduced to
+different degrees, e.g.:
+
+
+data family D a b c
+newtype instance D a Int c = DInt (Maybe a)
+  -- D a Int ~ Maybe
+  -- lhs = [a, Int]
+newtype instance D Bool Int Char = DIntChar Float
+  -- D Bool Int Char ~ Float
+  -- lhs = [Bool, Int, Char]
+
+These are obviously incompatible. We could detect this by saturating
+(eta-expanding) the shorter LHS with fresh tyvars until the lists are of
+equal length, but instead we can just remove the tail of the longer list, as
+those types will simply unify with the freshly introduced tyvars.
+
+By doing this, in case the LHS are unifiable, the yielded substitution won't
+mention the tyvars that appear in the tail we dropped off, and we might try
+to test equality RHSes of different kinds, but that's fine since this case
+occurs only for data families, where the RHS is a unique tycon and the equality
+fails anyway.
 -}
 
 -- See Note [Compatibility]
 compatibleBranches :: CoAxBranch -> CoAxBranch -> Bool
 compatibleBranches (CoAxBranch { cab_lhs = lhs1, cab_rhs = rhs1 })
                    (CoAxBranch { cab_lhs = lhs2, cab_rhs = rhs2 })
-  = case tcUnifyTysFG (const BindMe) lhs1 lhs2 of
+  = let (commonlhs1, commonlhs2) = zipAndUnzip lhs1 lhs2
+             -- See Note [Compatibility of eta-reduced axioms]
+    in case tcUnifyTysFG (const BindMe) commonlhs1 commonlhs2 of
       SurelyApart -> True
       Unifiable subst
         | Type.substTyAddInScope subst rhs1 `eqType`
@@ -624,31 +586,77 @@ computeAxiomIncomps branches
 
 Note [Tidy axioms when we build them]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-We print out axioms and don't want to print stuff like
+Like types and classes, we build axioms fully quantified over all
+their variables, and tidy them when we build them. For example,
+we print out axioms and don't want to print stuff like
     F k k a b = ...
 Instead we must tidy those kind variables.  See Trac #7524.
+
+We could instead tidy when we print, but that makes it harder to get
+things like injectivity errors to come out right. Danger of
+     Type family equation violates injectivity annotation.
+     Kind variable ‘k’ cannot be inferred from the right-hand side.
+     In the type family equation:
+        PolyKindVars @[k1] @[k2] ('[] @k1) = '[] @k2
+
+Note [Always number wildcard types in CoAxBranch]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider the following example (from the DataFamilyInstanceLHS test case):
+
+  data family Sing (a :: k)
+  data instance Sing (_ :: MyKind) where
+      SingA :: Sing A
+      SingB :: Sing B
+
+If we're not careful during tidying, then when this program is compiled with
+-ddump-types, we'll get the following information:
+
+  COERCION AXIOMS
+    axiom DataFamilyInstanceLHS.D:R:SingMyKind_0 ::
+      Sing _ = DataFamilyInstanceLHS.R:SingMyKind_ _
+
+Its misleading to have a wildcard type appearing on the RHS like
+that. To avoid this issue, during tidying, we always opt to add a
+numeric suffix to types that are simply `_`. That way, you instead end
+up with:
+
+  COERCION AXIOMS
+    axiom DataFamilyInstanceLHS.D:R:SingMyKind_0 ::
+      Sing _1 = DataFamilyInstanceLHS.R:SingMyKind_ _1
+
+Which is at least legal syntax.
+
+See also Note [CoAxBranch type variables] in CoAxiom
 -}
 
 -- all axiom roles are Nominal, as this is only used with type families
 mkCoAxBranch :: [TyVar] -- original, possibly stale, tyvars
+             -> [TyVar] -- Extra eta tyvars
              -> [CoVar] -- possibly stale covars
              -> [Type]  -- LHS patterns
              -> Type    -- RHS
              -> [Role]
              -> SrcSpan
              -> CoAxBranch
-mkCoAxBranch tvs cvs lhs rhs roles loc
-  = CoAxBranch { cab_tvs     = tvs1
-               , cab_cvs     = cvs1
+mkCoAxBranch tvs eta_tvs cvs lhs rhs roles loc
+  = CoAxBranch { cab_tvs     = tvs'
+               , cab_eta_tvs = eta_tvs'
+               , cab_cvs     = cvs'
                , cab_lhs     = tidyTypes env lhs
                , cab_roles   = roles
-               , cab_rhs     = tidyType  env rhs
+               , cab_rhs     = tidyType env rhs
                , cab_loc     = loc
                , cab_incomps = placeHolderIncomps }
   where
-    (env1, tvs1) = tidyTyCoVarBndrs emptyTidyEnv tvs
-    (env,  cvs1) = tidyTyCoVarBndrs env1         cvs
+    (env1, tvs')     = tidyVarBndrs init_tidy_env tvs
+    (env2, eta_tvs') = tidyVarBndrs env1          eta_tvs
+    (env,  cvs')     = tidyVarBndrs env2          cvs
     -- See Note [Tidy axioms when we build them]
+    -- See also Note [CoAxBranch type variables] in CoAxiom
+
+    init_occ_env = initTidyOccEnv [mkTyVarOcc "_"]
+    init_tidy_env = mkEmptyTidyEnv init_occ_env
+    -- See Note [Always number wildcard types in CoAxBranch]
 
 -- all of the following code is here to avoid mutual dependencies with
 -- Coercion
@@ -671,12 +679,13 @@ mkUnbranchedCoAxiom ax_name fam_tc branch
             , co_ax_branches = unbranched (branch { cab_incomps = [] }) }
 
 mkSingleCoAxiom :: Role -> Name
-                -> [TyVar] -> [CoVar] -> TyCon -> [Type] -> Type
+                -> [TyVar] -> [TyVar] -> [CoVar]
+                -> TyCon -> [Type] -> Type
                 -> CoAxiom Unbranched
 -- Make a single-branch CoAxiom, incluidng making the branch itself
 -- Used for both type family (Nominal) and data family (Representational)
 -- axioms, hence passing in the Role
-mkSingleCoAxiom role ax_name tvs cvs fam_tc lhs_tys rhs_ty
+mkSingleCoAxiom role ax_name tvs eta_tvs cvs fam_tc lhs_tys rhs_ty
   = CoAxiom { co_ax_unique   = nameUnique ax_name
             , co_ax_name     = ax_name
             , co_ax_tc       = fam_tc
@@ -684,7 +693,7 @@ mkSingleCoAxiom role ax_name tvs cvs fam_tc lhs_tys rhs_ty
             , co_ax_implicit = False
             , co_ax_branches = unbranched (branch { cab_incomps = [] }) }
   where
-    branch = mkCoAxBranch tvs cvs lhs_tys rhs_ty
+    branch = mkCoAxBranch tvs eta_tvs cvs lhs_tys rhs_ty
                           (map (const Nominal) tvs)
                           (getSrcSpan ax_name)
 
@@ -702,7 +711,7 @@ mkNewTypeCoAxiom name tycon tvs roles rhs_ty
             , co_ax_tc       = tycon
             , co_ax_branches = unbranched (branch { cab_incomps = [] }) }
   where
-    branch = mkCoAxBranch tvs [] (mkTyVarTys tvs) rhs_ty
+    branch = mkCoAxBranch tvs [] [] (mkTyVarTys tvs) rhs_ty
                           roles (getSrcSpan name)
 
 {-
@@ -1264,12 +1273,6 @@ topNormaliseType_maybe env ty
 
     tyFamStepper rec_nts tc tys  -- Try to step a type/data family
       = let (args_co, ntys) = normaliseTcArgs env Representational tc tys in
-          -- NB: It's OK to use normaliseTcArgs here instead of
-          -- normalise_tc_args (which takes the LiftingContext described
-          -- in Note [Normalising types]) because the reduceTyFamApp below
-          -- works only at top level. We'll never recur in this function
-          -- after reducing the kind of a bound tyvar.
-
         case reduceTyFamApp_maybe env Representational tc ntys of
           Just (co, rhs) -> NS_Step rec_nts rhs (args_co `mkTransCo` co)
           _              -> NS_Done
@@ -1366,11 +1369,11 @@ normalise_type ty
            ; (co2, nty2) <- go ty2
            ; r <- getRole
            ; return (mkFunCo r co1 co2, mkFunTy nty1 nty2) }
-    go (ForAllTy (TvBndr tyvar vis) ty)
-      = do { (lc', tv', h, ki') <- normalise_tyvar_bndr tyvar
+    go (ForAllTy (Bndr tcvar vis) ty)
+      = do { (lc', tv', h, ki') <- normalise_var_bndr tcvar
            ; (co, nty)          <- withLC lc' $ normalise_type ty
            ; let tv2 = setTyVarKind tv' ki'
-           ; return (mkForAllCo tv' h co, ForAllTy (TvBndr tv2 vis) nty) }
+           ; return (mkForAllCo tv' h co, ForAllTy (Bndr tv2 vis) nty) }
     go (TyVarTy tv)    = normalise_tyvar tv
     go (CastTy ty co)
       = do { (nco, nty) <- go ty
@@ -1397,12 +1400,13 @@ normalise_tyvar tv
            Nothing -> (mkReflCo r ty, ty) }
   where ty = mkTyVarTy tv
 
-normalise_tyvar_bndr :: TyVar -> NormM (LiftingContext, TyVar, Coercion, Kind)
-normalise_tyvar_bndr tv
+normalise_var_bndr :: TyCoVar -> NormM (LiftingContext, TyCoVar, Coercion, Kind)
+normalise_var_bndr tcvar
+  -- works for both tvar and covar
   = do { lc1 <- getLC
        ; env <- getEnv
        ; let callback lc ki = runNormM (normalise_type ki) env lc Nominal
-       ; return $ liftCoSubstVarBndrUsing callback lc1 tv }
+       ; return $ liftCoSubstVarBndrUsing callback lc1 tcvar }
 
 -- | a monad for the normalisation functions, reading 'FamInstEnvs',
 -- a 'LiftingContext', and a 'Role'.
@@ -1501,7 +1505,7 @@ flattenTys in_scope tys = snd $ coreFlattenTys env tys
     -- *anywhere* in the types we're flattening, even if locally-bound in
     -- a forall. That way, we can ensure consistency both within and outside
     -- of that forall.
-    all_in_scope = in_scope `extendInScopeSetSet` allTyVarsInTys tys
+    all_in_scope = in_scope `extendInScopeSetSet` allTyCoVarsInTys tys
     env          = emptyFlattenEnv all_in_scope
 
 coreFlattenTys :: FlattenEnv -> [Type] -> (FlattenEnv, [Type])
@@ -1536,10 +1540,10 @@ coreFlattenTy = go
                                  (env2, ty2') = go env1 ty2 in
                              (env2, mkFunTy ty1' ty2')
 
-    go env (ForAllTy (TvBndr tv vis) ty)
+    go env (ForAllTy (Bndr tv vis) ty)
       = let (env1, tv') = coreFlattenVarBndr env tv
             (env2, ty') = go env1 ty in
-        (env2, ForAllTy (TvBndr tv' vis) ty')
+        (env2, ForAllTy (Bndr tv' vis) ty')
 
     go env ty@(LitTy {}) = (env, ty)
 
@@ -1563,20 +1567,20 @@ coreFlattenCo env co
     covar         = uniqAway in_scope (mkCoVar fresh_name kind')
     env2          = env1 { fe_subst = subst1 `extendTCvInScope` covar }
 
-coreFlattenVarBndr :: FlattenEnv -> TyVar -> (FlattenEnv, TyVar)
+coreFlattenVarBndr :: FlattenEnv -> TyCoVar -> (FlattenEnv, TyCoVar)
 coreFlattenVarBndr env tv
   | kind' `eqType` kind
-  = ( env { fe_subst = extendTvSubst old_subst tv (mkTyVarTy tv) }
+  = ( env { fe_subst = extendTCvSubst old_subst tv (mkTyCoVarTy tv) }
              -- override any previous binding for tv
     , tv)
 
   | otherwise
-  = let new_tv    = uniqAway (getTCvInScope old_subst) (setTyVarKind tv kind')
-        new_subst = extendTvSubstWithClone old_subst tv new_tv
+  = let new_tv    = uniqAway (getTCvInScope old_subst) (setVarType tv kind')
+        new_subst = extendTCvSubstWithClone old_subst tv new_tv
     in
     (env' { fe_subst = new_subst }, new_tv)
   where
-    kind          = tyVarKind tv
+    kind          = varType tv
     (env', kind') = coreFlattenTy env kind
     old_subst     = fe_subst env
 
@@ -1602,24 +1606,24 @@ coreFlattenTyFamApp env fam_tc fam_args
         FlattenEnv { fe_type_map = type_map
                    , fe_subst = subst } = env
 
--- | Get the set of all type variables mentioned anywhere in the list
+-- | Get the set of all type/coercion variables mentioned anywhere in the list
 -- of types. These variables are not necessarily free.
-allTyVarsInTys :: [Type] -> VarSet
-allTyVarsInTys []       = emptyVarSet
-allTyVarsInTys (ty:tys) = allTyVarsInTy ty `unionVarSet` allTyVarsInTys tys
+allTyCoVarsInTys :: [Type] -> VarSet
+allTyCoVarsInTys []       = emptyVarSet
+allTyCoVarsInTys (ty:tys) = allTyCoVarsInTy ty `unionVarSet` allTyCoVarsInTys tys
 
--- | Get the set of all type variables mentioned anywhere in a type.
-allTyVarsInTy :: Type -> VarSet
-allTyVarsInTy = go
+-- | Get the set of all type/coercion variables mentioned anywhere in a type.
+allTyCoVarsInTy :: Type -> VarSet
+allTyCoVarsInTy = go
   where
     go (TyVarTy tv)      = unitVarSet tv
-    go (TyConApp _ tys)  = allTyVarsInTys tys
+    go (TyConApp _ tys)  = allTyCoVarsInTys tys
     go (AppTy ty1 ty2)   = (go ty1) `unionVarSet` (go ty2)
     go (FunTy ty1 ty2)   = (go ty1) `unionVarSet` (go ty2)
-    go (ForAllTy (TvBndr tv _) ty) = unitVarSet tv     `unionVarSet`
-                                     go (tyVarKind tv) `unionVarSet`
-                                     go ty
-                                     -- Don't remove the tv from the set!
+    go (ForAllTy (Bndr tv _) ty) = unitVarSet tv     `unionVarSet`
+                                   go (tyVarKind tv) `unionVarSet`
+                                   go ty
+                                   -- Don't remove the tv from the set!
     go (LitTy {})        = emptyVarSet
     go (CastTy ty co)    = go ty `unionVarSet` go_co co
     go (CoercionTy co)   = go_co co

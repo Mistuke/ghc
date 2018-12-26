@@ -20,6 +20,14 @@
 typedef void SymbolAddr;
 typedef char SymbolName;
 
+/* Hold extended information about a symbol in case we need to resolve it at a
+   late stage.  */
+typedef struct _Symbol
+{
+    SymbolName *name;
+    SymbolAddr *addr;
+} Symbol_t;
+
 /* Indication of section kinds for loaded objects.  Needed by
    the GC for deciding whether or not a pointer on the stack
    is a code pointer.
@@ -36,9 +44,9 @@ typedef
           SECTIONKIND_FINIT_ARRAY,
           /* We don't know what the section is and don't care.  */
           SECTIONKIND_OTHER,
-          /* Section belongs to an import section group. e.g. .idata$.  */
-          SECTIONKIND_DEBUG,
           /* Section contains debug information. e.g. .debug$.  */
+          SECTIONKIND_DEBUG,
+          /* Section belongs to an import section group. e.g. .idata$.  */
           SECTIONKIND_IMPORT,
           /* Section defines an import library entry, e.g. idata$7.  */
           SECTIONKIND_IMPORT_LIBRARY,
@@ -148,7 +156,7 @@ typedef struct _ObjectCode {
        this object into the global symbol hash table.  This is so that
        we know which parts of the latter mapping to nuke when this
        object is removed from the system. */
-    char** symbols;
+    Symbol_t *symbols;
     int    n_symbols;
 
     /* ptr to mem containing the object file image */

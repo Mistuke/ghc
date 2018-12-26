@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module RnSplice (
         rnTopSpliceDecls,
@@ -51,7 +52,6 @@ import {-# SOURCE #-} TcSplice
     , runMetaE
     , runMetaP
     , runMetaT
-    , runRemoteModFinalizers
     , tcTopSpliceExpr
     )
 
@@ -355,13 +355,13 @@ mkQuasiQuoteExpr :: UntypedSpliceFlavour -> Name -> SrcSpan -> FastString
 -- Return the expression (quoter "...quote...")
 -- which is what we must run in a quasi-quote
 mkQuasiQuoteExpr flavour quoter q_span quote
-  = L q_span $ HsApp noExt (L q_span $
-                  HsApp noExt (L q_span (HsVar noExt (L q_span quote_selector)))
+  = cL q_span $ HsApp noExt (cL q_span
+              $ HsApp noExt (cL q_span (HsVar noExt (cL q_span quote_selector)))
                             quoterExpr)
                      quoteExpr
   where
-    quoterExpr = L q_span $! HsVar noExt $! (L q_span quoter)
-    quoteExpr  = L q_span $! HsLit noExt $! HsString NoSourceText quote
+    quoterExpr = cL q_span $! HsVar noExt $! (cL q_span quoter)
+    quoteExpr  = cL q_span $! HsLit noExt $! HsString NoSourceText quote
     quote_selector = case flavour of
                        UntypedExpSplice  -> quoteExpName
                        UntypedPatSplice  -> quotePatName
@@ -374,21 +374,21 @@ rnSplice :: HsSplice GhcPs -> RnM (HsSplice GhcRn, FreeVars)
 rnSplice (HsTypedSplice x hasParen splice_name expr)
   = do  { checkTH expr "Template Haskell typed splice"
         ; loc  <- getSrcSpanM
-        ; n' <- newLocalBndrRn (L loc splice_name)
+        ; n' <- newLocalBndrRn (cL loc splice_name)
         ; (expr', fvs) <- rnLExpr expr
         ; return (HsTypedSplice x hasParen n' expr', fvs) }
 
 rnSplice (HsUntypedSplice x hasParen splice_name expr)
   = do  { checkTH expr "Template Haskell untyped splice"
         ; loc  <- getSrcSpanM
-        ; n' <- newLocalBndrRn (L loc splice_name)
+        ; n' <- newLocalBndrRn (cL loc splice_name)
         ; (expr', fvs) <- rnLExpr expr
         ; return (HsUntypedSplice x hasParen n' expr', fvs) }
 
 rnSplice (HsQuasiQuote x splice_name quoter q_loc quote)
   = do  { checkTH quoter "Template Haskell quasi-quote"
         ; loc  <- getSrcSpanM
-        ; splice_name' <- newLocalBndrRn (L loc splice_name)
+        ; splice_name' <- newLocalBndrRn (cL loc splice_name)
 
           -- Rename the quoter; akin to the HsVar case of rnExpr
         ; quoter' <- lookupOccRn quoter
@@ -600,18 +600,22 @@ rnSplicePat :: HsSplice GhcPs -> RnM ( Either (Pat GhcPs) (Pat GhcRn)
 rnSplicePat splice
   = rnSpliceGen run_pat_splice pend_pat_splice splice
   where
+    pend_pat_splice :: HsSplice GhcRn ->
+                       (PendingRnSplice, Either b (Pat GhcRn))
     pend_pat_splice rn_splice
       = (makePending UntypedPatSplice rn_splice
         , Right (SplicePat noExt rn_splice))
 
+    run_pat_splice :: HsSplice GhcRn ->
+                      RnM (Either (Pat GhcPs) (Pat GhcRn), FreeVars)
     run_pat_splice rn_splice
       = do { traceRn "rnSplicePat: untyped pattern splice" empty
            ; (pat, mod_finalizers) <-
                 runRnSplice UntypedPatSplice runMetaP ppr rn_splice
              -- See Note [Delaying modFinalizers in untyped splices].
-           ; return ( Left $ ParPat noExt $ (SplicePat noExt)
+           ; return ( Left $ ParPat noExt $ ((SplicePat noExt)
                               . HsSpliced noExt (ThModFinalizers mod_finalizers)
-                              . HsSplicedPat <$>
+                              . HsSplicedPat)  `onHasSrcSpan`
                               pat
                     , emptyFVs
                     ) }
@@ -620,12 +624,12 @@ rnSplicePat splice
 
 ----------------------
 rnSpliceDecl :: SpliceDecl GhcPs -> RnM (SpliceDecl GhcRn, FreeVars)
-rnSpliceDecl (SpliceDecl _ (L loc splice) flg)
+rnSpliceDecl (SpliceDecl _ (dL->L loc splice) flg)
   = rnSpliceGen run_decl_splice pend_decl_splice splice
   where
     pend_decl_splice rn_splice
        = ( makePending UntypedDeclSplice rn_splice
-         , SpliceDecl noExt (L loc rn_splice) flg)
+         , SpliceDecl noExt (cL loc rn_splice) flg)
 
     run_decl_splice rn_splice = pprPanic "rnSpliceDecl" (ppr rn_splice)
 rnSpliceDecl (XSpliceDecl _) = panic "rnSpliceDecl"
@@ -638,9 +642,16 @@ rnTopSpliceDecls splice
                                rnSplice splice
            -- As always, be sure to checkNoErrs above lest we end up with
            -- holes making it to typechecking, hence #12584.
+           --
+           -- Note that we cannot call checkNoErrs for the whole duration
+           -- of rnTopSpliceDecls. The reason is that checkNoErrs changes
+           -- the local environment to temporarily contain a new
+           -- reference to store errors, and add_mod_finalizers would
+           -- cause this reference to be stored after checkNoErrs finishes.
+           -- This is checked by test TH_finalizer.
          ; traceRn "rnTopSpliceDecls: untyped declaration splice" empty
-         ; (decls, mod_finalizers) <-
-              runRnSplice UntypedDeclSplice runMetaD ppr_decls rn_splice
+         ; (decls, mod_finalizers) <- checkNoErrs $
+               runRnSplice UntypedDeclSplice runMetaD ppr_decls rn_splice
          ; add_mod_finalizers_now mod_finalizers
          ; return (decls,fvs) }
    where
@@ -658,8 +669,9 @@ rnTopSpliceDecls splice
      add_mod_finalizers_now []             = return ()
      add_mod_finalizers_now mod_finalizers = do
        th_modfinalizers_var <- fmap tcg_th_modfinalizers getGblEnv
+       env <- getLclEnv
        updTcRef th_modfinalizers_var $ \fins ->
-         runRemoteModFinalizers (ThModFinalizers mod_finalizers) : fins
+         (env, ThModFinalizers mod_finalizers) : fins
 
 
 {-
@@ -721,8 +733,8 @@ traceSplice :: SpliceInfo -> TcM ()
 traceSplice (SpliceInfo { spliceDescription = sd, spliceSource = mb_src
                         , spliceGenerated = gen, spliceIsDecl = is_decl })
   = do { loc <- case mb_src of
-                   Nothing        -> getSrcSpanM
-                   Just (L loc _) -> return loc
+                   Nothing           -> getSrcSpanM
+                   Just (dL->L loc _) -> return loc
        ; traceOptTcRn Opt_D_dump_splices (spliceDebugDoc loc)
 
        ; when is_decl $  -- Raw material for -dth-dec-file

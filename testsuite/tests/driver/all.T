@@ -198,7 +198,9 @@ test('T8959a',
      run_command,
      ['$MAKE -s --no-print-directory T8959a'])
 
-test('T703', normal, run_command, ['$MAKE -s --no-print-directory T703'])
+# Requires readelf
+test('T703', unless(opsys('linux'), skip),
+     run_command, ['$MAKE -s --no-print-directory T703'])
 test('T2182', normal, run_command, ['$MAKE -s --no-print-directory T2182'])
 test('T8101', normal, compile, ['-Wall -fno-code'])
 test('T8101b', normal, multimod_compile,
@@ -233,6 +235,8 @@ test('T10220', normal, run_command,
      ['{compiler} --make T10220.hspp -fno-code -v0'])
 
 test('T10182', [], run_command, ['$MAKE -s --no-print-directory T10182'])
+
+test('T10869', [], run_command, ['$MAKE -s --no-print-directory T10869'])
 
 test('T365',
      [pre_cmd('touch test_preprocessor.txt'), unless(opsys('mingw32'), skip)],
@@ -281,4 +285,5 @@ test('inline-check', omit_ways(['hpc', 'profasm'])
                    , compile
 		   , ['-dinline-check foo -O -ddebug-output'])
 
+test('T14452', [], run_command, ['$MAKE -s --no-print-directory T14452'])
 test('T15396', normal, compile_and_run, ['-package ghc'])

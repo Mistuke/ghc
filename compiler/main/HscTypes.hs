@@ -6,6 +6,7 @@
 
 {-# LANGUAGE CPP, ScopedTypeVariables #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ViewPatterns #-}
 
 -- | Types for the per-module compiler
 module HscTypes (
@@ -36,7 +37,7 @@ module HscTypes (
 
         -- * Information about the module being compiled
         -- (re-exported from DriverPhases)
-        HscSource(..), isHsBootOrSig, hscSourceString,
+        HscSource(..), isHsBootOrSig, isHsigFile, hscSourceString,
 
 
         -- * State relating to modules in this package
@@ -179,7 +180,8 @@ import TysWiredIn
 import Packages hiding  ( Version(..) )
 import CmdLineParser
 import DynFlags
-import DriverPhases     ( Phase, HscSource(..), isHsBootOrSig, hscSourceString )
+import DriverPhases     ( Phase, HscSource(..), hscSourceString
+                        , isHsBootOrSig, isHsigFile )
 import BasicTypes
 import IfaceSyn
 import Maybes
@@ -203,7 +205,6 @@ import qualified GHC.LanguageExtensions as LangExt
 
 import Foreign
 import Control.Monad    ( guard, liftM, ap )
-import Data.Foldable    ( foldl' )
 import Data.IORef
 import Data.Time
 import Exception
@@ -344,7 +345,7 @@ handleFlagWarnings dflags warns = do
       -- It would be nicer if warns :: [Located MsgDoc], but that
       -- has circular import problems.
       bag = listToBag [ mkPlainWarnMsg dflags loc (text warn)
-                      | Warn _ (L loc warn) <- warns' ]
+                      | Warn _ (dL->L loc warn) <- warns' ]
 
   printOrThrowWarnings dflags bag
 
@@ -1533,7 +1534,7 @@ It's exactly the same for type-family instances.  See Trac #7102
 -}
 
 -- | Interactive context, recording information about the state of the
--- context in which statements are executed in a GHC session.
+-- context in which statements are executed in a GHCi session.
 data InteractiveContext
   = InteractiveContext {
          ic_dflags     :: DynFlags,
@@ -1711,7 +1712,7 @@ icExtendGblRdrEnv env tythings
        | is_sub_bndr thing
        = env
        | otherwise
-       = foldl extendGlobalRdrEnv env1 (concatMap localGREsFromAvail avail)
+       = foldl' extendGlobalRdrEnv env1 (concatMap localGREsFromAvail avail)
        where
           env1  = shadowNames env (concatMap availNames avail)
           avail = tyThingAvailInfo thing
@@ -2015,8 +2016,8 @@ tyThingParent_maybe (AConLike cl) = case cl of
     RealDataCon dc  -> Just (ATyCon (dataConTyCon dc))
     PatSynCon{}     -> Nothing
 tyThingParent_maybe (ATyCon tc)   = case tyConAssoc_maybe tc of
-                                      Just cls -> Just (ATyCon (classTyCon cls))
-                                      Nothing  -> Nothing
+                                      Just tc -> Just (ATyCon tc)
+                                      Nothing -> Nothing
 tyThingParent_maybe (AnId id)     = case idDetails id of
                                       RecSelId { sel_tycon = RecSelData tc } ->
                                           Just (ATyCon tc)
@@ -2115,7 +2116,7 @@ extendTypeEnv :: TypeEnv -> TyThing -> TypeEnv
 extendTypeEnv env thing = extendNameEnv env (getName thing) thing
 
 extendTypeEnvList :: TypeEnv -> [TyThing] -> TypeEnv
-extendTypeEnvList env things = foldl extendTypeEnv env things
+extendTypeEnvList env things = foldl' extendTypeEnv env things
 
 extendTypeEnvWithIds :: TypeEnv -> [Id] -> TypeEnv
 extendTypeEnvWithIds env ids
@@ -2751,6 +2752,8 @@ data ModSummary
           -- ^ Timestamp of hi file, if we *only* are typechecking (it is
           -- 'Nothing' otherwise.
           -- See Note [Recompilation checking in -fno-code mode] and #9243
+        ms_hie_date   :: Maybe UTCTime,
+          -- ^ Timestamp of hie file, if we have one
         ms_srcimps      :: [(Maybe FastString, Located ModuleName)],
           -- ^ Source imports of the module
         ms_textual_imps :: [(Maybe FastString, Located ModuleName)],
@@ -2832,7 +2835,7 @@ showModMsg dflags target recomp mod_summary = showSDoc dflags $
 {-
 ************************************************************************
 *                                                                      *
-\subsection{Recmpilation}
+\subsection{Recompilation}
 *                                                                      *
 ************************************************************************
 -}
@@ -2919,6 +2922,7 @@ trustInfoToNum it
             Sf_Unsafe       -> 1
             Sf_Trustworthy  -> 2
             Sf_Safe         -> 3
+            Sf_Ignore       -> 0
 
 numToTrustInfo :: Word8 -> IfaceTrustInfo
 numToTrustInfo 0 = setSafeMode Sf_None
@@ -2932,6 +2936,7 @@ numToTrustInfo n = error $ "numToTrustInfo: bad input number! (" ++ show n ++ ")
 
 instance Outputable IfaceTrustInfo where
     ppr (TrustInfo Sf_None)          = text "none"
+    ppr (TrustInfo Sf_Ignore)        = text "none"
     ppr (TrustInfo Sf_Unsafe)        = text "unsafe"
     ppr (TrustInfo Sf_Trustworthy)   = text "trustworthy"
     ppr (TrustInfo Sf_Safe)          = text "safe"

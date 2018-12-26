@@ -77,7 +77,7 @@ import Id
 import IdInfo
 import PrelNames( absentErrorIdKey )
 import Type
-import TyCoRep( TyBinder(..) )
+import TyCoRep( TyCoBinder(..), TyBinder )
 import Coercion
 import TyCon
 import Unique
@@ -266,7 +266,7 @@ mkCast e co
   = e
 
 mkCast (Coercion e_co) co
-  | isCoercionType (pSnd (coercionKind co))
+  | isCoVarType (pSnd (coercionKind co))
        -- The guard here checks that g has a (~#) on both sides,
        -- otherwise decomposeCo fails.  Can in principle happen
        -- with unsafeCoerce
@@ -481,8 +481,15 @@ bindNonRec :: Id -> CoreExpr -> CoreExpr -> CoreExpr
 -- the simplifier deals with them perfectly well. See
 -- also 'MkCore.mkCoreLet'
 bindNonRec bndr rhs body
-  | needsCaseBinding (idType bndr) rhs = Case rhs bndr (exprType body) [(DEFAULT, [], body)]
-  | otherwise                          = Let (NonRec bndr rhs) body
+  | isTyVar bndr                       = let_bind
+  | isCoVar bndr                       = if isCoArg rhs then let_bind
+    {- See Note [Binding coercions] -}                  else case_bind
+  | isJoinId bndr                      = let_bind
+  | needsCaseBinding (idType bndr) rhs = case_bind
+  | otherwise                          = let_bind
+  where
+    case_bind = Case rhs bndr (exprType body) [(DEFAULT, [], body)]
+    let_bind  = Let (NonRec bndr rhs) body
 
 -- | Tests whether we have to use a @case@ rather than @let@ binding for this expression
 -- as per the invariants of 'CoreExpr': see "CoreSyn#let_app_invariant"
@@ -505,7 +512,12 @@ mkAltExpr (LitAlt lit) [] []
 mkAltExpr (LitAlt _) _ _ = panic "mkAltExpr LitAlt"
 mkAltExpr DEFAULT _ _ = panic "mkAltExpr DEFAULT"
 
-{-
+{- Note [Binding coercions]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider binding a CoVar, c = e.  Then, we must atisfy
+Note [CoreSyn type and coercion invariant] in CoreSyn,
+which allows only (Coercion co) on the RHS.
+
 ************************************************************************
 *                                                                      *
                Operations oer case alternatives
@@ -943,6 +955,8 @@ it off at source.
 -}
 
 exprIsTrivial :: CoreExpr -> Bool
+-- If you modify this function, you may also
+-- need to modify getIdFromTrivialExpr
 exprIsTrivial (Var _)          = True        -- See Note [Variables are trivial]
 exprIsTrivial (Type _)         = True
 exprIsTrivial (Coercion _)     = True
@@ -972,20 +986,24 @@ if the variable actually refers to a literal; thus we use
 T12076lit for an example where this matters.
 -}
 
-getIdFromTrivialExpr :: CoreExpr -> Id
+getIdFromTrivialExpr :: HasDebugCallStack => CoreExpr -> Id
 getIdFromTrivialExpr e
     = fromMaybe (pprPanic "getIdFromTrivialExpr" (ppr e))
                 (getIdFromTrivialExpr_maybe e)
 
 getIdFromTrivialExpr_maybe :: CoreExpr -> Maybe Id
 -- See Note [getIdFromTrivialExpr]
-getIdFromTrivialExpr_maybe e = go e
-  where go (Var v) = Just v
-        go (App f t) | not (isRuntimeArg t) = go f
-        go (Tick t e) | not (tickishIsCode t) = go e
-        go (Cast e _) = go e
-        go (Lam b e) | not (isRuntimeVar b) = go e
-        go _ = Nothing
+-- Th equations for this should line up with those for exprIsTrivial
+getIdFromTrivialExpr_maybe e
+  = go e
+  where
+    go (App f t) | not (isRuntimeArg t)   = go f
+    go (Tick t e) | not (tickishIsCode t) = go e
+    go (Cast e _)                         = go e
+    go (Lam b e) | not (isRuntimeVar b)   = go e
+    go (Case e _ _ [])                    = go e
+    go (Var v) = Just v
+    go _       = Nothing
 
 {-
 exprIsBottom is a very cheap and cheerful function; it may return
@@ -1485,7 +1503,6 @@ expr_ok primop_ok (Lam b e)
                  | isTyVar b = expr_ok primop_ok  e
                  | otherwise = True
 
-
 -- Tick annotations that *tick* cannot be speculated, because these
 -- are meant to identify whether or not (and how often) the particular
 -- source expression was evaluated at runtime.
@@ -1507,10 +1524,13 @@ expr_ok primop_ok (Case scrut bndr _ alts)
   && altsAreExhaustive alts
 
 expr_ok primop_ok other_expr
-  = case collectArgs other_expr of
-        (expr, args) | Var f <- stripTicksTopE (not . tickishCounts) expr
-                     -> app_ok primop_ok f args
-        _            -> False
+  | (expr, args) <- collectArgs other_expr
+  = case stripTicksTopE (not . tickishCounts) expr of
+        Var f   -> app_ok primop_ok f args
+        -- 'LitRubbish' is the only literal that can occur in the head of an
+        -- application and will not be matched by the above case (Var /= Lit).
+        Lit lit -> ASSERT( lit == rubbishLit ) True
+        _       -> False
 
 -----------------------------
 app_ok :: (PrimOp -> Bool) -> Id -> [CoreExpr] -> Bool
@@ -1536,25 +1556,28 @@ app_ok primop_ok fun args
               -- Often there is a literal divisor, and this
               -- can get rid of a thunk in an inner loop
 
-        | SeqOp <- op    -- See Note [seq# and expr_ok]
-        -> all (expr_ok primop_ok) args
+        | SeqOp <- op  -- See Note [exprOkForSpeculation and SeqOp/DataToTagOp]
+        -> False       --     for the special cases for SeqOp and DataToTagOp
+        | DataToTagOp <- op
+        -> False
 
         | otherwise
         -> primop_ok op  -- Check the primop itself
-        && and (zipWith arg_ok arg_tys args)  -- Check the arguments
+        && and (zipWith primop_arg_ok arg_tys args)  -- Check the arguments
 
       _other -> isUnliftedType (idType fun)          -- c.f. the Var case of exprIsHNF
              || idArity fun > n_val_args             -- Partial apps
-             || (n_val_args == 0 &&
-                 isEvaldUnfolding (idUnfolding fun)) -- Let-bound values
+             -- NB: even in the nullary case, do /not/ check
+             --     for evaluated-ness of the fun;
+             --     see Note [exprOkForSpeculation and evaluated variables]
              where
                n_val_args = valArgCount args
   where
     (arg_tys, _) = splitPiTys (idType fun)
 
-    arg_ok :: TyBinder -> CoreExpr -> Bool
-    arg_ok (Named _) _ = True   -- A type argument
-    arg_ok (Anon ty) arg        -- A term argument
+    primop_arg_ok :: TyBinder -> CoreExpr -> Bool
+    primop_arg_ok (Named _) _ = True   -- A type argument
+    primop_arg_ok (Anon ty) arg        -- A term argument
        | isUnliftedType ty = expr_ok primop_ok arg
        | otherwise         = True  -- See Note [Primops with lifted arguments]
 
@@ -1592,7 +1615,7 @@ isDivOp _                = False
 exprOkForSpeculation accepts very special case expressions.
 Reason: (a ==# b) is ok-for-speculation, but the litEq rules
 in PrelRules convert it (a ==# 3#) to
-   case a of { DEAFULT -> 0#; 3# -> 1# }
+   case a of { DEFAULT -> 0#; 3# -> 1# }
 for excellent reasons described in
   PrelRules Note [The litEq rule: converting equality to case].
 So, annoyingly, we want that case expression to be
@@ -1618,23 +1641,8 @@ But we restrict it sharply:
   arise.
 
 * We restrict it to exhaustive alternatives. A non-exhaustive
-  case manifestly isn't ok-for-speculation. Consider
-    case e of x { DEAFULT ->
-      ...(case x of y
-            A -> ...
-            _ -> ...(case (case x of { B -> p; C -> p }) of
-                       I# r -> blah)...
-  If SetLevesls considers the inner nested case as ok-for-speculation
-  it can do case-floating (see Note [Floating cases] in SetLevels).
-  So we'd float to:
-    case e of x { DEAFULT ->
-    case (case x of { B -> p; C -> p }) of I# r ->
-    ...(case x of y
-            A -> ...
-            _ -> ...blah...)...
-  which is utterly bogus (seg fault); see Trac #5453.
-
-  Similarly, this is a valid program (albeit a slightly dodgy one)
+  case manifestly isn't ok-for-speculation. for example,
+  this is a valid program (albeit a slightly dodgy one)
     let v = case x of { B -> ...; C -> ... }
     in case x of
          A -> ...
@@ -1646,6 +1654,28 @@ But we restrict it sharply:
   Now, all this is for lifted types, but it'd be the same for any
   finite unlifted type. We don't have many of them, but we might
   add unlifted algebraic types in due course.
+
+
+----- Historical note: Trac #15696: --------
+  Previously SetLevels used exprOkForSpeculation to guide
+  floating of single-alternative cases; it now uses exprIsHNF
+  Note [Floating single-alternative cases].
+
+  But in those days, consider
+    case e of x { DEAFULT ->
+      ...(case x of y
+            A -> ...
+            _ -> ...(case (case x of { B -> p; C -> p }) of
+                       I# r -> blah)...
+  If SetLevels considers the inner nested case as
+  ok-for-speculation it can do case-floating (in SetLevels).
+  So we'd float to:
+    case e of x { DEAFULT ->
+    case (case x of { B -> p; C -> p }) of I# r ->
+    ...(case x of y
+            A -> ...
+            _ -> ...blah...)...
+  which is utterly bogus (seg fault); see Trac #5453.
 
 ----- Historical note: Trac #3717: --------
     foo :: Int -> Int
@@ -1664,7 +1694,7 @@ In earlier GHCs, we got this:
           0 -> 0 }
 
 Before join-points etc we could only get rid of two cases (which are
-redundant) by recognising that th e(case <# ds 5 of { ... }) is
+redundant) by recognising that the (case <# ds 5 of { ... }) is
 ok-for-speculation, even though it has /lifted/ type.  But now join
 points do the job nicely.
 ------- End of historical note ------------
@@ -1678,45 +1708,55 @@ Well, yes.  The primop accepts lifted arguments and does not
 evaluate them.  Indeed, in general primops are, well, primitive
 and do not perform evaluation.
 
-There is one primop, dataToTag#, which does /require/ a lifted
-argument to be evaluated.  To ensure this, CorePrep adds an
-eval if it can't see the argument is definitely evaluated
-(see [dataToTag magic] in CorePrep).
-
-We make no attempt to guarantee that dataToTag#'s argument is
-evaluated here.  Main reason: it's very fragile to test for the
-evaluatedness of a lifted argument.  Consider
-    case x of y -> let v = dataToTag# y in ...
-
-where x/y have type Int, say.  'y' looks evaluated (by the enclosing
-case) so all is well.  Now the FloatOut pass does a binder-swap (for
-very good reasons), changing to
-   case x of y -> let v = dataToTag# x in ...
-
-See also Note [dataToTag#] in primops.txt.pp.
-
 Bottom line:
-  * in exprOkForSpeculation we simply ignore all lifted arguments.
-  * except see Note [seq# and expr_ok] for an exception
+  * In exprOkForSpeculation we simply ignore all lifted arguments.
+  * In the rare case of primops that /do/ evaluate their arguments,
+    (namely DataToTagOp and SeqOp) return False; see
+    Note [exprOkForSpeculation and evaluated variables]
 
+Note [exprOkForSpeculation and SeqOp/DataToTagOp]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Most primops with lifted arguments don't evaluate them
+(see Note [Primops with lifted arguments]), so we can ignore
+that argument entirely when doing exprOkForSpeculation.
 
-Note [seq# and expr_ok]
-~~~~~~~~~~~~~~~~~~~~~~~
+But DataToTagOp and SeqOp are exceptions to that rule.
+For reasons described in Note [exprOkForSpeculation and
+evaluated variables], we simply return False for them.
+
+Not doing this made #5129 go bad.
+Lots of discussion in #15696.
+
+Note [exprOkForSpeculation and evaluated variables]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Recall that
-   seq# :: forall a s . a -> State# s -> (# State# s, a #)
-must always evaluate its first argument.  So it's really a
-counter-example to Note [Primops with lifted arguments]. In
-the case of seq# we must check the argument to seq#.  Remember
-item (d) of the specification of exprOkForSpeculation:
+  seq#       :: forall a s. a -> State# s -> (# State# s, a #)
+  dataToTag# :: forall a.   a -> Int#
+must always evaluate their first argument.
 
-  -- Precisely, it returns @True@ iff:
-  --  a) The expression guarantees to terminate,
-         ...
-  --  d) without throwing a Haskell exception
+Now consider these examples:
+ * case x of y { DEFAULT -> ....y.... }
+   Should 'y' (alone) be considered ok-for-speculation?
 
-The lack of this special case caused Trac #5129 to go bad again.
-See comment:24 and following
+ * case x of y { DEFAULT -> ....f (dataToTag# y)... }
+   Should (dataToTag# y) be considered ok-for-spec?
 
+You could argue 'yes', because in the case alternative we know that
+'y' is evaluated.  But the binder-swap transformation, which is
+extremely useful for float-out, changes these expressions to
+   case x of y { DEFAULT -> ....x.... }
+   case x of y { DEFAULT -> ....f (dataToTag# x)... }
+
+And now the expression does not obey the let/app invariant!  Yikes!
+Moreover we really might float (f (dataToTag# x)) outside the case,
+and then it really, really doesn't obey the let/app invariant.
+
+The solution is simple: exprOkForSpeculation does not try to take
+advantage of the evaluated-ness of (lifted) variables.  And it returns
+False (always) for DataToTagOp and SeqOp.
+
+Note that exprIsHNF /can/ and does take advantage of evaluated-ness;
+it doesn't have the trickiness of the let/app invariant to worry about.
 
 ************************************************************************
 *                                                                      *
@@ -1778,6 +1818,8 @@ exprIsHNFlike is_con is_con_unf = is_hnf_like
                              -- and (e.g.) primops that don't have unfoldings
       || is_con_unf (idUnfolding v)
         -- Check the thing's unfolding; it might be bound to a value
+        --   or to a guaranteed-evaluated variable (isEvaldUnfolding)
+        --   Contrast with Note [exprOkForSpeculation and evaluated variables]
         -- We don't look through loop breakers here, which is a bit conservative
         -- but otherwise I worry that if an Id's unfolding is just itself,
         -- we could get an infinite loop
@@ -1797,8 +1839,8 @@ exprIsHNFlike is_con is_con_unf = is_hnf_like
     is_hnf_like (Let _ e)        = is_hnf_like e  -- Lazy let(rec)s don't affect us
     is_hnf_like _                = False
 
-    -- There is at least one value argument
-    -- 'n' is number of value args to which the expression is applied
+    -- 'n' is the number of value args to which the expression is applied
+    -- And n>0: there is at least one value argument
     app_is_value :: CoreExpr -> Int -> Bool
     app_is_value (Var f)    nva = id_app_is_value f nva
     app_is_value (Tick _ f) nva = app_is_value f nva
@@ -1806,7 +1848,7 @@ exprIsHNFlike is_con is_con_unf = is_hnf_like
     app_is_value (App f a)  nva
       | isValArg a              = app_is_value f (nva + 1)
       | otherwise               = app_is_value f nva
-    app_is_value _ _ = False
+    app_is_value _          _   = False
 
     id_app_is_value id n_val_args
        = is_con id
@@ -1850,7 +1892,7 @@ exprIsTickedString = isJust . exprIsTickedString_maybe
 -- different shape.
 -- Used to "look through" Ticks in places that need to handle literal strings.
 exprIsTickedString_maybe :: CoreExpr -> Maybe ByteString
-exprIsTickedString_maybe (Lit (MachStr bs)) = Just bs
+exprIsTickedString_maybe (Lit (LitString bs)) = Just bs
 exprIsTickedString_maybe (Tick t e)
   -- we don't tick literals with CostCentre ticks, compare to mkTick
   | tickishPlace t == PlaceCostCentre = Nothing
@@ -1867,8 +1909,8 @@ exprIsTickedString_maybe _ = Nothing
 These InstPat functions go here to avoid circularity between DataCon and Id
 -}
 
-dataConRepInstPat   ::                 [Unique] -> DataCon -> [Type] -> ([TyVar], [Id])
-dataConRepFSInstPat :: [FastString] -> [Unique] -> DataCon -> [Type] -> ([TyVar], [Id])
+dataConRepInstPat   ::                 [Unique] -> DataCon -> [Type] -> ([TyCoVar], [Id])
+dataConRepFSInstPat :: [FastString] -> [Unique] -> DataCon -> [Type] -> ([TyCoVar], [Id])
 
 dataConRepInstPat   = dataConInstPat (repeat ((fsLit "ipv")))
 dataConRepFSInstPat = dataConInstPat
@@ -1877,7 +1919,7 @@ dataConInstPat :: [FastString]          -- A long enough list of FSs to use for 
                -> [Unique]              -- An equally long list of uniques, at least one for each binder
                -> DataCon
                -> [Type]                -- Types to instantiate the universally quantified tyvars
-               -> ([TyVar], [Id])       -- Return instantiated variables
+               -> ([TyCoVar], [Id])     -- Return instantiated variables
 -- dataConInstPat arg_fun fss us con inst_tys returns a tuple
 -- (ex_tvs, arg_ids),
 --
@@ -1910,7 +1952,7 @@ dataConInstPat fss uniqs con inst_tys
     (ex_bndrs, arg_ids)
   where
     univ_tvs = dataConUnivTyVars con
-    ex_tvs   = dataConExTyVars con
+    ex_tvs   = dataConExTyCoVars con
     arg_tys  = dataConRepArgTys con
     arg_strs = dataConRepStrictness con  -- 1-1 with arg_tys
     n_ex = length ex_tvs
@@ -1926,13 +1968,16 @@ dataConInstPat fss uniqs con inst_tys
     (full_subst, ex_bndrs) = mapAccumL mk_ex_var univ_subst
                                        (zip3 ex_tvs ex_fss ex_uniqs)
 
-    mk_ex_var :: TCvSubst -> (TyVar, FastString, Unique) -> (TCvSubst, TyVar)
-    mk_ex_var subst (tv, fs, uniq) = (Type.extendTvSubstWithClone subst tv
+    mk_ex_var :: TCvSubst -> (TyCoVar, FastString, Unique) -> (TCvSubst, TyCoVar)
+    mk_ex_var subst (tv, fs, uniq) = (Type.extendTCvSubstWithClone subst tv
                                        new_tv
                                      , new_tv)
       where
-        new_tv = mkTyVar (mkSysTvName uniq fs) kind
-        kind   = Type.substTyUnchecked subst (tyVarKind tv)
+        new_tv | isTyVar tv
+               = mkTyVar (mkSysTvName uniq fs) kind
+               | otherwise
+               = mkCoVar (mkSystemVarName uniq fs) kind
+        kind   = Type.substTyUnchecked subst (varType tv)
 
       -- Make value vars, instantiating types
     arg_ids = zipWith4 mk_id_var id_uniqs id_fss arg_tys arg_strs
@@ -2483,9 +2528,9 @@ rhsIsStatic platform is_dynamic_name cvt_literal rhs = is_static False rhs
   is_static in_arg (Lit (LitNumber nt i _)) = case cvt_literal nt i of
     Just e  -> is_static in_arg e
     Nothing -> True
-  is_static _      (Lit (MachLabel {}))   = False
+  is_static _      (Lit (LitLabel {}))    = False
   is_static _      (Lit _)                = True
-        -- A MachLabel (foreign import "&foo") in an argument
+        -- A LitLabel (foreign import "&foo") in an argument
         -- prevents a constructor application from being static.  The
         -- reason is that it might give rise to unresolvable symbols
         -- in the object file: under Linux, references to "weak"

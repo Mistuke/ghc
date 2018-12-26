@@ -41,7 +41,8 @@
 #include "Timer.h"
 #include "ThreadPaused.h"
 #include "Messages.h"
-#include "Stable.h"
+#include "StablePtr.h"
+#include "StableName.h"
 #include "TopHandler.h"
 
 #if defined(HAVE_SYS_TYPES_H)
@@ -491,7 +492,11 @@ run_thread:
             traceEventStopThread(cap, t, t->why_blocked + 6, 0);
         }
     } else {
-        traceEventStopThread(cap, t, ret, 0);
+        if (ret == StackOverflow) {
+          traceEventStopThread(cap, t, ret, t->tot_stack_size);
+        } else {
+          traceEventStopThread(cap, t, ret, 0);
+        }
     }
 
     ASSERT_FULL_CAPABILITY_INVARIANTS(cap,task);
@@ -667,8 +672,10 @@ scheduleYield (Capability **pcap, Task *task)
     // otherwise yield (sleep), and keep yielding if necessary.
     do {
         if (doIdleGCWork(cap, false)) {
+            // there's more idle GC work to do
             didGcLast = false;
         } else {
+            // no more idle GC work to do
             didGcLast = yieldCapability(&cap,task, !didGcLast);
         }
     }
@@ -1875,7 +1882,7 @@ delete_threads_and_gc:
         releaseGCThreads(cap, idle_cap);
     }
 #endif
-    if (heap_overflow && sched_state < SCHED_INTERRUPTING) {
+    if (heap_overflow && sched_state == SCHED_RUNNING) {
         // GC set the heap_overflow flag.  We should throw an exception if we
         // can, or shut down otherwise.
 
@@ -1964,7 +1971,8 @@ forkProcess(HsStablePtr *entry
     // inconsistent state in the child.  See also #1391.
     ACQUIRE_LOCK(&sched_mutex);
     ACQUIRE_LOCK(&sm_mutex);
-    ACQUIRE_LOCK(&stable_mutex);
+    ACQUIRE_LOCK(&stable_ptr_mutex);
+    ACQUIRE_LOCK(&stable_name_mutex);
     ACQUIRE_LOCK(&task->lock);
 
     for (i=0; i < n_capabilities; i++) {
@@ -1989,7 +1997,8 @@ forkProcess(HsStablePtr *entry
 
         RELEASE_LOCK(&sched_mutex);
         RELEASE_LOCK(&sm_mutex);
-        RELEASE_LOCK(&stable_mutex);
+        RELEASE_LOCK(&stable_ptr_mutex);
+        RELEASE_LOCK(&stable_name_mutex);
         RELEASE_LOCK(&task->lock);
 
 #if defined(THREADED_RTS)
@@ -2012,7 +2021,8 @@ forkProcess(HsStablePtr *entry
 #if defined(THREADED_RTS)
         initMutex(&sched_mutex);
         initMutex(&sm_mutex);
-        initMutex(&stable_mutex);
+        initMutex(&stable_ptr_mutex);
+        initMutex(&stable_name_mutex);
         initMutex(&task->lock);
 
         for (i=0; i < n_capabilities; i++) {
@@ -2643,9 +2653,7 @@ void
 exitScheduler (bool wait_foreign USED_IF_THREADS)
                /* see Capability.c, shutdownCapability() */
 {
-    Task *task = NULL;
-
-    task = newBoundTask();
+    Task *task = newBoundTask();
 
     // If we haven't killed all the threads yet, do it now.
     if (sched_state < SCHED_SHUTTING_DOWN) {
@@ -2656,7 +2664,7 @@ exitScheduler (bool wait_foreign USED_IF_THREADS)
         ASSERT(task->incall->tso == NULL);
         releaseCapability(cap);
     }
-    sched_state = SCHED_SHUTTING_DOWN;
+    ASSERT(sched_state == SCHED_SHUTTING_DOWN);
 
     shutdownCapabilities(task, wait_foreign);
 
@@ -2745,6 +2753,7 @@ performMajorGC(void)
 void
 interruptStgRts(void)
 {
+    ASSERT(sched_state != SCHED_SHUTTING_DOWN);
     sched_state = SCHED_INTERRUPTING;
     interruptAllCapabilities();
 #if defined(THREADED_RTS)

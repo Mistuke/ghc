@@ -104,7 +104,9 @@ module CLabel (
         -- * Conversions
         toClosureLbl, toSlowEntryLbl, toEntryLbl, toInfoLbl, hasHaskellName,
 
-        pprCLabel
+        pprCLabel,
+        isInfoTableLabel,
+        isConInfoTableLabel
     ) where
 
 #include "HsVersions.h"
@@ -417,7 +419,7 @@ data RtsLabelInfo
   | RtsSlowFastTickyCtr String
 
   deriving (Eq, Ord)
-  -- NOTE: Eq on LitString compares the pointer only, so this isn't
+  -- NOTE: Eq on PtrString compares the pointer only, so this isn't
   -- a real equality.
 
 
@@ -620,6 +622,19 @@ isSomeRODataLabel (IdLabel _ _ BlockInfoTable) = True
 -- info table defined in cmm (.cmm)
 isSomeRODataLabel (CmmLabel _ _ CmmInfo) = True
 isSomeRODataLabel _lbl = False
+
+-- | Whether label is points to some kind of info table
+isInfoTableLabel :: CLabel -> Bool
+isInfoTableLabel (IdLabel _ _ InfoTable)      = True
+isInfoTableLabel (IdLabel _ _ LocalInfoTable) = True
+isInfoTableLabel (IdLabel _ _ ConInfoTable)   = True
+isInfoTableLabel (IdLabel _ _ BlockInfoTable) = True
+isInfoTableLabel _                            = False
+
+-- | Whether label is points to constructor info table
+isConInfoTableLabel :: CLabel -> Bool
+isConInfoTableLabel (IdLabel _ _ ConInfoTable)   = True
+isConInfoTableLabel _                            = False
 
 -- | Get the label size field from a ForeignLabel
 foreignLabelStdcallInfo :: CLabel -> Maybe Int
@@ -1004,7 +1019,7 @@ labelDynamic dflags this_mod lbl =
   case lbl of
    -- is the RTS in a DLL or not?
    RtsLabel _ ->
-     (gopt Opt_ExternalDynamicRefs dflags) && (this_pkg /= rtsUnitId)
+     externalDynamicRefs && (this_pkg /= rtsUnitId)
 
    IdLabel n _ _ ->
      isDllName dflags this_mod n
@@ -1013,7 +1028,7 @@ labelDynamic dflags this_mod lbl =
    -- its own shared library.
    CmmLabel pkg _ _
     | os == OSMinGW32 ->
-       (gopt Opt_ExternalDynamicRefs dflags) && (this_pkg /= pkg)
+       externalDynamicRefs && (this_pkg /= pkg)
     | otherwise ->
        gopt Opt_ExternalDynamicRefs dflags
 
@@ -1033,19 +1048,26 @@ labelDynamic dflags this_mod lbl =
             -- When compiling in the "dyn" way, each package is to be
             -- linked into its own DLL.
             ForeignLabelInPackage pkgId ->
-                (gopt Opt_ExternalDynamicRefs dflags) && (this_pkg /= pkgId)
+                externalDynamicRefs && (this_pkg /= pkgId)
 
        else -- On Mac OS X and on ELF platforms, false positives are OK,
             -- so we claim that all foreign imports come from dynamic
             -- libraries
             True
 
+   CC_Label cc ->
+     externalDynamicRefs && not (ccFromThisModule cc this_mod)
+
+   -- CCS_Label always contains a CostCentre defined in the current module
+   CCS_Label _ -> False
+
    HpcTicksLabel m ->
-     (gopt Opt_ExternalDynamicRefs dflags) && this_mod /= m
+     externalDynamicRefs && this_mod /= m
 
    -- Note that DynamicLinkerLabels do NOT require dynamic linking themselves.
    _                 -> False
   where
+    externalDynamicRefs = gopt Opt_ExternalDynamicRefs dflags
     os = platformOS (targetPlatform dflags)
     this_pkg = moduleUnitId this_mod
 
@@ -1135,20 +1157,12 @@ instance Outputable CLabel where
 
 pprCLabel :: Platform -> CLabel -> SDoc
 
-pprCLabel platform (LocalBlockLabel u)
-  =  getPprStyle $ \ sty ->
-     if asmStyle sty then
-        ptext (asmTempLabelPrefix platform) <> pprUniqueAlways u
-     else
-        char '_' <> pprUniqueAlways u
+pprCLabel _ (LocalBlockLabel u)
+  =  tempLabelPrefixOrUnderscore <> pprUniqueAlways u
 
 pprCLabel platform (AsmTempLabel u)
  | not (platformUnregisterised platform)
-  =  getPprStyle $ \ sty ->
-     if asmStyle sty then
-        ptext (asmTempLabelPrefix platform) <> pprUniqueAlways u
-     else
-        char '_' <> pprUniqueAlways u
+  =  tempLabelPrefixOrUnderscore <> pprUniqueAlways u
 
 pprCLabel platform (AsmTempDerivedLabel l suf)
  | cGhcWithNativeCodeGen == "YES"
@@ -1168,7 +1182,15 @@ pprCLabel _ PicBaseLabel
 
 pprCLabel platform (DeadStripPreventer lbl)
  | cGhcWithNativeCodeGen == "YES"
-   = pprCLabel platform lbl <> text "_dsp"
+   =
+   {-
+      `lbl` can be temp one but we need to ensure that dsp label will stay
+      in the final binary so we prepend non-temp prefix ("dsp_") and
+      optional `_` (underscore) because this is how you mark non-temp symbols
+      on some platforms (Darwin)
+   -}
+   maybe_underscore $ text "dsp_"
+   <> pprCLabel platform lbl <> text "_dsp"
 
 pprCLabel _ (StringLitLabel u)
  | cGhcWithNativeCodeGen == "YES"
@@ -1199,9 +1221,11 @@ pprCLbl (StringLitLabel u)
   = pprUniqueAlways u <> text "_str"
 
 pprCLbl (SRTLabel u)
-  = pprUniqueAlways u <> pp_cSEP <> text "srt"
+  = tempLabelPrefixOrUnderscore <> pprUniqueAlways u <> pp_cSEP <> text "srt"
 
-pprCLbl (LargeBitmapLabel u)  = text "b" <> pprUniqueAlways u <> pp_cSEP <> text "btm"
+pprCLbl (LargeBitmapLabel u)  =
+  tempLabelPrefixOrUnderscore
+  <> char 'b' <> pprUniqueAlways u <> pp_cSEP <> text "btm"
 -- Some bitsmaps for tuple constructors have a numeric tag (e.g. '7')
 -- until that gets resolved we'll just force them to start
 -- with a letter so the label will be legal assembly code.
@@ -1211,7 +1235,8 @@ pprCLbl (CmmLabel _ str CmmCode)        = ftext str
 pprCLbl (CmmLabel _ str CmmData)        = ftext str
 pprCLbl (CmmLabel _ str CmmPrimCall)    = ftext str
 
-pprCLbl (LocalBlockLabel u)             = text "blk_" <> pprUniqueAlways u
+pprCLbl (LocalBlockLabel u)             =
+    tempLabelPrefixOrUnderscore <> text "blk_" <> pprUniqueAlways u
 
 pprCLbl (RtsLabel (RtsApFast str))   = ftext str <> text "_fast"
 
@@ -1275,7 +1300,8 @@ pprCLbl (RtsLabel (RtsSlowFastTickyCtr pat))
 pprCLbl (ForeignLabel str _ _ _)
   = ftext str
 
-pprCLbl (IdLabel name _cafs flavor) = ppr name <> ppIdFlavor flavor
+pprCLbl (IdLabel name _cafs flavor) =
+  internalNamePrefix name <> ppr name <> ppIdFlavor flavor
 
 pprCLbl (CC_Label cc)           = ppr cc
 pprCLbl (CCS_Label ccs)         = ppr ccs
@@ -1290,20 +1316,20 @@ pprCLbl (PicBaseLabel {})       = panic "pprCLbl PicBaseLabel"
 pprCLbl (DeadStripPreventer {}) = panic "pprCLbl DeadStripPreventer"
 
 ppIdFlavor :: IdLabelInfo -> SDoc
-ppIdFlavor x = pp_cSEP <>
+ppIdFlavor x = pp_cSEP <> text
                (case x of
-                       Closure          -> text "closure"
-                       InfoTable        -> text "info"
-                       LocalInfoTable   -> text "info"
-                       Entry            -> text "entry"
-                       LocalEntry       -> text "entry"
-                       Slow             -> text "slow"
-                       RednCounts       -> text "ct"
-                       ConEntry         -> text "con_entry"
-                       ConInfoTable     -> text "con_info"
-                       ClosureTable     -> text "closure_tbl"
-                       Bytes            -> text "bytes"
-                       BlockInfoTable   -> text "info"
+                       Closure          -> "closure"
+                       InfoTable        -> "info"
+                       LocalInfoTable   -> "info"
+                       Entry            -> "entry"
+                       LocalEntry       -> "entry"
+                       Slow             -> "slow"
+                       RednCounts       -> "ct"
+                       ConEntry         -> "con_entry"
+                       ConInfoTable     -> "con_info"
+                       ClosureTable     -> "closure_tbl"
+                       Bytes            -> "bytes"
+                       BlockInfoTable   -> "info"
                       )
 
 
@@ -1318,13 +1344,31 @@ instance Outputable ForeignLabelSource where
         ForeignLabelInThisPackage       -> parens $ text "this package"
         ForeignLabelInExternalPackage   -> parens $ text "external package"
 
+internalNamePrefix :: Name -> SDoc
+internalNamePrefix name = getPprStyle $ \ sty ->
+  if asmStyle sty && isRandomGenerated then
+    sdocWithPlatform $ \platform ->
+      ptext (asmTempLabelPrefix platform)
+  else
+    empty
+  where
+    isRandomGenerated = not $ isExternalName name
+
+tempLabelPrefixOrUnderscore :: SDoc
+tempLabelPrefixOrUnderscore = sdocWithPlatform $ \platform ->
+  getPprStyle $ \ sty ->
+   if asmStyle sty then
+      ptext (asmTempLabelPrefix platform)
+   else
+      char '_'
+
 -- -----------------------------------------------------------------------------
 -- Machine-dependent knowledge about labels.
 
 underscorePrefix :: Bool   -- leading underscore on assembler labels?
 underscorePrefix = (cLeadingUnderscore == "YES")
 
-asmTempLabelPrefix :: Platform -> LitString  -- for formatting labels
+asmTempLabelPrefix :: Platform -> PtrString  -- for formatting labels
 asmTempLabelPrefix platform = case platformOS platform of
     OSDarwin -> sLit "L"
     OSAIX    -> sLit "__L" -- follow IBM XL C's convention
@@ -1390,4 +1434,3 @@ pprDynamicLinkerAsmLabel platform dllInfo lbl =
           SymbolPtr       -> text ".LC_" <> ppr lbl
           GotSymbolPtr    -> ppr lbl <> text "@got"
           GotSymbolOffset -> ppr lbl <> text "@gotoff"
-

@@ -44,6 +44,7 @@ import Name
 import Module
 import ListSetOps
 import Util
+import VarSet
 import BasicTypes
 import Outputable
 import FastString
@@ -62,13 +63,12 @@ cgTopRhsClosure :: DynFlags
                 -> RecFlag              -- member of a recursive group?
                 -> Id
                 -> CostCentreStack      -- Optional cost centre annotation
-                -> StgBinderInfo
                 -> UpdateFlag
                 -> [Id]                 -- Args
-                -> StgExpr
+                -> CgStgExpr
                 -> (CgIdInfo, FCode ())
 
-cgTopRhsClosure dflags rec id ccs _ upd_flag args body =
+cgTopRhsClosure dflags rec id ccs upd_flag args body =
   let closure_label = mkLocalClosureLabel (idName id) (idCafInfo id)
       cg_id_info    = litIdInfo dflags id lf_info (CmmLabel closure_label)
       lf_info       = mkClosureLFInfo dflags id TopLevel [] upd_flag args
@@ -122,7 +122,7 @@ cgTopRhsClosure dflags rec id ccs _ upd_flag args body =
 --              Non-top-level bindings
 ------------------------------------------------------------------------
 
-cgBind :: StgBinding -> FCode ()
+cgBind :: CgStgBinding -> FCode ()
 cgBind (StgNonRec name rhs)
   = do  { (info, fcode) <- cgRhs name rhs
         ; addBindC info
@@ -191,7 +191,7 @@ cgBind (StgRec pairs)
  -}
 
 cgRhs :: Id
-      -> StgRhs
+      -> CgStgRhs
       -> FCode (
                  CgIdInfo         -- The info for this binding
                , FCode CmmAGraph  -- A computation which will generate the
@@ -207,19 +207,19 @@ cgRhs id (StgRhsCon cc con args)
       -- see Note [Post-unarisation invariants] in UnariseStg
 
 {- See Note [GC recovery] in compiler/codeGen/StgCmmClosure.hs -}
-cgRhs id (StgRhsClosure cc bi fvs upd_flag args body)
+cgRhs id (StgRhsClosure fvs cc upd_flag args body)
   = do dflags <- getDynFlags
-       mkRhsClosure dflags id cc bi (nonVoidIds fvs) upd_flag args body
+       mkRhsClosure dflags id cc (nonVoidIds (dVarSetElems fvs)) upd_flag args body
 
 ------------------------------------------------------------------------
 --              Non-constructor right hand sides
 ------------------------------------------------------------------------
 
-mkRhsClosure :: DynFlags -> Id -> CostCentreStack -> StgBinderInfo
+mkRhsClosure :: DynFlags -> Id -> CostCentreStack
              -> [NonVoid Id]                    -- Free vars
              -> UpdateFlag
              -> [Id]                            -- Args
-             -> StgExpr
+             -> CgStgExpr
              -> FCode (CgIdInfo, FCode CmmAGraph)
 
 {- mkRhsClosure looks for two special forms of the right-hand side:
@@ -258,7 +258,7 @@ for semi-obvious reasons.
 -}
 
 ---------- Note [Selectors] ------------------
-mkRhsClosure    dflags bndr _cc _bi
+mkRhsClosure    dflags bndr _cc
                 [NonVoid the_fv]                -- Just one free var
                 upd_flag                -- Updatable thunk
                 []                      -- A thunk
@@ -291,7 +291,7 @@ mkRhsClosure    dflags bndr _cc _bi
     in cgRhsStdThunk bndr lf_info [StgVarArg the_fv]
 
 ---------- Note [Ap thunks] ------------------
-mkRhsClosure    dflags bndr _cc _bi
+mkRhsClosure    dflags bndr _cc
                 fvs
                 upd_flag
                 []                      -- No args; a thunk
@@ -311,6 +311,7 @@ mkRhsClosure    dflags bndr _cc _bi
                          -- not when profiling: we don't want to
                          -- lose information about this particular
                          -- thunk (e.g. its type) (#949)
+  , idArity fun_id == unknownArity -- don't spoil a known call
 
           -- Ha! an Ap thunk
   = cgRhsStdThunk bndr lf_info payload
@@ -323,7 +324,7 @@ mkRhsClosure    dflags bndr _cc _bi
     payload = StgVarArg fun_id : args
 
 ---------- Default case ------------------
-mkRhsClosure dflags bndr cc _ fvs upd_flag args body
+mkRhsClosure dflags bndr cc fvs upd_flag args body
   = do  { let lf_info = mkClosureLFInfo dflags bndr NotTopLevel fvs upd_flag args
         ; (id_info, reg) <- rhsIdInfo bndr lf_info
         ; return (id_info, gen_code lf_info reg) }
@@ -437,7 +438,7 @@ closureCodeBody :: Bool            -- whether this is a top-level binding
                 -> CostCentreStack -- Optional cost centre attached to closure
                 -> [NonVoid Id]    -- incoming args to the closure
                 -> Int             -- arity, including void args
-                -> StgExpr
+                -> CgStgExpr
                 -> [(NonVoid Id, ByteOff)] -- the closure's free vars
                 -> FCode ()
 
@@ -561,7 +562,7 @@ mkSlowEntryCode bndr cl_info arg_regs -- function closure is already in `Node'
 
 -----------------------------------------
 thunkCode :: ClosureInfo -> [(NonVoid Id, ByteOff)] -> CostCentreStack
-          -> LocalReg -> Int -> StgExpr -> FCode ()
+          -> LocalReg -> Int -> CgStgExpr -> FCode ()
 thunkCode cl_info fv_details _cc node arity body
   = do { dflags <- getDynFlags
        ; let node_points = nodeMustPointToIt dflags (closureLFInfo cl_info)

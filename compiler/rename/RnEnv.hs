@@ -53,7 +53,7 @@ import RdrName
 import HscTypes
 import TcEnv
 import TcRnMonad
-import RdrHsSyn         ( setRdrNameSpace )
+import RdrHsSyn         ( filterCTuple, setRdrNameSpace )
 import TysWiredIn
 import Name
 import NameSet
@@ -77,7 +77,6 @@ import ListSetOps       ( minusList )
 import qualified GHC.LanguageExtensions as LangExt
 import RnUnbound
 import RnUtils
-import Data.Maybe (isJust)
 import qualified Data.Semigroup as Semi
 import Data.Either      ( partitionEithers )
 import Data.List        (find)
@@ -638,21 +637,21 @@ lookupSubBndrOcc_helper must_have_parent warn_if_deprec parent rdr_name
             NoParent -> Nothing
 
         picked_gres :: [GlobalRdrElt] -> DisambigInfo
+        -- For Unqual, find GREs that are in scope qualified or unqualified
+        -- For Qual,   find GREs that are in scope with that qualification
         picked_gres gres
           | isUnqual rdr_name
-              = mconcat (map right_parent gres)
+          = mconcat (map right_parent gres)
           | otherwise
-              = mconcat (map right_parent (pickGREs rdr_name gres))
-
+          = mconcat (map right_parent (pickGREs rdr_name gres))
 
         right_parent :: GlobalRdrElt -> DisambigInfo
         right_parent p
-          | Just cur_parent <- getParent p
-            = if parent == cur_parent
-                then DisambiguatedOccurrence p
-                else NoOccurrence
-          | otherwise
-            = UniqueOccurrence p
+          = case getParent p of
+               Just cur_parent
+                  | parent == cur_parent -> DisambiguatedOccurrence p
+                  | otherwise            -> NoOccurrence
+               Nothing                   -> UniqueOccurrence p
 
 
 -- This domain specific datatype is used to record why we decided it was
@@ -1508,8 +1507,18 @@ lookupLocalTcNames ctxt what rdr_name
        ; when (null names) $ addErr (head errs) -- Bleat about one only
        ; return names }
   where
-    lookup rdr = do { name <- lookupBindGroupOcc ctxt what rdr
-                    ; return (fmap ((,) rdr) name) }
+    lookup rdr = do { this_mod <- getModule
+                    ; nameEither <- lookupBindGroupOcc ctxt what rdr
+                    ; return (guard_builtin_syntax this_mod rdr nameEither) }
+
+    -- Guard against the built-in syntax (ex: `infixl 6 :`), see #15233
+    guard_builtin_syntax this_mod rdr (Right name)
+      | Just _ <- isBuiltInOcc_maybe (occName rdr)
+      , this_mod /= nameModule name
+      = Left (hsep [text "Illegal", what, text "of built-in syntax:", ppr rdr])
+      | otherwise
+      = Right (rdr, name)
+    guard_builtin_syntax _ _ (Left err) = Left err
 
 dataTcOccs :: RdrName -> [RdrName]
 -- Return both the given name and the same name promoted to the TcClsName
@@ -1653,4 +1662,4 @@ badOrigBinding name
     --
     -- (See Trac #13968.)
   where
-    occ = rdrNameOcc name
+    occ = rdrNameOcc $ filterCTuple name

@@ -94,6 +94,9 @@ test('GivenCheckSwap', normal, compile, [''])
 test('GivenCheckDecomp', normal, compile, [''])
 test('GivenCheckTop', normal, compile, [''])
 
+test('ExplicitForAllFams1', normal, compile, [''])
+test('ExplicitForAllFams2', normal, compile, ['-Wunused-foralls -Wunused-type-patterns'])
+
 # A very delicate test
 test('Gentle', normal, compile, [''])
 
@@ -290,3 +293,10 @@ test('T15322', normal, compile, [''])
 test('T15322a', normal, compile_fail, [''])
 test('T15142', normal, compile, [''])
 test('T15352', normal, compile, [''])
+test('T15664', normal, compile, [''])
+test('T15943', normal, compile, [''])
+test('T15704', normal, compile, [''])
+test('T15711', normal, compile, ['-ddump-types'])
+test('T15852', normal, compile, ['-ddump-types'])
+test('T15764a', normal, compile, [''])
+test('T15740a', normal, compile, [''])

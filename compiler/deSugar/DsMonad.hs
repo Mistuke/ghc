@@ -8,6 +8,7 @@
 
 {-# LANGUAGE FlexibleInstances, FlexibleContexts #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}  -- instance MonadThings is necessarily an orphan
+{-# LANGUAGE ViewPatterns #-}
 
 module DsMonad (
         DsM, mapM, mapAndUnzipM,
@@ -65,6 +66,7 @@ import PrelNames
 import RdrName
 import HscTypes
 import Bag
+import BasicTypes ( Origin )
 import DataCon
 import ConLike
 import TyCon
@@ -82,7 +84,7 @@ import ErrUtils
 import FastString
 import Var (EvVar)
 import UniqFM ( lookupWithDefaultUFM )
-import Literal ( mkMachString )
+import Literal ( mkLitString )
 import CostCentreState
 
 import Data.IORef
@@ -103,14 +105,27 @@ instance Outputable DsMatchContext where
   ppr (DsMatchContext hs_match ss) = ppr ss <+> pprMatchContext hs_match
 
 data EquationInfo
-  = EqnInfo { eqn_pats :: [Pat GhcTc],  -- The patterns for an eqn
-                -- NB: We have /already/ applied decideBangHood to
-                -- these patterns.  See Note [decideBangHood] in DsUtils
+  = EqnInfo { eqn_pats :: [Pat GhcTc]
+              -- ^ The patterns for an equation
+              --
+              -- NB: We have /already/ applied 'decideBangHood' to
+              -- these patterns.  See Note [decideBangHood] in "DsUtils"
 
-              eqn_rhs  :: MatchResult } -- What to do after match
+            , eqn_orig :: Origin
+              -- ^ Was this equation present in the user source?
+              --
+              -- This helps us avoid warnings on patterns that GHC elaborated.
+              --
+              -- For instance, the pattern @-1 :: Word@ gets desugared into
+              -- @W# -1## :: Word@, but we shouldn't warn about an overflowed
+              -- literal for /both/ of these cases.
+
+            , eqn_rhs  :: MatchResult
+              -- ^ What to do after match
+            }
 
 instance Outputable EquationInfo where
-    ppr (EqnInfo pats _) = ppr pats
+    ppr (EqnInfo pats _ _) = ppr pats
 
 type DsWrapper = CoreExpr -> CoreExpr
 idDsWrapper :: DsWrapper
@@ -526,7 +541,7 @@ dsGetFamInstEnvs
 dsGetMetaEnv :: DsM (NameEnv DsMetaVal)
 dsGetMetaEnv = do { env <- getLclEnv; return (dsl_meta env) }
 
--- | The @COMPLETE@ pragams provided by the user for a given `TyCon`.
+-- | The @COMPLETE@ pragmas provided by the user for a given `TyCon`.
 dsGetCompleteMatches :: TyCon -> DsM [CompleteMatch]
 dsGetCompleteMatches tc = do
   eps <- getEps
@@ -609,5 +624,5 @@ pprRuntimeTrace str doc expr = do
   dflags <- getDynFlags
   let message :: CoreExpr
       message = App (Var unpackCStringId) $
-                Lit $ mkMachString $ showSDoc dflags (hang (text str) 4 doc)
+                Lit $ mkLitString $ showSDoc dflags (hang (text str) 4 doc)
   return $ mkApps (Var traceId) [Type (exprType expr), message, expr]

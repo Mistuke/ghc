@@ -203,6 +203,9 @@ the "right thing" to happen to those files.
 ``.hi``
     A Haskell interface file, probably compiler-generated.
 
+``.hie``
+    An extended Haskell interface file, produced by the Haskell compiler.
+
 ``.hc``
     Intermediate C file produced by the Haskell compiler.
 
@@ -306,7 +309,7 @@ The available mode flags are:
     :shortdesc: Stop after generating C (``.hc`` file)
     :type: mode
     :category: phases
-    
+
     Stop after generating C (``.hc`` file)
 
 .. ghc-flag:: -S
@@ -320,7 +323,7 @@ The available mode flags are:
     :shortdesc: Stop after generating object (``.o``) file
     :type: mode
     :category: phases
-    
+
     Stop after generating object (``.o``) file
 
     This is the traditional batch-compiler mode, in which GHC can
@@ -764,9 +767,12 @@ messages and in GHCi:
 
            ghci> :i Data.Type.Equality.sym
            Data.Type.Equality.sym ::
-             forall (k :: BOX) (a :: k) (b :: k).
+             forall k (a :: k) (b :: k).
              (a Data.Type.Equality.:~: b) -> b Data.Type.Equality.:~: a
                    -- Defined in Data.Type.Equality
+
+    This flag also enables the printing of *inferred* type variables
+    inside braces. See :ref:`inferred-vs-specified`.
 
 .. ghc-flag:: -fprint-explicit-kinds
     :shortdesc: Print explicit kind foralls and kind arguments in types.
@@ -781,13 +787,28 @@ messages and in GHCi:
 
     .. code-block:: none
 
-        ghci> :set -XPolyKinds
-        ghci> data T a = MkT
-        ghci> :t MkT
-        MkT :: forall (k :: BOX) (a :: k). T a
-        ghci> :set -fprint-explicit-foralls
-        ghci> :t MkT
-        MkT :: forall (k :: BOX) (a :: k). T k a
+           ghci> :set -XPolyKinds
+           ghci> data T a (b :: l) = MkT
+           ghci> :t MkT
+           MkT :: forall k l (a :: k) (b :: l). T a b
+           ghci> :set -fprint-explicit-kinds
+           ghci> :t MkT
+           MkT :: forall k l (a :: k) (b :: l). T @{k} @l a b
+           ghci> :set -XNoPolyKinds
+           ghci> :t MkT
+           MkT :: T @{*} @* a b
+
+    In the output above, observe that ``T`` has two kind variables
+    (``k`` and ``l``) and two type variables (``a`` and ``b``). Note that
+    ``k`` is an *inferred* variable and ``l`` is a *specified* variable
+    (see :ref:`inferred-vs-specified`), so as a result, they are displayed
+    using slightly different syntax in the type ``T @{k} @l a b``. The
+    application of ``l`` (with ``@l``) is the standard syntax for visible
+    type application (see :ref:`visible-type-application`). The application
+    of ``k`` (with ``@{k}``), however, uses a hypothetical syntax for visible
+    type application of inferred type variables. This syntax is not currently
+    exposed to the programmer, but it is nevertheless displayed when
+    :ghc-flag:`-fprint-explicit-kinds` is enabled.
 
 .. ghc-flag:: -fprint-explicit-runtime-reps
     :shortdesc: Print ``RuntimeRep`` variables in types which are
@@ -997,6 +1018,16 @@ messages and in GHCi:
     Note that line numbers start counting at one, but column numbers
     start at zero. This choice was made to follow existing convention
     (i.e. this is how Emacs does it).
+
+.. ghc-flag:: -freverse-errors
+    :shortdesc: Output errors in reverse order
+    :type: dynamic
+    :reverse: -fno-reverse-errors
+    :category: verbosity
+
+    Causes GHC to output errors in reverse line-number order, so that
+    the errors and warnings that originate later in the file are
+    displayed first.
 
 .. ghc-flag:: -H ⟨size⟩
     :shortdesc: Set the minimum size of the heap to ⟨size⟩

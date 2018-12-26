@@ -27,9 +27,12 @@ class TestConfig:
         self.only = set()
 
         # Accept new output which differs from the sample?
-        self.accept = 0
-        self.accept_platform = 0
-        self.accept_os = 0
+        self.accept = False
+        self.accept_platform = False
+        self.accept_os = False
+
+        # File in which to save the performance metrics.
+        self.metrics_file = ''
 
         # File in which to save the summary
         self.summary_file = ''
@@ -117,10 +120,19 @@ class TestConfig:
 
         # threads
         self.threads = 1
-        self.use_threads = 0
+        self.use_threads = False
 
         # Should we skip performance tests
         self.skip_perf_tests = False
+
+        # Only do performance tests
+        self.only_perf_tests = False
+
+        # Allowed performance changes (see perf_notes.get_allowed_perf_changes())
+        self.allowed_perf_changes = {}
+
+        # The test environment.
+        self.test_env = 'local'
 
 global config
 config = TestConfig()
@@ -156,6 +168,12 @@ class TestRun:
        self.unexpected_failures = []
        self.unexpected_stat_failures = []
 
+       # List of all metrics measured in this test run.
+       # [(change, PerfStat)] where change is one of the  MetricChange
+       # constants: NewMetric, NoChange, Increase, Decrease.
+       # NewMetric happens when the previous git commit has no metric recorded.
+       self.metrics = []
+
 global t
 t = TestRun()
 
@@ -168,7 +186,7 @@ def getTestRun():
 class TestOptions:
    def __init__(self):
        # skip this test?
-       self.skip = 0
+       self.skip = False
 
        # skip these ways
        self.omit_ways = []
@@ -193,7 +211,7 @@ class TestOptions:
        self.ignore_stderr = False
 
        # Backpack test
-       self.compile_backpack = 0
+       self.compile_backpack = False
 
        # We sometimes want to modify the compiler_always_flags, so
        # they are copied from config.compiler_always_flags when we
@@ -215,30 +233,28 @@ class TestOptions:
        # extra files to copy to the testdir
        self.extra_files = []
 
-       # which -t numeric fields do we want to look at, and what bounds must
-       # they fall within?
-       # Elements of these lists should be things like
-       # ('bytes allocated',
-       #   9300000000,
-       #   10)
-       # To allow a 10% deviation from 9300000000.
-       self.compiler_stats_range_fields = {}
+       # Map from metric to expectected value and allowed percentage deviation. e.g.
+       #     { 'bytes allocated': (9300000000, 10) }
+       # To allow a 10% deviation from 9300000000 for the 'bytes allocated' metric.
        self.stats_range_fields = {}
+
+       # Does this test the compiler's performance as opposed to the generated code.
+       self.is_compiler_stats_test = False
 
        # should we run this test alone, i.e. not run it in parallel with
        # any other threads
        self.alone = False
 
        # Does this test use a literate (.lhs) file?
-       self.literate = 0
+       self.literate = False
 
        # Does this test use a .c, .m or .mm file?
-       self.c_src      = 0
-       self.objc_src   = 0
-       self.objcpp_src = 0
+       self.c_src      = False
+       self.objc_src   = False
+       self.objcpp_src = False
 
        # Does this test use a .cmm file?
-       self.cmm_src    = 0
+       self.cmm_src    = False
 
        # Should we put .hi/.o files in a subdirectory?
        self.outputdir = None
@@ -292,4 +308,3 @@ default_testopts = TestOptions()
 # (bug, directory, name) of tests marked broken
 global brokens
 brokens = []
-

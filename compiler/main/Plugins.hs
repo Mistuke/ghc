@@ -1,11 +1,41 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE CPP #-}
 module Plugins (
-      FrontendPlugin(..), defaultFrontendPlugin, FrontendPluginAction
-    , Plugin(..), CommandLineOption, LoadedPlugin(..), lpModuleName
-    , defaultPlugin, keepRenamedSource, withPlugins, withPlugins_
-    , PluginRecompile(..)
+      -- * Plugins
+      Plugin(..)
+    , defaultPlugin
+    , CommandLineOption
+      -- ** Recompilation checking
     , purePlugin, impurePlugin, flagRecompile
+    , PluginRecompile(..)
+
+      -- * Plugin types
+      -- ** Frontend plugins
+    , FrontendPlugin(..), defaultFrontendPlugin, FrontendPluginAction
+      -- ** Core plugins
+      -- | Core plugins allow plugins to register as a Core-to-Core pass.
+    , CorePlugin
+      -- ** Typechecker plugins
+      -- | Typechecker plugins allow plugins to provide evidence to the
+      -- typechecker.
+    , TcPlugin
+      -- ** Source plugins
+      -- | GHC offers a number of points where plugins can access and modify its
+      -- front-end (\"source\") representation. These include:
+      --
+      -- - access to the parser result with 'parsedResultAction'
+      -- - access to the renamed AST with 'renamedResultAction'
+      -- - access to the typechecked AST with 'typeCheckResultAction'
+      -- - access to the Template Haskell splices with 'spliceRunAction'
+      -- - access to loaded interface files with 'interfaceLoadAction'
+      --
+    , keepRenamedSource
+
+      -- * Internal
+    , PluginWithArgs(..), plugins, pluginRecompile'
+    , LoadedPlugin(..), lpModuleName
+    , StaticPlugin(..)
+    , mapPlugins, withPlugins, withPlugins_
     ) where
 
 import GhcPrelude
@@ -23,11 +53,9 @@ import Fingerprint
 import Data.List
 import Outputable (Outputable(..), text, (<+>))
 
-#if __GLASGOW_HASKELL__ < 840
 --Qualified import so we can define a Semigroup instance
 -- but it doesn't clash with Outputable.<>
 import qualified Data.Semigroup
-#endif
 
 import Control.Monad
 
@@ -94,20 +122,33 @@ data Plugin = Plugin {
 -- For the full discussion, check the full proposal at:
 -- https://ghc.haskell.org/trac/ghc/wiki/ExtendedPluginsProposal
 
+data PluginWithArgs = PluginWithArgs
+  { paPlugin :: Plugin
+    -- ^ the actual callable plugin
+  , paArguments :: [CommandLineOption]
+    -- ^ command line arguments for the plugin
+  }
 
 -- | A plugin with its arguments. The result of loading the plugin.
-data LoadedPlugin = LoadedPlugin {
-    lpPlugin :: Plugin
-    -- ^ the actual callable plugin
+data LoadedPlugin = LoadedPlugin
+  { lpPlugin :: PluginWithArgs
+  -- ^ the actual plugin together with its commandline arguments
   , lpModule :: ModIface
-    -- ^ the module containing the plugin
-  , lpArguments :: [CommandLineOption]
-    -- ^ command line arguments for the plugin
+  -- ^ the module containing the plugin
+  }
+
+-- | A static plugin with its arguments. For registering compiled-in plugins
+-- through the GHC API.
+data StaticPlugin = StaticPlugin
+  { spPlugin :: PluginWithArgs
+  -- ^ the actual plugin together with its commandline arguments
   }
 
 lpModuleName :: LoadedPlugin -> ModuleName
 lpModuleName = moduleName . mi_module . lpModule
 
+pluginRecompile' :: PluginWithArgs -> IO PluginRecompile
+pluginRecompile' (PluginWithArgs plugin args) = pluginRecompile plugin args
 
 data PluginRecompile = ForceRecompile | NoForceRecompile | MaybeRecompile Fingerprint
 
@@ -125,9 +166,6 @@ instance Semigroup PluginRecompile where
 
 instance Monoid PluginRecompile where
   mempty = NoForceRecompile
-#if __GLASGOW_HASKELL__ < 840
-  mappend = (Data.Semigroup.<>)
-#endif
 
 type CorePlugin = [CommandLineOption] -> [CoreToDo] -> CoreM [CoreToDo]
 type TcPlugin = [CommandLineOption] -> Maybe TcRnTypes.TcPlugin
@@ -173,16 +211,24 @@ keepRenamedSource _ gbl_env group =
 type PluginOperation m a = Plugin -> [CommandLineOption] -> a -> m a
 type ConstPluginOperation m a = Plugin -> [CommandLineOption] -> a -> m ()
 
+plugins :: DynFlags -> [PluginWithArgs]
+plugins df =
+  map lpPlugin (cachedPlugins df) ++
+  map spPlugin (staticPlugins df)
+
 -- | Perform an operation by using all of the plugins in turn.
 withPlugins :: Monad m => DynFlags -> PluginOperation m a -> a -> m a
-withPlugins df transformation input
-  = foldM (\arg (LoadedPlugin p _ opts) -> transformation p opts arg)
-          input (plugins df)
+withPlugins df transformation input = foldM go input (plugins df)
+  where
+    go arg (PluginWithArgs p opts) = transformation p opts arg
+
+mapPlugins :: DynFlags -> (Plugin -> [CommandLineOption] -> a) -> [a]
+mapPlugins df f = map (\(PluginWithArgs p opts) -> f p opts) (plugins df)
 
 -- | Perform a constant operation by using all of the plugins in turn.
 withPlugins_ :: Monad m => DynFlags -> ConstPluginOperation m a -> a -> m ()
 withPlugins_ df transformation input
-  = mapM_ (\(LoadedPlugin p _ opts) -> transformation p opts input)
+  = mapM_ (\(PluginWithArgs p opts) -> transformation p opts input)
           (plugins df)
 
 type FrontendPluginAction = [String] -> [(String, Maybe Phase)] -> Ghc ()

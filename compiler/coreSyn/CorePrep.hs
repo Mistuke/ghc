@@ -43,7 +43,6 @@ import Id
 import IdInfo
 import TysWiredIn
 import DataCon
-import PrimOp
 import BasicTypes
 import Module
 import UniqSupply
@@ -61,7 +60,7 @@ import Name             ( NamedThing(..), nameSrcSpan )
 import SrcLoc           ( SrcSpan(..), realSrcLocSpan, mkRealSrcLoc )
 import Data.Bits
 import MonadUtils       ( mapAccumLM )
-import Data.List        ( mapAccumL, foldl' )
+import Data.List        ( mapAccumL )
 import Control.Monad
 import CostCentre       ( CostCentre, ccFromThisModule )
 import qualified Data.Set as S
@@ -685,7 +684,7 @@ cvtLitInteger :: DynFlags -> Id -> Maybe DataCon -> Integer -> CoreExpr
 -- See Note [Integer literals] in Literal
 cvtLitInteger dflags _ (Just sdatacon) i
   | inIntRange dflags i -- Special case for small integers
-    = mkConApp sdatacon [Lit (mkMachInt dflags i)]
+    = mkConApp sdatacon [Lit (mkLitInt dflags i)]
 
 cvtLitInteger dflags mk_integer _ i
     = mkApps (Var mk_integer) [isNonNegative, ints]
@@ -695,7 +694,7 @@ cvtLitInteger dflags mk_integer _ i
         f 0 = []
         f x = let low  = x .&. mask
                   high = x `shiftR` bits
-              in mkConApp intDataCon [Lit (mkMachInt dflags low)] : f high
+              in mkConApp intDataCon [Lit (mkLitInt dflags low)] : f high
         bits = 31
         mask = 2 ^ bits - 1
 
@@ -705,7 +704,7 @@ cvtLitNatural :: DynFlags -> Id -> Maybe DataCon -> Integer -> CoreExpr
 -- See Note [Natural literals] in Literal
 cvtLitNatural dflags _ (Just sdatacon) i
   | inWordRange dflags i -- Special case for small naturals
-    = mkConApp sdatacon [Lit (mkMachWord dflags i)]
+    = mkConApp sdatacon [Lit (mkLitWord dflags i)]
 
 cvtLitNatural dflags mk_natural _ i
     = mkApps (Var mk_natural) [words]
@@ -713,7 +712,7 @@ cvtLitNatural dflags mk_natural _ i
         f 0 = []
         f x = let low  = x .&. mask
                   high = x `shiftR` bits
-              in mkConApp wordDataCon [Lit (mkMachWord dflags low)] : f high
+              in mkConApp wordDataCon [Lit (mkLitWord dflags low)] : f high
         bits = 32
         mask = 2 ^ bits - 1
 
@@ -1071,10 +1070,6 @@ The type is the type of the entire application
 
 maybeSaturate :: Id -> CpeApp -> Int -> UniqSM CpeRhs
 maybeSaturate fn expr n_args
-  | Just DataToTagOp <- isPrimOpId_maybe fn     -- DataToTag must have an evaluated arg
-                                                -- A gruesome special case
-  = saturateDataToTag sat_expr
-
   | hasNoBinding fn        -- There's no binding
   = return sat_expr
 
@@ -1085,52 +1080,7 @@ maybeSaturate fn expr n_args
     excess_arity = fn_arity - n_args
     sat_expr     = cpeEtaExpand excess_arity expr
 
--------------
-saturateDataToTag :: CpeApp -> UniqSM CpeApp
--- See Note [dataToTag magic]
-saturateDataToTag sat_expr
-  = do { let (eta_bndrs, eta_body) = collectBinders sat_expr
-       ; eta_body' <- eval_data2tag_arg eta_body
-       ; return (mkLams eta_bndrs eta_body') }
-  where
-    eval_data2tag_arg :: CpeApp -> UniqSM CpeBody
-    eval_data2tag_arg app@(fun `App` arg)
-        | exprIsHNF arg         -- Includes nullary constructors
-        = return app            -- The arg is evaluated
-        | otherwise                     -- Arg not evaluated, so evaluate it
-        = do { arg_id <- newVar (exprType arg)
-             ; let arg_id1 = setIdUnfolding arg_id evaldUnfolding
-             ; return (Case arg arg_id1 (exprType app)
-                            [(DEFAULT, [], fun `App` Var arg_id1)]) }
-
-    eval_data2tag_arg (Tick t app)    -- Scc notes can appear
-        = do { app' <- eval_data2tag_arg app
-             ; return (Tick t app') }
-
-    eval_data2tag_arg other     -- Should not happen
-        = pprPanic "eval_data2tag" (ppr other)
-
-{- Note [dataToTag magic]
-~~~~~~~~~~~~~~~~~~~~~~~~~
-We must ensure that the arg of data2TagOp is evaluated. So
-in general CorePrep does this transformation:
-  data2tag e   -->   case e of y -> data2tag y
-(yuk yuk) take into account the lambdas we've now introduced
-
-How might it not be evaluated?  Well, we might have floated it out
-of the scope of a `seq`, or dropped the `seq` altogether.
-
-We only do this if 'e' is not a WHNF.  But if it's a simple
-variable (common case) we need to know its evaluated-ness flag.
-Example:
-   data T = MkT !Bool
-   f v = case v of
-           MkT y -> dataToTag# y
-Here we don't want to generate an extra case on 'y', because it's
-already evaluated.  So we want to keep the evaluated-ness flag
-on y.  See Note [Preserve evaluated-ness in CorePrep].
-
-
+{-
 ************************************************************************
 *                                                                      *
                 Simple CoreSyn operations
@@ -1537,14 +1487,15 @@ lookupMkNaturalName dflags hsc_env
     = guardNaturalUse dflags $ liftM tyThingId $
       lookupGlobal hsc_env mkNaturalName
 
+-- See Note [The integer library] in PrelNames
 lookupIntegerSDataConName :: DynFlags -> HscEnv -> IO (Maybe DataCon)
-lookupIntegerSDataConName dflags hsc_env = case cIntegerLibraryType of
+lookupIntegerSDataConName dflags hsc_env = case integerLibrary dflags of
     IntegerGMP -> guardIntegerUse dflags $ liftM (Just . tyThingDataCon) $
                   lookupGlobal hsc_env integerSDataConName
     IntegerSimple -> return Nothing
 
 lookupNaturalSDataConName :: DynFlags -> HscEnv -> IO (Maybe DataCon)
-lookupNaturalSDataConName dflags hsc_env = case cIntegerLibraryType of
+lookupNaturalSDataConName dflags hsc_env = case integerLibrary dflags of
     IntegerGMP -> guardNaturalUse dflags $ liftM (Just . tyThingDataCon) $
                   lookupGlobal hsc_env naturalSDataConName
     IntegerSimple -> return Nothing
@@ -1629,7 +1580,7 @@ cpCloneBndr env bndr
 
        -- Drop (now-useless) rules/unfoldings
        -- See Note [Drop unfoldings and rules]
-       -- and Note [Preserve evaluated-ness in CorePrep]
+       -- and Note [Preserve evaluatedness] in CoreTidy
        ; let unfolding' = zapUnfolding (realIdUnfolding bndr)
                           -- Simplifier will set the Id's unfolding
 
@@ -1661,21 +1612,8 @@ We want to drop the unfolding/rules on every Id:
   - We are changing uniques, so if we didn't discard unfoldings/rules
     we'd have to substitute in them
 
-HOWEVER, we want to preserve evaluated-ness; see
-Note [Preserve evaluated-ness in CorePrep]
-
-Note [Preserve evaluated-ness in CorePrep]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-We want to preserve the evaluated-ness of each binder (via
-evaldUnfolding) for two reasons
-
-* In the code generator if we have
-     case x of y { Red -> e1; DEFAULT -> y }
-  we can return 'y' rather than entering it, if we know
-  it is evaluated (Trac #14626)
-
-* In the DataToTag magic (in CorePrep itself) we rely on
-  evaluated-ness.  See Note Note [dataToTag magic].
+HOWEVER, we want to preserve evaluated-ness;
+see Note [Preserve evaluatedness] in CoreTidy.
 -}
 
 ------------------------------------------------------------------------------

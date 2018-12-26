@@ -253,7 +253,7 @@ static void releaseOcInfo(
 extern IMAGE_DOS_HEADER __ImageBase;
 #define __image_base (void*)((HINSTANCE)&__ImageBase)
 
-static Alignments pe_alignments[] = {
+const Alignments pe_alignments[] = {
   { IMAGE_SCN_ALIGN_1BYTES   , 1   },
   { IMAGE_SCN_ALIGN_2BYTES   , 2   },
   { IMAGE_SCN_ALIGN_4BYTES   , 4   },
@@ -270,10 +270,10 @@ static Alignments pe_alignments[] = {
   { IMAGE_SCN_ALIGN_8192BYTES, 8192},
  };
 
-static int pe_alignments_cnt = 14;
-static int default_alignment = 8;
-const int initHeapSizeMB = 15;
-static HANDLE code_heap = NULL;
+const int pe_alignments_cnt = sizeof (pe_alignments) / sizeof (Alignments);
+const int default_alignment = 8;
+const int initHeapSizeMB    = 15;
+static HANDLE code_heap     = NULL;
 
 /* Low Fragmentation Heap, try to prevent heap from increasing in size when
    space can simply be reclaimed.  These are enums missing from mingw-w64's
@@ -414,12 +414,11 @@ void freePreloadObjectFile_PEi386(ObjectCode *oc)
         oc->image = NULL;
     }
 
-    if (oc->info->image) {
-        HeapFree(code_heap, 0, oc->info->image);
-        oc->info->image = NULL;
-    }
-
     if (oc->info) {
+        if (oc->info->image) {
+            HeapFree(code_heap, 0, oc->info->image);
+            oc->info->image = NULL;
+        }
         if (oc->info->ch_info)
            stgFree (oc->info->ch_info);
         stgFree (oc->info);
@@ -447,15 +446,15 @@ static void releaseOcInfo(ObjectCode* oc) {
         oc->info = NULL;
     }
     for (int i = 0; i < oc->n_sections; i++){
-        Section section = oc->sections[i];
-        if (section.info) {
-            stgFree (section.info->name);
-            if (section.info->relocs) {
-                stgFree (section.info->relocs);
-                section.info->relocs = NULL;
+        Section *section = &oc->sections[i];
+        if (section->info) {
+            stgFree (section->info->name);
+            if (section->info->relocs) {
+                stgFree (section->info->relocs);
+                section->info->relocs = NULL;
             }
-            stgFree (section.info);
-            section.info = NULL;
+            stgFree (section->info);
+            section->info = NULL;
         }
     }
 }
@@ -1161,6 +1160,11 @@ ocVerifyImage_PEi386 ( ObjectCode* oc )
 {
    COFF_HEADER_INFO *info = getHeaderInfo (oc);
 
+   /* If the header could not be read, then don't process the ObjectCode.
+      This the case when the ObjectCode has been partially freed.  */
+   if (!info)
+     return false;
+
    uint32_t i, noRelocs;
    COFF_section* sectab;
    COFF_symbol*  symtab;
@@ -1433,8 +1437,8 @@ ocGetNames_PEi386 ( ObjectCode* oc )
 {
    bool has_code_section = false;
 
-   SymbolName* sname;
-   SymbolAddr* addr;
+   SymbolName* sname = NULL;
+   SymbolAddr* addr = NULL;
    unsigned int   i;
 
    COFF_HEADER_INFO *info = oc->info->ch_info;
@@ -1530,6 +1534,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
           stgFree (oc->image);
           oc->image = NULL;
           releaseOcInfo (oc);
+          oc->status = OBJECT_DONT_RESOLVE;
           return true;
       }
 
@@ -1562,11 +1567,10 @@ ocGetNames_PEi386 ( ObjectCode* oc )
             Allocate zeroed space for it */
         bss_sz = section.info->virtualSize;
         if (bss_sz < section.size) { bss_sz = section.size; }
-        bss_sz = section.info->alignment;
         zspace = stgCallocBytes(1, bss_sz, "ocGetNames_PEi386(anonymous bss)");
-        oc->sections[i].start = getAlignedMemory(zspace, section);
+        oc->sections[i].start = zspace;
         oc->sections[i].size  = bss_sz;
-        addProddableBlock(oc, zspace, bss_sz);
+        section  = oc->sections[i];
         /* debugBelch("BSS anon section at 0x%x\n", zspace); */
       }
 
@@ -1587,9 +1591,9 @@ ocGetNames_PEi386 ( ObjectCode* oc )
       if (sz < section.info->virtualSize) sz = section.info->virtualSize;
 
       start = section.start;
-      end   = start + sz - 1;
+      end   = start + sz;
 
-      if (kind != SECTIONKIND_OTHER && end >= start) {
+      if (kind != SECTIONKIND_OTHER && end > start) {
           /* See Note [Section alignment].  */
           addCopySection(oc, &oc->sections[i], kind, SECTION_NOMEM, start, sz);
           addProddableBlock(oc, oc->sections[i].start, sz);
@@ -1599,7 +1603,7 @@ ocGetNames_PEi386 ( ObjectCode* oc )
    /* Copy exported symbols into the ObjectCode. */
 
    oc->n_symbols = info->numberOfSymbols;
-   oc->symbols   = stgCallocBytes(sizeof(SymbolName*), oc->n_symbols,
+   oc->symbols   = stgCallocBytes(sizeof(Symbol_t), oc->n_symbols,
                                   "ocGetNames_PEi386(oc->symbols)");
 
    /* Work out the size of the global BSS section */
@@ -1746,7 +1750,8 @@ ocGetNames_PEi386 ( ObjectCode* oc )
          sname = strdup (sname);
          IF_DEBUG(linker, debugBelch("addSymbol %p `%s'\n", addr, sname));
          ASSERT(i < (uint32_t)oc->n_symbols);
-         oc->symbols[i] = sname;
+         oc->symbols[i].name = sname;
+         oc->symbols[i].addr = addr;
          if (isWeak) {
              setWeakSymbol(oc, sname);
          }
@@ -1757,7 +1762,8 @@ ocGetNames_PEi386 ( ObjectCode* oc )
       } else {
           /* We're skipping the symbol, but if we ever load this
           object file we'll want to skip it then too. */
-          oc->symbols[i] = NULL;
+          oc->symbols[i].name = NULL;
+          oc->symbols[i].addr = NULL;
       }
 
       i += getSymNumberOfAuxSymbols (info, sym);
@@ -1830,6 +1836,10 @@ ocResolve_PEi386 ( ObjectCode* oc )
       sense of buffer-overrun-proof. */
    uint8_t symbol[1000];
    /* debugBelch("resolving for %s\n", oc->fileName); */
+
+   /* Such libraries have been partially freed and can't be resolved.  */
+   if (oc->status == OBJECT_DONT_RESOLVE)
+     return 1;
 
    COFF_HEADER_INFO *info = oc->info->ch_info;
    uint32_t numberOfSections = info->numberOfSections;
@@ -2240,7 +2250,7 @@ resolveSymbolAddr_PEi386 (pathchar* buffer, int size,
                                    "resolveSymbolAddr");
       int blanks = 0;
       for (int i = 0; i < obj->n_symbols; i++) {
-          SymbolName* sym = obj->symbols[i];
+          SymbolName* sym = obj->symbols[i].name;
           if (sym == NULL)
             {
                blanks++;

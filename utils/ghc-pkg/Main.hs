@@ -66,7 +66,7 @@ import System.Directory ( doesDirectoryExist, getDirectoryContents,
                           getCurrentDirectory )
 import System.Exit ( exitWith, ExitCode(..) )
 import System.Environment ( getArgs, getProgName, getEnv )
-#if defined(darwin_HOST_OS) || defined(linux_HOST_OS)
+#if defined(darwin_HOST_OS) || defined(linux_HOST_OS) || defined(mingw32_HOST_OS)
 import System.Environment ( getExecutablePath )
 #endif
 import System.IO
@@ -80,10 +80,6 @@ import qualified Data.Set as Set
 import qualified Data.Map as Map
 
 #if defined(mingw32_HOST_OS)
--- mingw32 needs these for getExecDir
-import Foreign
-import Foreign.C
-import System.Directory ( canonicalizePath )
 import GHC.ConsoleHandler
 #else
 import System.Posix hiding (fdToHandle)
@@ -2003,7 +1999,7 @@ checkDuplicateDepends deps
 checkHSLib :: Verbosity -> [String] -> String -> Validate ()
 checkHSLib _verbosity dirs lib = do
   let filenames = ["lib" ++ lib ++ ".a",
-                   "lib" ++ lib ++ ".p_a",
+                   "lib" ++ lib ++ "_p.a",
                    "lib" ++ lib ++ "-ghc" ++ Version.version ++ ".so",
                    "lib" ++ lib ++ "-ghc" ++ Version.version ++ ".dylib",
                             lib ++ "-ghc" ++ Version.version ++ ".dll"]
@@ -2194,55 +2190,8 @@ dieForcible s = die (s ++ " (use --force to override)")
 -- Cut and pasted from ghc/compiler/main/SysTools
 
 getLibDir :: IO (Maybe String)
-#if defined(mingw32_HOST_OS)
-subst :: Char -> Char -> String -> String
-subst a b ls = map (\ x -> if x == a then b else x) ls
 
-unDosifyPath :: FilePath -> FilePath
-unDosifyPath xs = subst '\\' '/' xs
-
-getLibDir = do base   <- getExecDir "/ghc-pkg.exe"
-               case base of
-                 Nothing    -> return Nothing
-                 Just base' -> do
-                    libdir <- canonicalizePath $ base' </> "../lib"
-                    exists <- doesDirectoryExist libdir
-                    if exists
-                       then return $ Just libdir
-                       else return Nothing
-
--- (getExecDir cmd) returns the directory in which the current
---                  executable, which should be called 'cmd', is running
--- So if the full path is /a/b/c/d/e, and you pass "d/e" as cmd,
--- you'll get "/a/b/c" back as the result
-getExecDir :: String -> IO (Maybe String)
-getExecDir cmd =
-    getExecPath >>= maybe (return Nothing) removeCmdSuffix
-    where initN n = reverse . drop n . reverse
-          removeCmdSuffix = return . Just . initN (length cmd) . unDosifyPath
-
-getExecPath :: IO (Maybe String)
-getExecPath = try_size 2048 -- plenty, PATH_MAX is 512 under Win32.
-  where
-    try_size size = allocaArray (fromIntegral size) $ \buf -> do
-        ret <- c_GetModuleFileName nullPtr buf size
-        case ret of
-          0 -> return Nothing
-          _ | ret < size -> fmap Just $ peekCWString buf
-            | otherwise  -> try_size (size * 2)
-
-foreign import WINDOWS_CCONV unsafe "windows.h GetModuleFileNameW"
-  c_GetModuleFileName :: Ptr () -> CWString -> Word32 -> IO Word32
-#elif defined(darwin_HOST_OS) || defined(linux_HOST_OS)
--- TODO: a) this is copy-pasta from SysTools.hs / getBaseDir. Why can't we reuse
---          this here? and parameterise getBaseDir over the executable (for
---          windows)?
---          Answer: we can not, because if we share `getBaseDir` via `ghc-boot`,
---                  that would add `base` as a dependency for windows.
---       b) why is the windows getBaseDir logic, not part of getExecutablePath?
---          it would be much wider available then and we could drop all the
---          custom logic?
---          Answer: yes this should happen. No one has found the time just yet.
+#if defined(mingw32_HOST_OS) || defined(darwin_HOST_OS) || defined(linux_HOST_OS)
 getLibDir = Just . (\p -> p </> "lib") . takeDirectory . takeDirectory <$> getExecutablePath
 #else
 getLibDir = return Nothing

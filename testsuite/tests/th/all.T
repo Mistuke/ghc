@@ -12,6 +12,8 @@ setTestOpts(req_interp)
 if config.have_ext_interp :
        setTestOpts(extra_ways(['ext-interp']))
        setTestOpts(only_ways(['normal','ghci','ext-interp']))
+       if config.ghc_built_by_llvm:
+           setTestOpts(expect_broken_for(16087, ['ext-interp']))
 
 test('TH_mkName', normal, compile, ['-v0'])
 test('TH_overloadedlabels', normal, compile, ['-v0'])
@@ -75,6 +77,10 @@ def error_has(pattern):
 test('TH_reifyMkName', normal, compile, ['-v0'])
 
 test('TH_reifyInstances', normal, compile, ['-v0'])
+
+test('TH_reifyExplicitForAllFams', normal, compile, ['-v0'])
+test('TH_ExplicitForAllRules', normal, multimod_compile_and_run,
+     ['TH_ExplicitForAllRules.hs', '-v0 ' + config.ghc_th_way_flags])
 
 test('TH_spliceDecl1', normal, compile, ['-v0'])
 test('TH_spliceDecl2', normal, compile, ['-v0'])
@@ -383,7 +389,10 @@ test('T13018', normal, compile, ['-v0'])
 test('T13123', normal, compile, ['-v0'])
 test('T13098', normal, compile, ['-v0'])
 test('T11046', normal, multimod_compile, ['T11046','-v0'])
-test('T13366', expect_broken_for(13366, ['ghci']), compile_and_run, ['-lstdc++ -v0'])
+test('T13366',
+     [expect_broken_for(13366, ['ghci']), when(opsys('darwin'), expect_broken(16083))],
+     compile_and_run,
+     ['-lstdc++ -v0'])
 test('T13473', normal, multimod_compile_and_run,
      ['T13473.hs', '-v0 ' + config.ghc_th_way_flags])
 test('T13587', expect_broken(13587), compile_and_run, ['-v0'])
@@ -415,14 +424,38 @@ test('T14885a', normal, compile, [''])
 test('T14885b', normal, compile, [''])
 test('T14885c', normal, compile, [''])
 test('T15243', normal, compile, ['-dsuppress-uniques'])
+test('T15270A', normal, compile_fail, [''])
+test('T15270B', normal, compile_fail, [''])
 test('T15321', normal, compile_fail, [''])
 test('T15324', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
 test('T15331', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
 test('T15365', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
+test('T15360a', normal, compile, [''])
+test('T15360b', normal, compile_fail, [''])
 # Note: T9693 should be only_ways(['ghci']) once it's fixed.
 test('T9693', expect_broken(9693), ghci_script, ['T9693.script'])
 test('T14471', normal, compile, [''])
 test('TH_rebindableAdo', normal, compile, [''])
 test('T14627', normal, compile_fail, [''])
 test('TH_invalid_add_top_decl', normal, compile_fail, [''])
+test('T15550', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
+test('T15502', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
 test('T15518', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
+test('T15572', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
+test('TH_implicitParams', normal, compile_and_run, ['-v0 -dsuppress-uniques'])
+test('TH_implicitParamsErr1', normal, compile_fail, ['-v0 -dsuppress-uniques'])
+test('TH_implicitParamsErr2', normal, compile_fail, ['-v0 -dsuppress-uniques'])
+test('TH_implicitParamsErr3', normal, compile_fail, ['-v0 -dsuppress-uniques'])
+test('TH_recursiveDo', normal, compile_and_run, ['-v0 -dsuppress-uniques'])
+test('T15481', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
+test('TH_recover_warns', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
+test('T15738', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
+test('T15783', normal, multimod_compile,
+    ['T15783A', '-v0 ' + config.ghc_th_way_flags])
+test('T15792', normal, compile, ['-v0 -dsuppress-uniques'])
+test('T15815', normal, multimod_compile,
+    ['T15815B', '-v0 ' + config.ghc_th_way_flags])
+test('T15845', normal, compile, ['-v0 -dsuppress-uniques'])
+test('T15437', expect_broken(15437), multimod_compile,
+     ['T15437', '-v0 ' + config.ghc_th_way_flags])
+test('T15985', normal, compile, [''])

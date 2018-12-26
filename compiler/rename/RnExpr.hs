@@ -14,6 +14,7 @@ free variables.
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module RnExpr (
         rnLExpr, rnExpr, rnStmts
@@ -61,6 +62,8 @@ import qualified GHC.LanguageExtensions as LangExt
 import Data.Ord
 import Data.Array
 import qualified Data.List.NonEmpty as NE
+
+import Unique           ( mkVarOccUnique )
 
 {-
 ************************************************************************
@@ -167,10 +170,10 @@ rnExpr (HsApp x fun arg)
        ; (arg',fvArg) <- rnLExpr arg
        ; return (HsApp x fun' arg', fvFun `plusFV` fvArg) }
 
-rnExpr (HsAppType arg fun)
+rnExpr (HsAppType x fun arg)
   = do { (fun',fvFun) <- rnLExpr fun
        ; (arg',fvArg) <- rnHsWcType HsTypeCtx arg
-       ; return (HsAppType arg' fun', fvFun `plusFV` fvArg) }
+       ; return (HsAppType x fun' arg', fvFun `plusFV` fvArg) }
 
 rnExpr (OpApp _ e1 op e2)
   = do  { (e1', fv_e1) <- rnLExpr e1
@@ -310,11 +313,11 @@ rnExpr (RecordUpd { rupd_expr = expr, rupd_flds = rbinds })
                             , rupd_flds = rbinds' }
                  , fvExpr `plusFV` fvRbinds) }
 
-rnExpr (ExprWithTySig pty expr)
-  = do  { (pty', fvTy)    <- rnHsSigWcType ExprWithTySigCtx pty
+rnExpr (ExprWithTySig _ expr pty)
+  = do  { (pty', fvTy)    <- rnHsSigWcType BindUnlessForall ExprWithTySigCtx pty
         ; (expr', fvExpr) <- bindSigTyVarsFV (hsWcScopedTvs pty') $
                              rnLExpr expr
-        ; return (ExprWithTySig pty' expr', fvExpr `plusFV` fvTy) }
+        ; return (ExprWithTySig noExt expr' pty', fvExpr `plusFV` fvTy) }
 
 rnExpr (HsIf x _ p b1 b2)
   = do { (p', fvP) <- rnLExpr p
@@ -826,20 +829,29 @@ rnStmt :: Outputable (body GhcPs)
 
 rnStmt ctxt rnBody (L loc (LastStmt _ body noret _)) thing_inside
   = do  { (body', fv_expr) <- rnBody body
-        ; (ret_op, fvs1)   <- lookupStmtName ctxt returnMName
-        ; (thing,  fvs3)   <- thing_inside []
+        ; (ret_op, fvs1) <- if isMonadCompContext ctxt
+                            then lookupStmtName ctxt returnMName
+                            else return (noSyntaxExpr, emptyFVs)
+                            -- The 'return' in a LastStmt is used only
+                            -- for MonadComp; and we don't want to report
+                            -- "non in scope: return" in other cases
+                            -- Trac #15607
+
+        ; (thing,  fvs3) <- thing_inside []
         ; return (([(L loc (LastStmt noExt body' noret ret_op), fv_expr)]
                   , thing), fv_expr `plusFV` fvs1 `plusFV` fvs3) }
 
 rnStmt ctxt rnBody (L loc (BodyStmt _ body _ _)) thing_inside
   = do  { (body', fv_expr) <- rnBody body
         ; (then_op, fvs1)  <- lookupStmtName ctxt thenMName
-        ; (guard_op, fvs2) <- if isListCompExpr ctxt
+
+        ; (guard_op, fvs2) <- if isComprehensionContext ctxt
                               then lookupStmtName ctxt guardMName
                               else return (noSyntaxExpr, emptyFVs)
                               -- Only list/monad comprehensions use 'guard'
                               -- Also for sub-stmts of same eg [ e | x<-xs, gd | blah ]
                               -- Here "gd" is a guard
+
         ; (thing, fvs3)    <- thing_inside []
         ; return ( ([(L loc (BodyStmt noExt body' then_op guard_op), fv_expr)]
                   , thing), fv_expr `plusFV` fvs1 `plusFV` fvs2 `plusFV` fvs3) }
@@ -849,20 +861,7 @@ rnStmt ctxt rnBody (L loc (BindStmt _ pat body _ _)) thing_inside
                 -- The binders do not scope over the expression
         ; (bind_op, fvs1) <- lookupStmtName ctxt bindMName
 
-        ; xMonadFailEnabled <- fmap (xopt LangExt.MonadFailDesugaring) getDynFlags
-        ; let getFailFunction
-                -- If the pattern is irrefutable (e.g.: wildcard, tuple,
-                -- ~pat, etc.) we should not need to fail.
-                | isIrrefutableHsPat pat
-                                    = return (noSyntaxExpr, emptyFVs)
-                -- For non-monadic contexts (e.g. guard patterns, list
-                -- comprehensions, etc.) we should not need to fail.
-                -- See Note [Failing pattern matches in Stmts]
-                | not (isMonadFailStmtContext ctxt)
-                                    = return (noSyntaxExpr, emptyFVs)
-                | xMonadFailEnabled = lookupSyntaxName failMName
-                | otherwise         = lookupSyntaxName failMName_preMFP
-        ; (fail_op, fvs2) <- getFailFunction
+        ; (fail_op, fvs2) <- monadFailOp pat ctxt
 
         ; rnPat (StmtCtxt ctxt) pat $ \ pat' -> do
         { (thing, fvs3) <- thing_inside (collectPatBinders pat')
@@ -1198,10 +1197,7 @@ rn_rec_stmt rnBody _ (L loc (BindStmt _ pat' body _ _), fv_pat)
   = do { (body', fv_expr) <- rnBody body
        ; (bind_op, fvs1) <- lookupSyntaxName bindMName
 
-       ; xMonadFailEnabled <- fmap (xopt LangExt.MonadFailDesugaring) getDynFlags
-       ; let failFunction | xMonadFailEnabled = failMName
-                          | otherwise         = failMName_preMFP
-       ; (fail_op, fvs2) <- lookupSyntaxName failFunction
+       ; (fail_op, fvs2) <- getMonadFailOp
 
        ; let bndrs = mkNameSet (collectPatBinders pat')
              fvs   = fv_expr `plusFV` fv_pat `plusFV` fvs1 `plusFV` fvs2
@@ -1400,7 +1396,7 @@ segsToStmts empty_rec_stmt ((defs, uses, fwds, ss) : segs) fvs_later
   where
     (later_stmts, later_uses) = segsToStmts empty_rec_stmt segs fvs_later
     new_stmt | non_rec   = head ss
-             | otherwise = L (getLoc (head ss)) rec_stmt
+             | otherwise = cL (getLoc (head ss)) rec_stmt
     rec_stmt = empty_rec_stmt { recS_stmts     = ss
                               , recS_later_ids = nameSetElemsStable used_later
                               , recS_rec_ids   = nameSetElemsStable fwds }
@@ -1799,16 +1795,16 @@ parallel" in an ApplicativeStmt, but doesn't otherwise affect what we
 can do with the rest of the statements in the same "do" expression.
 -}
 
-isStrictPattern :: LPat id -> Bool
-isStrictPattern (L _ pat) =
-  case pat of
+isStrictPattern :: LPat (GhcPass p) -> Bool
+isStrictPattern lpat =
+  case unLoc lpat of
     WildPat{}       -> False
     VarPat{}        -> False
     LazyPat{}       -> False
     AsPat _ _ p     -> isStrictPattern p
     ParPat _ p      -> isStrictPattern p
     ViewPat _ _ p   -> isStrictPattern p
-    SigPat _ p      -> isStrictPattern p
+    SigPat _ p _    -> isStrictPattern p
     BangPat{}       -> True
     ListPat{}       -> True
     TuplePat{}      -> True
@@ -1932,7 +1928,7 @@ isReturnApp monad_names (L _ e) = case e of
   _otherwise -> Nothing
  where
   is_var f (L _ (HsPar _ e)) = is_var f e
-  is_var f (L _ (HsAppType _ e)) = is_var f e
+  is_var f (L _ (HsAppType _ e _)) = is_var f e
   is_var f (L _ (HsVar _ (L _ r))) = f r
        -- TODO: I don't know how to get this right for rebindable syntax
   is_var _ _ = False
@@ -2107,3 +2103,74 @@ badIpBinds :: Outputable a => SDoc -> a -> SDoc
 badIpBinds what binds
   = hang (text "Implicit-parameter bindings illegal in" <+> what)
          2 (ppr binds)
+
+---------
+
+lookupSyntaxMonadFailOpName :: Bool -> RnM (SyntaxExpr GhcRn, FreeVars)
+lookupSyntaxMonadFailOpName monadFailEnabled
+  | monadFailEnabled = lookupSyntaxName failMName
+  | otherwise        = lookupSyntaxName failMName_preMFP
+
+monadFailOp :: LPat GhcPs
+            -> HsStmtContext Name
+            -> RnM (SyntaxExpr GhcRn, FreeVars)
+monadFailOp pat ctxt
+  -- If the pattern is irrefutable (e.g.: wildcard, tuple, ~pat, etc.)
+  -- we should not need to fail.
+  | isIrrefutableHsPat pat = return (noSyntaxExpr, emptyFVs)
+
+  -- For non-monadic contexts (e.g. guard patterns, list
+  -- comprehensions, etc.) we should not need to fail.  See Note
+  -- [Failing pattern matches in Stmts]
+  | not (isMonadFailStmtContext ctxt) = return (noSyntaxExpr, emptyFVs)
+
+  | otherwise = getMonadFailOp
+
+{-
+Note [Monad fail : Rebindable syntax, overloaded strings]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Given the code
+  foo x = do { Just y <- x; return y }
+
+we expect it to desugar as
+  foo x = x >>= \r -> case r of
+                        Just y  -> return y
+                        Nothing -> fail "Pattern match error"
+
+But with RebindableSyntax and OverloadedStrings, we really want
+it to desugar thus:
+  foo x = x >>= \r -> case r of
+                        Just y  -> return y
+                        Nothing -> fail (fromString "Patterm match error")
+
+So, in this case, we synthesize the function
+  \x -> fail (fromString x)
+
+(rather than plain 'fail') for the 'fail' operation. This is done in
+'getMonadFailOp'.
+-}
+getMonadFailOp :: RnM (SyntaxExpr GhcRn, FreeVars) -- Syntax expr fail op
+getMonadFailOp
+ = do { xMonadFailEnabled <- fmap (xopt LangExt.MonadFailDesugaring) getDynFlags
+      ; xOverloadedStrings <- fmap (xopt LangExt.OverloadedStrings) getDynFlags
+      ; xRebindableSyntax <- fmap (xopt LangExt.RebindableSyntax) getDynFlags
+      ; reallyGetMonadFailOp xRebindableSyntax xOverloadedStrings xMonadFailEnabled }
+  where
+    reallyGetMonadFailOp rebindableSyntax overloadedStrings monadFailEnabled
+      | rebindableSyntax && overloadedStrings = do
+        (failExpr, failFvs) <- lookupSyntaxMonadFailOpName monadFailEnabled
+        (fromStringExpr, fromStringFvs) <- lookupSyntaxName fromStringName
+        let arg_lit = fsLit "arg"
+            arg_name = mkSystemVarName (mkVarOccUnique arg_lit) arg_lit
+            arg_syn_expr = mkRnSyntaxExpr arg_name
+        let body :: LHsExpr GhcRn =
+              nlHsApp (noLoc $ syn_expr failExpr)
+                      (nlHsApp (noLoc $ syn_expr fromStringExpr)
+                                (noLoc $ syn_expr arg_syn_expr))
+        let failAfterFromStringExpr :: HsExpr GhcRn =
+              unLoc $ mkHsLam [noLoc $ VarPat noExt $ noLoc arg_name] body
+        let failAfterFromStringSynExpr :: SyntaxExpr GhcRn =
+              mkSyntaxExpr failAfterFromStringExpr
+        return (failAfterFromStringSynExpr, failFvs `plusFV` fromStringFvs)
+      | otherwise = lookupSyntaxMonadFailOpName monadFailEnabled

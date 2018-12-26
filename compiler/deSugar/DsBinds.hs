@@ -12,6 +12,8 @@ lower levels it is preserved with @let@/@letrec@s).
 
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module DsBinds ( dsTopLHsBinds, dsLHsBinds, decomposeRuleLhs, dsSpec,
                  dsHsWrapper, dsTcEvBinds, dsTcEvBinds_s, dsEvBinds, dsMkUserRule
@@ -53,7 +55,7 @@ import Name
 import VarSet
 import Rules
 import VarEnv
-import Var( EvVar, varType )
+import Var( EvVar )
 import Outputable
 import Module
 import SrcLoc
@@ -98,7 +100,7 @@ dsTopLHsBinds binds
     unlifted_binds = filterBag (isUnliftedHsBind . unLoc) binds
     bang_binds     = filterBag (isBangedHsBind   . unLoc) binds
 
-    top_level_err desc (L loc bind)
+    top_level_err desc (dL->L loc bind)
       = putSrcSpanDs loc $
         errDs (hang (text "Top-level" <+> text desc <+> text "aren't allowed:")
                   2 (ppr bind))
@@ -115,8 +117,8 @@ dsLHsBinds binds
 ------------------------
 dsLHsBind :: LHsBind GhcTc
           -> DsM ([Id], [(Id,CoreExpr)])
-dsLHsBind (L loc bind) = do dflags <- getDynFlags
-                            putSrcSpanDs loc $ dsHsBind dflags bind
+dsLHsBind (dL->L loc bind) = do dflags <- getDynFlags
+                                putSrcSpanDs loc $ dsHsBind dflags bind
 
 -- | Desugar a single binding (or group of recursive binds).
 dsHsBind :: DynFlags
@@ -140,8 +142,10 @@ dsHsBind dflags (VarBind { var_id = var
                           else []
         ; return (force_var, [core_bind]) }
 
-dsHsBind dflags b@(FunBind { fun_id = L _ fun, fun_matches = matches
-                           , fun_co_fn = co_fn, fun_tick = tick })
+dsHsBind dflags b@(FunBind { fun_id = (dL->L _ fun)
+                           , fun_matches = matches
+                           , fun_co_fn = co_fn
+                           , fun_tick = tick })
  = do   { (args, body) <- matchWrapper
                            (mkPrefixFunRhs (noLoc $ idName fun))
                            Nothing matches
@@ -648,7 +652,7 @@ dsSpec :: Maybe CoreExpr        -- Just rhs => RULE is for a local binding
                                 --            rhs is in the Id's unfolding
        -> Located TcSpecPrag
        -> DsM (Maybe (OrdList (Id,CoreExpr), CoreRule))
-dsSpec mb_poly_rhs (L loc (SpecPrag poly_id spec_co spec_inl))
+dsSpec mb_poly_rhs (dL->L loc (SpecPrag poly_id spec_co spec_inl))
   | isJust (isClassOpId_maybe poly_id)
   = putSrcSpanDs loc $
     do { warnDs NoReason (text "Ignoring useless SPECIALISE pragma for class method selector"
@@ -862,7 +866,7 @@ decomposeRuleLhs dflags orig_bndrs orig_lhs
         -- Add extra tyvar binders: Note [Free tyvars in rule LHS]
         -- and extra dict binders: Note [Free dictionaries in rule LHS]
    mk_extra_bndrs fn_id args
-     = toposortTyVars unbound_tvs ++ unbound_dicts
+     = scopedSort unbound_tvs ++ unbound_dicts
      where
        unbound_tvs   = [ v | v <- unbound_vars, isTyVar v ]
        unbound_dicts = [ mkLocalId (localiseName (idName d)) (idType d)
@@ -888,9 +892,9 @@ decomposeRuleLhs dflags orig_bndrs orig_lhs
                               , text "Orig lhs:" <+> ppr orig_lhs
                               , text "optimised lhs:" <+> ppr lhs2 ])
    pp_bndr bndr
-    | isTyVar bndr                      = text "type variable" <+> quotes (ppr bndr)
-    | Just pred <- evVarPred_maybe bndr = text "constraint" <+> quotes (ppr pred)
-    | otherwise                         = text "variable" <+> quotes (ppr bndr)
+    | isTyVar bndr = text "type variable" <+> quotes (ppr bndr)
+    | isEvVar bndr = text "constraint"    <+> quotes (ppr (varType bndr))
+    | otherwise    = text "variable"      <+> quotes (ppr bndr)
 
    constructor_msg con = vcat
      [ text "A constructor," <+> ppr con <>
@@ -1282,7 +1286,7 @@ ds_ev_typeable ty (EvTypeableTrFun ev1 ev2)
 ds_ev_typeable ty (EvTypeableTyLit ev)
   = -- See Note [Typeable for Nat and Symbol] in TcInteract
     do { fun  <- dsLookupGlobalId tr_fun
-       ; dict <- dsEvTerm ev       -- Of type KnownNat/KnownSym
+       ; dict <- dsEvTerm ev       -- Of type KnownNat/KnownSymbol
        ; let proxy = mkTyApps (Var proxyHashId) [ty_kind, ty]
        ; return (mkApps (mkTyApps (Var fun) [ty]) [ dict, proxy ]) }
   where

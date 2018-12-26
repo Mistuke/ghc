@@ -512,9 +512,12 @@ pprLit1 other = pprLit other
 pprStatics :: DynFlags -> [CmmStatic] -> [SDoc]
 pprStatics _ [] = []
 pprStatics dflags (CmmStaticLit (CmmFloat f W32) : rest)
-  -- floats are padded to a word by padLitToWord, see #1852
+  -- odd numbers of floats are padded to a word by mkVirtHeapOffsetsWithPadding
   | wORD_SIZE dflags == 8, CmmStaticLit (CmmInt 0 W32) : rest' <- rest
   = pprLit1 (floatToWord dflags f) : pprStatics dflags rest'
+  -- adjacent floats aren't padded but combined into a single word
+  | wORD_SIZE dflags == 8, CmmStaticLit (CmmFloat g W32) : rest' <- rest
+  = pprLit1 (floatPairToWord dflags f g) : pprStatics dflags rest'
   | wORD_SIZE dflags == 4
   = pprLit1 (floatToWord dflags f) : pprStatics dflags rest
   | otherwise
@@ -646,6 +649,9 @@ pprMachOp_for_C mop = case mop of
         MO_SS_Conv from to | from == to -> empty
         MO_SS_Conv _from to -> parens (machRep_S_CType to)
 
+        MO_XX_Conv from to | from == to -> empty
+        MO_XX_Conv _from to -> parens (machRep_U_CType to)
+
         MO_FF_Conv from to | from == to -> empty
         MO_FF_Conv _from to -> parens (machRep_F_CType to)
 
@@ -775,6 +781,9 @@ pprCallishMachOp_for_C mop
         MO_F64_Tanh     -> text "tanh"
         MO_F64_Asin     -> text "asin"
         MO_F64_Acos     -> text "acos"
+        MO_F64_Atanh    -> text "atanh"
+        MO_F64_Asinh    -> text "asinh"
+        MO_F64_Acosh    -> text "acosh"
         MO_F64_Atan     -> text "atan"
         MO_F64_Log      -> text "log"
         MO_F64_Exp      -> text "exp"
@@ -790,6 +799,9 @@ pprCallishMachOp_for_C mop
         MO_F32_Asin     -> text "asinf"
         MO_F32_Acos     -> text "acosf"
         MO_F32_Atan     -> text "atanf"
+        MO_F32_Asinh    -> text "asinhf"
+        MO_F32_Acosh    -> text "acoshf"
+        MO_F32_Atanh    -> text "atanhf"
         MO_F32_Log      -> text "logf"
         MO_F32_Exp      -> text "expf"
         MO_F32_Sqrt     -> text "sqrtf"
@@ -1260,6 +1272,25 @@ floatToWord dflags r
     where wo | wordWidth dflags == W64
              , wORDS_BIGENDIAN dflags    = 32
              | otherwise                 = 0
+
+floatPairToWord :: DynFlags -> Rational -> Rational -> CmmLit
+floatPairToWord dflags r1 r2
+  = runST (do
+        arr <- newArray_ ((0::Int),1)
+        writeArray arr 0 (fromRational r1)
+        writeArray arr 1 (fromRational r2)
+        arr' <- castFloatToWord32Array arr
+        w32_1 <- readArray arr' 0
+        w32_2 <- readArray arr' 1
+        return (pprWord32Pair w32_1 w32_2)
+    )
+    where pprWord32Pair w32_1 w32_2
+              | wORDS_BIGENDIAN dflags =
+                  CmmInt ((shiftL i1 32) .|. i2) W64
+              | otherwise =
+                  CmmInt ((shiftL i2 32) .|. i1) W64
+              where i1 = toInteger w32_1
+                    i2 = toInteger w32_2
 
 doubleToWords :: DynFlags -> Rational -> [CmmLit]
 doubleToWords dflags r

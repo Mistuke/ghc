@@ -382,7 +382,8 @@ hReady h        =  hWaitForInput h 0
 --
 --  * 'System.IO.Error.isFullError' if the device is full; or
 --
---  * 'System.IO.Error.isPermissionError' if another system resource limit would be exceeded.
+--  * 'System.IO.Error.isPermissionError' if another system resource limit
+--    would be exceeded.
 
 hPrint          :: Show a => Handle -> a -> IO ()
 hPrint hdl      =  hPutStrLn hdl . show
@@ -392,7 +393,7 @@ hPrint hdl      =  hPutStrLn hdl . show
 -- closed on exit from 'withFile', whether by normal termination or by
 -- raising an exception.  If closing the handle raises an exception, then
 -- this exception will be raised by 'withFile' rather than any exception
--- raised by 'act'.
+-- raised by @act@.
 withFile :: FilePath -> IOMode -> (Handle -> IO r) -> IO r
 withFile name mode = bracket (openFile name mode) hClose
 
@@ -406,8 +407,8 @@ withBinaryFile name mode = bracket (openBinaryFile name mode) hClose
 -- ---------------------------------------------------------------------------
 -- fixIO
 
--- | The implementation of 'mfix' for 'IO'. If the function passed
--- to 'fixIO' inspects its argument, the resulting action will throw
+-- | The implementation of 'Control.Monad.Fix.mfix' for 'IO'. If the function
+-- passed to 'fixIO' inspects its argument, the resulting action will throw
 -- 'FixIOException'.
 fixIO :: (a -> IO a) -> IO a
 fixIO k = do

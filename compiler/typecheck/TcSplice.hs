@@ -46,6 +46,7 @@ import SrcLoc
 import THNames
 import TcUnify
 import TcEnv
+import Coercion( etaExpandCoAxBranch )
 import FileCleanup ( newTempName, TempFileLifetime(..) )
 
 import Control.Monad
@@ -112,6 +113,7 @@ import Panic
 import Lexeme
 import qualified EnumSet
 import Plugins
+import Bag
 
 import qualified Language.Haskell.TH as TH
 -- THSyntax gives access to internal functions and data types
@@ -1041,13 +1043,15 @@ runRemoteTH iserv recovers = do
       writeTcRef v emptyMessages
       runRemoteTH iserv (msgs : recovers)
     EndRecover caught_error -> do
-      v <- getErrsVar
-      let (prev_msgs, rest) = case recovers of
+      let (prev_msgs@(prev_warns,prev_errs), rest) = case recovers of
              [] -> panic "EndRecover"
              a : b -> (a,b)
-      if caught_error
-        then writeTcRef v prev_msgs
-        else updTcRef v (unionMessages prev_msgs)
+      v <- getErrsVar
+      (warn_msgs,_) <- readTcRef v
+      -- keep the warnings only if there were no errors
+      writeTcRef v $ if caught_error
+        then prev_msgs
+        else (prev_warns `unionBags` warn_msgs, prev_errs)
       runRemoteTH iserv rest
     _other -> do
       r <- handleTHMessage msg
@@ -1069,8 +1073,12 @@ Recover is slightly tricky to implement.
 
 The meaning of "recover a b" is
  - Do a
-   - If it finished successfully, then keep the messages it generated
+   - If it finished with no errors, then keep the warnings it generated
    - If it failed, discard any messages it generated, and do b
+
+Note that "failed" here can mean either
+  (1) threw an exception (failTc)
+  (2) generated an error message (addErrTcM)
 
 The messages are managed by GHC in the TcM monad, whereas the
 exception-handling is done in the ghc-iserv process, so we have to
@@ -1078,12 +1086,14 @@ coordinate between the two.
 
 On the server:
   - emit a StartRecover message
-  - run "a" inside a catch
-    - if it finishes, emit EndRecover False
-    - if it fails, emit EndRecover True, then run "b"
+  - run "a; FailIfErrs" inside a try
+  - emit an (EndRecover x) message, where x = True if "a; FailIfErrs" failed
+  - if "a; FailIfErrs" failed, run "b"
 
 Back in GHC, when we receive:
 
+  FailIfErrrs
+    failTc if there are any error messages (= failIfErrsM)
   StartRecover
     save the current messages and start with an empty set.
   EndRecover caught_error
@@ -1140,6 +1150,7 @@ handleTHMessage msg = case msg of
   AddForeignFilePath lang str -> wrapTHResult $ TH.qAddForeignFilePath lang str
   IsExtEnabled ext -> wrapTHResult $ TH.qIsExtEnabled ext
   ExtsEnabled -> wrapTHResult $ TH.qExtsEnabled
+  FailIfErrs -> wrapTHResult failIfErrsM
   _ -> panic ("handleTHMessage: unexpected message " ++ show msg)
 
 getAnnotationsByTypeRep :: TH.AnnLookup -> TypeRep -> TcM [[Word8]]
@@ -1168,8 +1179,7 @@ reifyInstances th_nm th_tys
         ; rdr_ty <- cvt loc (mkThAppTs (TH.ConT th_nm) th_tys)
           -- #9262 says to bring vars into scope, like in HsForAllTy case
           -- of rnHsTyKi
-        ; free_vars <- extractHsTyRdrTyVars rdr_ty
-        ; let tv_rdrs = freeKiTyVarsAllVars free_vars
+        ; let tv_rdrs = freeKiTyVarsAllVars (extractHsTyRdrTyVars rdr_ty)
           -- Rename  to HsType Name
         ; ((tv_names, rn_ty), _fvs)
             <- checkNoErrs $ -- If there are out-of-scope Names here, then we
@@ -1180,15 +1190,16 @@ reifyInstances th_nm th_tys
                do { (rn_ty, fvs) <- rnLHsType doc rdr_ty
                   ; return ((tv_names, rn_ty), fvs) }
         ; (_tvs, ty)
-            <- failIfEmitsConstraints $  -- avoid error cascade if there are unsolved
-               tcImplicitTKBndrs ReifySkol tv_names $
+            <- pushTcLevelM_   $
+               solveEqualities $ -- Avoid error cascade if there are unsolved
+               bindImplicitTKBndrs_Skol tv_names $
                fst <$> tcLHsType rn_ty
-        ; ty <- zonkTcTypeToType emptyZonkEnv ty
+        ; ty <- zonkTcTypeToType ty
                 -- Substitute out the meta type variables
                 -- In particular, the type might have kind
                 -- variables inside it (Trac #7477)
 
-        ; traceTc "reifyInstances" (ppr ty $$ ppr (typeKind ty))
+        ; traceTc "reifyInstances" (ppr ty $$ ppr (tcTypeKind ty))
         ; case splitTyConApp_maybe ty of   -- This expands any type synonyms
             Just (tc, tys)                 -- See Trac #7910
                | Just cls <- tyConClass_maybe tc
@@ -1382,14 +1393,17 @@ reifyThing thing = pprPanic "reifyThing" (pprTcTyThingCategory thing)
 
 -------------------------------------------
 reifyAxBranch :: TyCon -> CoAxBranch -> TcM TH.TySynEqn
-reifyAxBranch fam_tc (CoAxBranch { cab_lhs = lhs, cab_rhs = rhs })
+reifyAxBranch fam_tc (CoAxBranch { cab_tvs = tvs
+                                 , cab_lhs = lhs
+                                 , cab_rhs = rhs })
             -- remove kind patterns (#8884)
-  = do { let lhs_types_only = filterOutInvisibleTypes fam_tc lhs
+  = do { tvs' <- reifyTyVarsToMaybe tvs
+       ; let lhs_types_only = filterOutInvisibleTypes fam_tc lhs
        ; lhs' <- reifyTypes lhs_types_only
        ; annot_th_lhs <- zipWith3M annotThType (mkIsPolyTvs fam_tvs)
                                    lhs_types_only lhs'
        ; rhs'  <- reifyType rhs
-       ; return (TH.TySynEqn annot_th_lhs rhs') }
+       ; return (TH.TySynEqn tvs' annot_th_lhs rhs') }
   where
     fam_tvs = tyConVisibleTyVars fam_tc
 
@@ -1527,7 +1541,9 @@ reifyDataCon isGadtDataCon tys dc
                   return $ TH.NormalC name (dcdBangs `zip` r_arg_tys)
 
        ; let (ex_tvs', theta') | isGadtDataCon = (g_user_tvs, g_theta)
-                               | otherwise     = (ex_tvs, theta)
+                               | otherwise     = ASSERT( all isTyVar ex_tvs )
+                                                 -- no covars for haskell syntax
+                                                 (ex_tvs, theta)
              ret_con | null ex_tvs' && null theta' = return main_con
                      | otherwise                   = do
                          { cxt <- reifyCxt theta'
@@ -1576,13 +1592,17 @@ reifyClass cls
     (_, fds, theta, _, ats, op_stuff) = classExtraBigSig cls
     fds' = map reifyFunDep fds
     reify_op (op, def_meth)
-      = do { ty <- reifyType (idType op)
+      = do { let (_, _, ty) = tcSplitMethodTy (idType op)
+               -- Use tcSplitMethodTy to get rid of the extraneous class
+               -- variables and predicates at the beginning of op's type
+               -- (see #15551).
+           ; ty' <- reifyType ty
            ; let nm' = reifyName op
            ; case def_meth of
                 Just (_, GenericDM gdm_ty) ->
                   do { gdm_ty' <- reifyType gdm_ty
-                     ; return [TH.SigD nm' ty, TH.DefaultSigD nm' gdm_ty'] }
-                _ -> return [TH.SigD nm' ty] }
+                     ; return [TH.SigD nm' ty', TH.DefaultSigD nm' gdm_ty'] }
+                _ -> return [TH.SigD nm' ty'] }
 
     reifyAT :: ClassATItem -> TcM [TH.Dec]
     reifyAT (ATI tycon def) = do
@@ -1597,7 +1617,7 @@ reifyClass cls
 
     reifyDefImpl :: TH.Name -> [TH.Name] -> Type -> TcM TH.Dec
     reifyDefImpl n args ty =
-      TH.TySynInstD n . TH.TySynEqn (map TH.VarT args) <$> reifyType ty
+      TH.TySynInstD n . TH.TySynEqn Nothing (map TH.VarT args) <$> reifyType ty
 
     tfNames :: TH.Dec -> (TH.Name, [TH.Name])
     tfNames (TH.OpenTypeFamilyD (TH.TypeFamilyHead n args _ _))
@@ -1619,7 +1639,7 @@ annotThType :: Bool   -- True <=> annotate
 annotThType _    _  th_ty@(TH.SigT {}) = return th_ty
 annotThType True ty th_ty
   | not $ isEmptyVarSet $ filterVarSet isTyVar $ tyCoVarsOfType ty
-  = do { let ki = typeKind ty
+  = do { let ki = tcTypeKind ty
        ; th_ki <- reifyKind ki
        ; return (TH.SigT th_ty th_ki) }
 annotThType _    _ th_ty = return th_ty
@@ -1674,48 +1694,42 @@ reifyFamilyInstances fam_tc fam_insts
 reifyFamilyInstance :: [Bool] -- True <=> the corresponding tv is poly-kinded
                               -- includes only *visible* tvs
                     -> FamInst -> TcM TH.Dec
-reifyFamilyInstance is_poly_tvs inst@(FamInst { fi_flavor = flavor
-                                              , fi_fam = fam
-                                              , fi_tvs = fam_tvs
-                                              , fi_tys = lhs
-                                              , fi_rhs = rhs })
+reifyFamilyInstance is_poly_tvs (FamInst { fi_flavor = flavor
+                                         , fi_axiom = ax
+                                         , fi_fam = fam })
+  | let fam_tc = coAxiomTyCon ax
+        branch = coAxiomSingleBranch ax
+  , CoAxBranch { cab_tvs = tvs, cab_lhs = lhs, cab_rhs = rhs } <- branch
   = case flavor of
       SynFamilyInst ->
                -- remove kind patterns (#8884)
-        do { let lhs_types_only = filterOutInvisibleTypes fam_tc lhs
+        do { th_tvs <- reifyTyVarsToMaybe tvs
+           ; let lhs_types_only = filterOutInvisibleTypes fam_tc lhs
            ; th_lhs <- reifyTypes lhs_types_only
            ; annot_th_lhs <- zipWith3M annotThType is_poly_tvs lhs_types_only
                                                    th_lhs
            ; th_rhs <- reifyType rhs
            ; return (TH.TySynInstD (reifyName fam)
-                                   (TH.TySynEqn annot_th_lhs th_rhs)) }
+                                   (TH.TySynEqn th_tvs annot_th_lhs th_rhs)) }
 
       DataFamilyInst rep_tc ->
-        do { let rep_tvs = tyConTyVars rep_tc
-                 fam' = reifyName fam
-
-                   -- eta-expand lhs types, because sometimes data/newtype
-                   -- instances are eta-reduced; See Trac #9692
-                   -- See Note [Eta reduction for data family axioms]
-                   -- in TcInstDcls
-                 (_rep_tc, rep_tc_args) = splitTyConApp rhs
-                 etad_tyvars            = dropList rep_tc_args rep_tvs
-                 etad_tys               = mkTyVarTys etad_tyvars
-                 eta_expanded_tvs = mkTyVarTys fam_tvs `chkAppend` etad_tys
-                 eta_expanded_lhs = lhs `chkAppend` etad_tys
-                 dataCons         = tyConDataCons rep_tc
-                 isGadt           = isGadtSyntaxTyCon rep_tc
-           ; cons <- mapM (reifyDataCon isGadt eta_expanded_tvs) dataCons
-           ; let types_only = filterOutInvisibleTypes fam_tc eta_expanded_lhs
+        do { let -- eta-expand lhs types, because sometimes data/newtype
+                 -- instances are eta-reduced; See Trac #9692
+                 -- See Note [Eta reduction for data families] in FamInstEnv
+                 (ee_tvs, ee_lhs, _) = etaExpandCoAxBranch branch
+                 fam'     = reifyName fam
+                 dataCons = tyConDataCons rep_tc
+                 isGadt   = isGadtSyntaxTyCon rep_tc
+           ; th_tvs <- reifyTyVarsToMaybe ee_tvs
+           ; cons <- mapM (reifyDataCon isGadt (mkTyVarTys ee_tvs)) dataCons
+           ; let types_only = filterOutInvisibleTypes fam_tc ee_lhs
            ; th_tys <- reifyTypes types_only
            ; annot_th_tys <- zipWith3M annotThType is_poly_tvs types_only th_tys
            ; return $
                if isNewTyCon rep_tc
-               then TH.NewtypeInstD [] fam' annot_th_tys Nothing (head cons) []
-               else TH.DataInstD    [] fam' annot_th_tys Nothing       cons  []
+               then TH.NewtypeInstD [] fam' th_tvs annot_th_tys Nothing (head cons) []
+               else TH.DataInstD    [] fam' th_tvs annot_th_tys Nothing       cons  []
            }
-  where
-    fam_tc = famInstTyCon inst
 
 ------------------------------
 reifyType :: TyCoRep.Type -> TcM TH.Type
@@ -1727,7 +1741,23 @@ reifyType ty@(ForAllTy {})  = reify_for_all ty
 reifyType (LitTy t)         = do { r <- reifyTyLit t; return (TH.LitT r) }
 reifyType (TyVarTy tv)      = return (TH.VarT (reifyName tv))
 reifyType (TyConApp tc tys) = reify_tc_app tc tys   -- Do not expand type synonyms here
-reifyType (AppTy t1 t2)     = do { [r1,r2] <- reifyTypes [t1,t2] ; return (r1 `TH.AppT` r2) }
+reifyType ty@(AppTy {})     = do
+  let (ty_head, ty_args) = splitAppTys ty
+  ty_head' <- reifyType ty_head
+  ty_args' <- reifyTypes (filter_out_invisible_args ty_head ty_args)
+  pure $ mkThAppTs ty_head' ty_args'
+  where
+    -- Make sure to filter out any invisible arguments. For instance, if you
+    -- reify the following:
+    --
+    --   newtype T (f :: forall a. a -> Type) = MkT (f Bool)
+    --
+    -- Then you should receive back `f Bool`, not `f Type Bool`, since the
+    -- `Type` argument is invisible (#15792).
+    filter_out_invisible_args :: Type -> [Type] -> [Type]
+    filter_out_invisible_args ty_head ty_args =
+      filterByList (map isVisibleArgFlag $ appTyArgFlags ty_head ty_args)
+                   ty_args
 reifyType ty@(FunTy t1 t2)
   | isPredTy t1 = reify_for_all ty  -- Types like ((?x::Int) => Char -> Char)
   | otherwise   = do { [r1,r2] <- reifyTypes [t1,t2] ; return (TH.ArrowT `TH.AppT` r1 `TH.AppT` r2) }
@@ -1768,7 +1798,7 @@ reifyKind :: Kind -> TcM TH.Kind
 reifyKind = reifyType
 
 reifyCxt :: [PredType] -> TcM [TH.Pred]
-reifyCxt   = mapM reifyPred
+reifyCxt   = mapM reifyType
 
 reifyFunDep :: ([TyVar], [TyVar]) -> TH.FunDep
 reifyFunDep (xs, ys) = TH.FunDep (map reifyName xs) (map reifyName ys)
@@ -1783,6 +1813,10 @@ reifyTyVars tvs = mapM reify_tv tvs
       where
         kind = tyVarKind tv
         name = reifyName tv
+
+reifyTyVarsToMaybe :: [TyVar] -> TcM (Maybe [TH.TyVarBndr])
+reifyTyVarsToMaybe []  = pure Nothing
+reifyTyVarsToMaybe tys = Just <$> reifyTyVars tys
 
 {-
 Note [Kind annotations on TyConApps]
@@ -1910,7 +1944,7 @@ reify_tc_app tc tys
     -- See Note [Kind annotations on TyConApps]
     maybe_sig_t th_type
       | needs_kind_sig
-      = do { let full_kind = typeKind (mkTyConApp tc tys)
+      = do { let full_kind = tcTypeKind (mkTyConApp tc tys)
            ; th_full_kind <- reifyKind full_kind
            ; return (TH.SigT th_type th_full_kind) }
       | otherwise
@@ -1928,13 +1962,6 @@ reify_tc_app tc tys
                            mapUnionFV injectiveVarsOfBinder dropped_binders
 
         in not (subVarSet result_vars dropped_vars)
-
-reifyPred :: TyCoRep.PredType -> TcM TH.Pred
-reifyPred ty
-  -- We could reify the invisible parameter as a class but it seems
-  -- nicer to support them properly...
-  | isIPPred ty = noTH (sLit "implicit parameters") (ppr ty)
-  | otherwise   = reifyType ty
 
 ------------------------------
 reifyName :: NamedThing n => n -> TH.Name
@@ -2052,9 +2079,9 @@ reifyModule (TH.Module (TH.PkgName pkgString) (TH.ModName mString)) = do
 
 ------------------------------
 mkThAppTs :: TH.Type -> [TH.Type] -> TH.Type
-mkThAppTs fun_ty arg_tys = foldl TH.AppT fun_ty arg_tys
+mkThAppTs fun_ty arg_tys = foldl' TH.AppT fun_ty arg_tys
 
-noTH :: LitString -> SDoc -> TcM a
+noTH :: PtrString -> SDoc -> TcM a
 noTH s d = failWithTc (hsep [text "Can't represent" <+> ptext s <+>
                                 text "in Template Haskell:",
                              nest 2 d])

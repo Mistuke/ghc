@@ -816,7 +816,7 @@ ocGetNames_ELF ( ObjectCode* oc )
           oc->n_symbols += symTab->n_symbols;
       }
 
-      oc->symbols = stgCallocBytes(oc->n_symbols, sizeof(SymbolName*),
+      oc->symbols = stgCallocBytes(oc->n_symbols, sizeof(Symbol_t),
                                    "ocGetNames_ELF(oc->symbols)");
       // Note calloc: if we fail partway through initializing symbols, we need
       // to undo the additions to the symbol table so far. We know which ones
@@ -927,7 +927,8 @@ ocGetNames_ELF ( ObjectCode* oc )
                            ) {
                            goto fail;
                        }
-                       oc->symbols[curSymbol++] = nm;
+                       oc->symbols[curSymbol++].name = nm;
+                       oc->symbols[curSymbol].addr = symbol->addr;
                    }
                } else {
                    /* Skip. */
@@ -1536,7 +1537,7 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
 
          case R_PPC_PLTREL24:
             value -= 0x8000; /* See Note [.LCTOC1 in PPC PIC code] */
-            /* fallthrough */
+            FALLTHROUGH;
          case R_PPC_REL24:
             delta = value - P;
 
@@ -1576,8 +1577,11 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
           break;
 
       case COMPAT_R_X86_64_64:
-          *(Elf64_Xword *)P = value;
+      {
+          Elf64_Xword payload = value;
+          memcpy((void*)P, &payload, sizeof(payload));
           break;
+      }
 
       case COMPAT_R_X86_64_PC32:
       {
@@ -1585,79 +1589,93 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
           barf("R_X86_64_PC32 relocation, but ALWAYS_PIC.");
 #else
           StgInt64 off = value - P;
-          if (off >= 0x7fffffffL || off < -0x80000000L) {
-              if (X86_64_ELF_NONPIC_HACK) {
-                  StgInt64 pltAddress =
-                      (StgInt64) &makeSymbolExtra(oc, ELF_R_SYM(info), S)
-                                                -> jumpIsland;
-                  off = pltAddress + A - P;
-              } else {
-                  errorBelch("R_X86_64_PC32 relocation out of range: %s = %"
-                             PRId64 "d\nRecompile %s with -fPIC.",
-                             symbol, off, oc->fileName );
-                  return 0;
-              }
+          if (off != (Elf64_Sword)off && X86_64_ELF_NONPIC_HACK) {
+              StgInt64 pltAddress =
+                  (StgInt64) &makeSymbolExtra(oc, ELF_R_SYM(info), S)
+                                            -> jumpIsland;
+              off = pltAddress + A - P;
           }
-          *(Elf64_Word *)P = (Elf64_Word)off;
+          if (off != (Elf64_Sword)off) {
+              errorBelch(
+                  "R_X86_64_PC32 relocation out of range: %s = %" PRIx64
+                  "\nRecompile %s with -fPIC -fexternal-dynamic-refs.",
+                  symbol, off, oc->fileName);
+              return 0;
+          }
+          Elf64_Sword payload = off;
+          memcpy((void*)P, &payload, sizeof(payload));
 #endif
           break;
       }
 
       case COMPAT_R_X86_64_PC64:
       {
-          StgInt64 off = value - P;
-          *(Elf64_Word *)P = (Elf64_Word)off;
+          Elf64_Sxword payload = value - P;
+          memcpy((void*)P, &payload, sizeof(payload));
           break;
       }
 
       case COMPAT_R_X86_64_32:
+      {
 #if defined(ALWAYS_PIC)
           barf("R_X86_64_32 relocation, but ALWAYS_PIC.");
 #else
-          if (value >= 0x7fffffffL) {
-              if (X86_64_ELF_NONPIC_HACK) {
-                  StgInt64 pltAddress =
-                      (StgInt64) &makeSymbolExtra(oc, ELF_R_SYM(info), S)
-                                                -> jumpIsland;
-                  value = pltAddress + A;
-              } else {
-                  errorBelch("R_X86_64_32 relocation out of range: %s = %"
-                         PRId64 "d\nRecompile %s with -fPIC.",
-                         symbol, value, oc->fileName );
-                  return 0;
-              }
+          if (value != (Elf64_Word)value && X86_64_ELF_NONPIC_HACK) {
+              StgInt64 pltAddress =
+                  (StgInt64) &makeSymbolExtra(oc, ELF_R_SYM(info), S)
+                                            -> jumpIsland;
+              value = pltAddress + A;
           }
-          *(Elf64_Word *)P = (Elf64_Word)value;
+          if (value != (Elf64_Word)value) {
+              errorBelch(
+                  "R_X86_64_32 relocation out of range: %s = %" PRIx64
+                  "\nRecompile %s with -fPIC -fexternal-dynamic-refs.",
+                  symbol, value, oc->fileName);
+              return 0;
+          }
+          Elf64_Word payload = value;
+          memcpy((void*)P, &payload, sizeof(payload));
 #endif
           break;
+      }
 
       case COMPAT_R_X86_64_32S:
+      {
 #if defined(ALWAYS_PIC)
           barf("R_X86_64_32S relocation, but ALWAYS_PIC.");
 #else
-          if ((StgInt64)value > 0x7fffffffL || (StgInt64)value < -0x80000000L) {
-              if (X86_64_ELF_NONPIC_HACK) {
-                  StgInt64 pltAddress =
-                      (StgInt64) &makeSymbolExtra(oc, ELF_R_SYM(info), S)
-                                                -> jumpIsland;
-                  value = pltAddress + A;
-              } else {
-                  errorBelch("R_X86_64_32S relocation out of range: %s = %"
-                         PRId64 "d\nRecompile %s with -fPIC.",
-                         symbol, value, oc->fileName );
-                  return 0;
-              }
+          if ((StgInt64)value != (Elf64_Sword)value && X86_64_ELF_NONPIC_HACK) {
+              StgInt64 pltAddress =
+                  (StgInt64) &makeSymbolExtra(oc, ELF_R_SYM(info), S)
+                                            -> jumpIsland;
+              value = pltAddress + A;
           }
-          *(Elf64_Sword *)P = (Elf64_Sword)value;
+          if ((StgInt64)value != (Elf64_Sword)value) {
+              errorBelch(
+                  "R_X86_64_32S relocation out of range: %s = %" PRIx64
+                  "\nRecompile %s with -fPIC -fexternal-dynamic-refs.",
+                  symbol, value, oc->fileName);
+              return 0;
+          }
+          Elf64_Sword payload = value;
+          memcpy((void*)P, &payload, sizeof(payload));
 #endif
           break;
+      }
       case COMPAT_R_X86_64_REX_GOTPCRELX:
       case COMPAT_R_X86_64_GOTPCRELX:
       case COMPAT_R_X86_64_GOTPCREL:
       {
           StgInt64 gotAddress = (StgInt64) &makeSymbolExtra(oc, ELF_R_SYM(info), S)->addr;
           StgInt64 off = gotAddress + A - P;
-          *(Elf64_Word *)P = (Elf64_Word)off;
+          if (off != (Elf64_Sword)off) {
+              barf(
+                  "COMPAT_R_X86_64_GOTPCREL relocation out of range: "
+                  "%s = %" PRIx64 " in %s.",
+                  symbol, off, oc->fileName);
+          }
+          Elf64_Sword payload = off;
+          memcpy((void*)P, &payload, sizeof(payload));
           break;
       }
 #if defined(dragonfly_HOST_OS)
@@ -1674,7 +1692,15 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
           /* make entry in GOT that contains said offset */
           StgInt64 gotEntry = (StgInt64) &makeSymbolExtra(oc, ELF_R_SYM(info),
                                          (S - (Elf64_Addr)(ti.base)))->addr;
-          *(Elf64_Word *)P = gotEntry + A - P;
+          StgInt64 off = gotEntry + A - P;
+          if (off != (Elf64_Sword)off) {
+              barf(
+                  "COMPAT_R_X86_64_GOTTPOFF relocation out of range: "
+                  "%s = %" PRIx64 " in %s.",
+                  symbol, off, oc->fileName);
+          }
+          Elf64_SWord payload = off;
+          memcpy((void*)P, &payload, sizeof(payload));
 #endif
           break;
       }
@@ -1686,19 +1712,26 @@ do_Elf_Rela_relocations ( ObjectCode* oc, char* ehdrC,
           barf("R_X86_64_PLT32 relocation, but ALWAYS_PIC.");
 #else
           StgInt64 off = value - P;
-          if (off >= 0x7fffffffL || off < -0x80000000L) {
+          if (off != (Elf64_Sword)off) {
               StgInt64 pltAddress = (StgInt64) &makeSymbolExtra(oc, ELF_R_SYM(info), S)
                                                     -> jumpIsland;
               off = pltAddress + A - P;
           }
-          *(Elf64_Word *)P = (Elf64_Word)off;
+          if (off != (Elf64_Sword)off) {
+              barf(
+                  "R_X86_64_PLT32 relocation out of range: "
+                  "%s = %" PRIx64 " in %s.",
+                  symbol, off, oc->fileName);
+          }
+          Elf64_Sword payload = off;
+          memcpy((void*)P, &payload, sizeof(payload));
 #endif
           break;
       }
 #endif
 
          default:
-            errorBelch("%s: unhandled ELF relocation(RelA) type %" FMT_Word "\n",
+            barf("%s: unhandled ELF relocation(RelA) type %" FMT_Word "\n",
                   oc->fileName, (W_)ELF_R_TYPE(info));
             return 0;
       }

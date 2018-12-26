@@ -80,6 +80,7 @@ module TysWiredIn (
 
         -- ** Constraint tuples
         cTupleTyConName, cTupleTyConNames, isCTupleTyConName,
+        cTupleTyConNameArity_maybe,
         cTupleDataConName, cTupleDataConNames,
 
         -- * Any
@@ -106,8 +107,10 @@ module TysWiredIn (
 
         vecRepDataConTyCon, tupleRepDataConTyCon, sumRepDataConTyCon,
 
-        liftedRepDataConTy, unliftedRepDataConTy, intRepDataConTy,
-        wordRepDataConTy, int64RepDataConTy, word64RepDataConTy, addrRepDataConTy,
+        liftedRepDataConTy, unliftedRepDataConTy, intRepDataConTy, int8RepDataConTy,
+        int16RepDataConTy, word16RepDataConTy,
+        wordRepDataConTy, int64RepDataConTy, word8RepDataConTy, word64RepDataConTy,
+        addrRepDataConTy,
         floatRepDataConTy, doubleRepDataConTy,
 
         vec2DataConTy, vec4DataConTy, vec8DataConTy, vec16DataConTy, vec32DataConTy,
@@ -159,6 +162,8 @@ import Util
 import BooleanFormula   ( mkAnd )
 
 import qualified Data.ByteString.Char8 as BS
+
+import Data.List        ( elemIndex )
 
 alpha_tyvar :: [TyVar]
 alpha_tyvar = [alphaTyVar]
@@ -411,10 +416,20 @@ sumRepDataConName = mkWiredInDataConName UserSyntax gHC_TYPES (fsLit "SumRep") s
 runtimeRepSimpleDataConNames :: [Name]
 runtimeRepSimpleDataConNames
   = zipWith3Lazy mk_special_dc_name
-      [ fsLit "LiftedRep", fsLit "UnliftedRep"
+      [ fsLit "LiftedRep"
+      , fsLit "UnliftedRep"
       , fsLit "IntRep"
-      , fsLit "WordRep", fsLit "Int64Rep", fsLit "Word64Rep"
-      , fsLit "AddrRep", fsLit "FloatRep", fsLit "DoubleRep" ]
+      , fsLit "WordRep"
+      , fsLit "Int8Rep"
+      , fsLit "Int16Rep"
+      , fsLit "Int64Rep"
+      , fsLit "Word8Rep"
+      , fsLit "Word16Rep"
+      , fsLit "Word64Rep"
+      , fsLit "AddrRep"
+      , fsLit "FloatRep"
+      , fsLit "DoubleRep"
+      ]
       runtimeRepSimpleDataConKeys
       runtimeRepSimpleDataCons
 
@@ -486,8 +501,8 @@ pcDataCon n univs = pcDataConWithFixity False n univs
 pcDataConWithFixity :: Bool      -- ^ declared infix?
                     -> Name      -- ^ datacon name
                     -> [TyVar]   -- ^ univ tyvars
-                    -> [TyVar]   -- ^ ex tyvars
-                    -> [TyVar]   -- ^ user-written tyvars
+                    -> [TyCoVar] -- ^ ex tycovars
+                    -> [TyCoVar] -- ^ user-written tycovars
                     -> [Type]    -- ^ args
                     -> TyCon
                     -> DataCon
@@ -501,7 +516,7 @@ pcDataConWithFixity infx n = pcDataConWithFixity' infx n (dataConWorkerUnique (n
 -- one DataCon unique per pair of Ints.
 
 pcDataConWithFixity' :: Bool -> Name -> Unique -> RuntimeRepInfo
-                     -> [TyVar] -> [TyVar] -> [TyVar]
+                     -> [TyVar] -> [TyCoVar] -> [TyCoVar]
                      -> [Type] -> TyCon -> DataCon
 -- The Name should be in the DataName name space; it's the name
 -- of the DataCon itself.
@@ -521,7 +536,7 @@ pcDataConWithFixity' declared_infix dc_name wrk_key rri
                 (map (const no_bang) arg_tys)
                 []      -- No labelled fields
                 tyvars ex_tyvars
-                (mkTyVarBinders Specified user_tyvars)
+                (mkTyCoVarBinders Specified user_tyvars)
                 []      -- No equality spec
                 []      -- No theta
                 arg_tys (mkTyConApp tycon (mkTyVarTys tyvars))
@@ -585,7 +600,7 @@ constraintKind   = mkTyConApp constraintKindTyCon []
 mkFunKind :: Kind -> Kind -> Kind
 mkFunKind = mkFunTy
 
-mkForAllKind :: TyVar -> ArgFlag -> Kind -> Kind
+mkForAllKind :: TyCoVar -> ArgFlag -> Kind -> Kind
 mkForAllKind = mkForAllTy
 
 {-
@@ -688,6 +703,9 @@ isBuiltInOcc_maybe occ =
       -- equality tycon
       "~"    -> Just eqTyConName
 
+      -- function tycon
+      "->"   -> Just funTyConName
+
       -- boxed tuple data/tycon
       "()"    -> Just $ tup_name Boxed 0
       _ | Just rest <- "(" `BS.stripPrefix` name
@@ -776,6 +794,17 @@ isCTupleTyConName n
  = ASSERT2( isExternalName n, ppr n )
    nameModule n == gHC_CLASSES
    && n `elemNameSet` cTupleTyConNameSet
+
+-- | If the given name is that of a constraint tuple, return its arity.
+-- Note that this is inefficient.
+cTupleTyConNameArity_maybe :: Name -> Maybe Arity
+cTupleTyConNameArity_maybe n
+  | not (isCTupleTyConName n) = Nothing
+  | otherwise = fmap adjustArity (n `elemIndex` cTupleTyConNames)
+  where
+    -- Since `cTupleTyConNames` jumps straight from the `0` to the `2`
+    -- case, we have to adjust accordingly our calculated arity.
+    adjustArity a = if a > 0 then a + 1 else a
 
 cTupleDataConName :: Arity -> Name
 cTupleDataConName arity
@@ -1153,8 +1182,8 @@ runtimeRepSimpleDataCons :: [DataCon]
 liftedRepDataCon :: DataCon
 runtimeRepSimpleDataCons@(liftedRepDataCon : _)
   = zipWithLazy mk_runtime_rep_dc
-    [ LiftedRep, UnliftedRep, IntRep, WordRep, Int64Rep
-    , Word64Rep, AddrRep, FloatRep, DoubleRep ]
+    [ LiftedRep, UnliftedRep, IntRep, WordRep, Int8Rep, Int16Rep, Int64Rep
+    , Word8Rep, Word16Rep, Word64Rep, AddrRep, FloatRep, DoubleRep ]
     runtimeRepSimpleDataConNames
   where
     mk_runtime_rep_dc primrep name
@@ -1162,11 +1191,13 @@ runtimeRepSimpleDataCons@(liftedRepDataCon : _)
 
 -- See Note [Wiring in RuntimeRep]
 liftedRepDataConTy, unliftedRepDataConTy,
-  intRepDataConTy, wordRepDataConTy, int64RepDataConTy,
-  word64RepDataConTy, addrRepDataConTy, floatRepDataConTy, doubleRepDataConTy :: Type
+  intRepDataConTy, int8RepDataConTy, int16RepDataConTy, wordRepDataConTy, int64RepDataConTy,
+  word8RepDataConTy, word16RepDataConTy, word64RepDataConTy, addrRepDataConTy,
+  floatRepDataConTy, doubleRepDataConTy :: Type
 [liftedRepDataConTy, unliftedRepDataConTy,
-   intRepDataConTy, wordRepDataConTy, int64RepDataConTy,
-   word64RepDataConTy, addrRepDataConTy, floatRepDataConTy, doubleRepDataConTy]
+   intRepDataConTy, wordRepDataConTy, int8RepDataConTy, int16RepDataConTy, int64RepDataConTy,
+   word8RepDataConTy, word16RepDataConTy, word64RepDataConTy,
+   addrRepDataConTy, floatRepDataConTy, doubleRepDataConTy]
   = map (mkTyConTy . promoteDataCon) runtimeRepSimpleDataCons
 
 vecCountTyCon :: TyCon
@@ -1217,7 +1248,7 @@ liftedRepDataConTyCon = promoteDataCon liftedRepDataCon
 
 -- The type ('LiftedRep)
 liftedRepTy :: Type
-liftedRepTy = mkTyConTy liftedRepDataConTyCon
+liftedRepTy = liftedRepDataConTy
 
 {- *********************************************************************
 *                                                                      *

@@ -434,9 +434,9 @@ tc_mkRepFamInsts gk tycon inst_tys =
            repTy'     = substTy  subst repTy
            tcv'       = tyCoVarsOfTypeList inst_ty
            (tv', cv') = partition isTyVar tcv'
-           tvs'       = toposortTyVars tv'
-           cvs'       = toposortTyVars cv'
-           axiom      = mkSingleCoAxiom Nominal rep_name tvs' cvs'
+           tvs'       = scopedSort tv'
+           cvs'       = scopedSort cv'
+           axiom      = mkSingleCoAxiom Nominal rep_name tvs' [] cvs'
                                         fam_tc inst_tys repTy'
 
      ; newFamInst SynFamilyInst axiom  }

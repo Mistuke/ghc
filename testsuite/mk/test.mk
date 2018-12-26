@@ -25,8 +25,7 @@ export MAKE
 
 RUNTESTS     = $(TOP)/driver/runtests.py
 COMPILER     = ghc
-CONFIGDIR    = $(TOP)/config
-CONFIG       = $(CONFIGDIR)/$(COMPILER)
+CONFIG       = $(TOP)/config/$(COMPILER)
 
 ifeq "$(GhcUnregisterised)" "YES"
     # Otherwise C backend generates many warnings about
@@ -42,7 +41,8 @@ EXTRA_HC_OPTS += -with-rtsopts="--io-manager=native"
 
 # TEST_HC_OPTS is passed to every invocation of TEST_HC
 # in nested Makefiles
-TEST_HC_OPTS = -dcore-lint -dcmm-lint -no-user-$(GhcPackageDbFlag) -rtsopts $(EXTRA_HC_OPTS)
+TEST_HC_OPTS = -dcore-lint -dstg-lint -dcmm-lint \
+			   -no-user-$(GhcPackageDbFlag) -rtsopts $(EXTRA_HC_OPTS)
 
 ifeq "$(MinGhcVersion711)" "YES"
 # Don't warn about missing specialisations. They can only occur with `-O`, but
@@ -57,6 +57,9 @@ ifeq "$(MinGhcVersion801)" "YES"
 TEST_HC_OPTS += -fdiagnostics-color=never
 TEST_HC_OPTS += -fno-diagnostics-show-caret
 endif
+
+# See Trac #15278.
+TEST_HC_OPTS += -Werror=compat
 
 # Add the no-debug-output last as it is often convenient to copy the test invocation
 # removing this line.
@@ -217,6 +220,14 @@ ifeq "$(SKIP_PERF_TESTS)" "YES"
 RUNTEST_OPTS += --skip-perf-tests
 endif
 
+ifeq "$(ONLY_PERF_TESTS)" "YES"
+RUNTEST_OPTS += --only-perf-tests
+endif
+
+ifneq "$(TEST_ENV)" ""
+RUNTEST_OPTS += --test-env="$(TEST_ENV)"
+endif
+
 ifeq "$(CLEANUP)" "0"
 RUNTEST_OPTS += -e config.cleanup=False
 else ifeq "$(CLEANUP)" "NO"
@@ -234,10 +245,16 @@ else
 RUNTEST_OPTS += -e config.local=True
 endif
 
+# Some tests in ext-interp fail when ghc-stage2 is built using LLVM. See #16087
+ifeq "$(findstring llvm,$(BUILD_FLAVOUR))" ""
+RUNTEST_OPTS += -e config.ghc_built_by_llvm=False
+else
+RUNTEST_OPTS += -e config.ghc_built_by_llvm=True
+endif
+
 RUNTEST_OPTS +=  \
 	--rootdir=. \
 	--config-file=$(CONFIG) \
-	-e 'config.confdir="$(CONFIGDIR)"' \
 	-e 'config.platform="$(TARGETPLATFORM)"' \
 	-e 'config.os="$(TargetOS_CPP)"' \
 	-e 'config.arch="$(TargetARCH_CPP)"' \
@@ -268,6 +285,10 @@ RUNTEST_OPTS +=  \
 
 RUNTEST_OPTS += -e "config.stage=$(GhcStage)"
 
+ifneq "$(METRICS_FILE)" ""
+RUNTEST_OPTS +=  \
+	--metrics-file "$(METRICS_FILE)"
+endif
 ifneq "$(JUNIT_FILE)" ""
 RUNTEST_OPTS +=  \
   --junit "$(JUNIT_FILE)"
@@ -301,14 +322,14 @@ setspeed =
 endif
 
 ifeq "$(accept)" "YES"
-setaccept = -e config.accept=1
+setaccept = -e config.accept=True
 
 ifeq "$(PLATFORM)" "YES"
-setaccept += -e config.accept_platform=1
+setaccept += -e config.accept_platform=True
 endif
 
 ifeq "$(OS)" "YES"
-setaccept += -e config.accept_os=1
+setaccept += -e config.accept_os=True
 endif
 
 else

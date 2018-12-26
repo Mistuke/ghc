@@ -130,10 +130,10 @@ when invoked:
 
     import GHC
     import GHC.Paths ( libdir )
-    import DynFlags ( defaultLogAction )
+    import DynFlags ( defaultFatalMessager, defaultFlushOut )
 
     main =
-        defaultErrorHandler defaultLogAction $ do
+        defaultErrorHandler defaultFatalMessager defaultFlushOut $ do
           runGhc (Just libdir) $ do
             dflags <- getSessionDynFlags
             setSessionDynFlags dflags
@@ -193,10 +193,11 @@ with ``-fexternal-interpreter`` let GHC developers know in :ghc-ticket:`14335`.
 Using compiler plugins
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Plugins can be specified on the command line with the
-:ghc-flag:`-fplugin=⟨module⟩` option where ⟨module⟩ is a
-module in a registered package that exports a plugin. Arguments can be given to
-plugins with the :ghc-flag:`-fplugin-opt=⟨module⟩:⟨args⟩` option.
+Plugins can be added on the command line with the :ghc-flag:`-fplugin=⟨module⟩`
+option where ⟨module⟩ is a module in a registered package that exports the
+plugin. Arguments can be passed to the plugins with the
+:ghc-flag:`-fplugin-opt=⟨module⟩:⟨args⟩` option. The list of enabled plugins can
+be reset with the :ghc-flag:`-fclear-plugins` option.
 
 .. ghc-flag:: -fplugin=⟨module⟩
     :shortdesc: Load a plugin exported by a given module
@@ -214,6 +215,16 @@ plugins with the :ghc-flag:`-fplugin-opt=⟨module⟩:⟨args⟩` option.
 
     Give arguments to a plugin module; module must be specified with
     :ghc-flag:`-fplugin=⟨module⟩`.
+
+.. ghc-flag:: -fclear-plugins
+    :shortdesc: Clear the list of active plugins
+    :type: dynamic
+    :category: plugins
+
+    Clear the list of plugins previously specified with
+    :ghc-flag:`-fplugin`. This is useful in GHCi where simply removing the
+    :ghc-flag:`-fplugin` options from the command line is not possible. Instead
+    `:set -fclear-plugins` can be used.
 
 
 As an example, in order to load the plugin exported by ``Foo.Plugin`` in
@@ -739,12 +750,13 @@ displayed.
     import HsDoc
 
     plugin :: Plugin
-    plugin = defaultPlugin { parsedResultAction = parsedPlugin
-                           , renamedResultAction = Just renamedAction
-                           , typeCheckResultAction = typecheckPlugin
-                           , spliceRunAction = metaPlugin
-                           , interfaceLoadAction = interfaceLoadPlugin
-                           }
+    plugin = defaultPlugin
+      { parsedResultAction = parsedPlugin
+      , renamedResultAction = renamedAction
+      , typeCheckResultAction = typecheckPlugin
+      , spliceRunAction = metaPlugin
+      , interfaceLoadAction = interfaceLoadPlugin
+      }
 
     parsedPlugin :: [CommandLineOption] -> ModSummary -> HsParsedModule -> Hsc HsParsedModule
     parsedPlugin _ _ pm
@@ -752,13 +764,11 @@ displayed.
            liftIO $ putStrLn $ "parsePlugin: \n" ++ (showSDoc dflags $ ppr $ hpm_module pm)
            return pm
 
-    renamedAction :: [CommandLineOption] -> ModSummary
-                        -> ( HsGroup GhcRn, [LImportDecl GhcRn]
-                           , Maybe [(LIE GhcRn, Avails)], Maybe LHsDocString )
-                        -> TcM ()
-    renamedAction _ _ ( gr, _, _, _ )
-      = do dflags <- getDynFlags
-           liftIO $ putStrLn $ "typeCheckPlugin (rn): " ++ (showSDoc dflags $ ppr gr)
+    renamedAction :: [CommandLineOption] -> TcGblEnv -> HsGroup GhcRn -> TcM (TcGblEnv, HsGroup GhcRn)
+    renamedAction _ tc gr = do
+      dflags <- getDynFlags
+      liftIO $ putStrLn $ "typeCheckPlugin (rn): " ++ (showSDoc dflags $ ppr gr)
+      return (tc, gr)
 
     typecheckPlugin :: [CommandLineOption] -> ModSummary -> TcGblEnv -> TcM TcGblEnv
     typecheckPlugin _ _ tc
@@ -783,12 +793,13 @@ When you compile a simple module that contains Template Haskell splice
 
 ::
 
+    {-# OPTIONS_GHC -fplugin SourcePlugin #-}
     {-# LANGUAGE TemplateHaskell #-}
     module A where
 
     a = ()
 
-    $(return [])
+$(return [])
 
 with the compiler flags ``-fplugin SourcePlugin`` it will give the following
 output:

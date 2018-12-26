@@ -220,6 +220,7 @@ void initRtsFlagsDefaults(void)
     RtsFlags.TraceFlags.sparks_sampled= false;
     RtsFlags.TraceFlags.sparks_full   = false;
     RtsFlags.TraceFlags.user          = false;
+    RtsFlags.TraceFlags.trace_output  = NULL;
 #endif
 
 #if defined(PROFILING)
@@ -285,6 +286,9 @@ usage_text[] = {
 "  -A<size>  Sets the minimum allocation area size (default 1m) Egs: -A20m -A10k",
 "  -AL<size> Sets the amount of large-object memory that can be allocated",
 "            before a GC is triggered (default: the value of -A)",
+"  -F<n>     Sets the collecting threshold for old generations as a factor of",
+"            the live data in that generation the last time it was collected",
+"            (default: 2.0)",
 "  -n<size>  Allocation area chunk size (0 = disabled, default: 0)",
 "  -O<size>  Sets the minimum size of the old generation (default 1M)",
 "  -M<size>  Sets the maximum heap size (default unlimited)  Egs: -M256k -M1G",
@@ -351,7 +355,8 @@ usage_text[] = {
 
 #if defined(TRACING)
 "",
-"  -l[flags]  Log events in binary format to the file <program>.eventlog",
+"  -ol<file>  Send binary eventlog to <file> (default: <program>.eventlog)",
+"  -l[flags]  Log events to a file",
 #  if defined(DEBUG)
 "  -v[flags]  Log events to stderr",
 #  endif
@@ -420,7 +425,7 @@ usage_text[] = {
 "  -qg[<n>]  Use parallel GC only for generations >= <n>",
 "            (default: 0, -qg alone turns off parallel GC)",
 "  -qb[<n>]  Use load-balancing in the parallel GC only for generations >= <n>",
-"            (default: 1 for -A < 32M, 0 otherwise;"
+"            (default: 1 for -A < 32M, 0 otherwise;",
 "             -qb alone turns off load-balancing)",
 "  -qn<n>    Use <n> threads for parallel GC (defaults to value of -N)",
 "  -qa       Use the OS to set thread affinity (experimental)",
@@ -915,7 +920,7 @@ error = true;
                   else if (strequal("info",
                                &rts_argv[arg][2])) {
                       OPTION_SAFE;
-                      printRtsInfo();
+                      printRtsInfo(rtsConfig);
                       stg_exit(0);
                   }
 #if defined(THREADED_RTS)
@@ -1448,7 +1453,30 @@ error = true;
                 }
                 ) break;
 
-              /* =========== TRACING ---------=================== */
+              /* =========== OUTPUT ============================ */
+
+              case 'o':
+                  switch(rts_argv[arg][2]) {
+                  case 'l':
+                      OPTION_SAFE;
+                      TRACING_BUILD_ONLY(
+                          if (strlen(&rts_argv[arg][3]) == 0) {
+                              errorBelch("-ol expects filename");
+                              error = true;
+                          } else {
+                              RtsFlags.TraceFlags.trace_output =
+                                  strdup(&rts_argv[arg][3]);
+                          }
+                          );
+                      break;
+
+                  default:
+                      errorBelch("Unknown output flag -o%c", rts_argv[arg][2]);
+                      error = true;
+                  }
+                  break;
+
+              /* =========== TRACING ============================ */
 
               case 'l':
                   OPTION_SAFE;

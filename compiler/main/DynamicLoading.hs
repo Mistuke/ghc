@@ -25,7 +25,6 @@ module DynamicLoading (
     ) where
 
 import GhcPrelude
-import HscTypes         ( HscEnv )
 import DynFlags
 
 #if defined(GHCI)
@@ -63,6 +62,7 @@ import GHC.Exts          ( unsafeCoerce# )
 
 #else
 
+import HscTypes         ( HscEnv )
 import Module           ( ModuleName, moduleNameString )
 import Panic
 
@@ -76,19 +76,22 @@ import Control.Monad    ( unless )
 -- actual compilation starts. Idempotent operation. Should be re-called if
 -- pluginModNames or pluginModNameOpts changes.
 initializePlugins :: HscEnv -> DynFlags -> IO DynFlags
-initializePlugins hsc_env df
 #if !defined(GHCI)
+initializePlugins _ df
   = do let pluginMods = pluginModNames df
        unless (null pluginMods) (pluginError pluginMods)
        return df
 #else
-  | map lpModuleName (plugins df) == pluginModNames df -- plugins not changed
-     && all (\p -> lpArguments p == argumentsForPlugin p (pluginModNameOpts df))
-            (plugins df) -- arguments not changed
+initializePlugins hsc_env df
+  | map lpModuleName (cachedPlugins df)
+         == pluginModNames df -- plugins not changed
+     && all (\p -> paArguments (lpPlugin p)
+                       == argumentsForPlugin p (pluginModNameOpts df))
+            (cachedPlugins df) -- arguments not changed
   = return df -- no need to reload plugins
   | otherwise
   = do loadedPlugins <- loadPlugins (hsc_env { hsc_dflags = df })
-       return $ df { plugins = loadedPlugins }
+       return $ df { cachedPlugins = loadedPlugins }
   where argumentsForPlugin p = map snd . filter ((== lpModuleName p) . fst)
 #endif
 
@@ -105,7 +108,8 @@ loadPlugins hsc_env
     dflags  = hsc_dflags hsc_env
     to_load = pluginModNames dflags
 
-    attachOptions mod_nm (plug, mod) = LoadedPlugin plug mod (reverse options)
+    attachOptions mod_nm (plug, mod) =
+        LoadedPlugin (PluginWithArgs plug (reverse options)) mod
       where
         options = [ option | (opt_mod_nm, option) <- pluginModNameOpts dflags
                             , opt_mod_nm == mod_nm ]

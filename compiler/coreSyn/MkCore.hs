@@ -101,15 +101,13 @@ sortQuantVars :: [Var] -> [Var]
 sortQuantVars vs = sorted_tcvs ++ ids
   where
     (tcvs, ids) = partition (isTyVar <||> isCoVar) vs
-    sorted_tcvs = toposortTyVars tcvs
+    sorted_tcvs = scopedSort tcvs
 
 -- | Bind a binding group over an expression, using a @let@ or @case@ as
 -- appropriate (see "CoreSyn#let_app_invariant")
 mkCoreLet :: CoreBind -> CoreExpr -> CoreExpr
 mkCoreLet (NonRec bndr rhs) body        -- See Note [CoreSyn let/app invariant]
-  | needsCaseBinding (idType bndr) rhs
-  , not (isJoinId bndr)
-  = Case rhs bndr (exprType body) [(DEFAULT,[],body)]
+  = bindNonRec bndr rhs body
 mkCoreLet bind body
   = Let bind body
 
@@ -304,7 +302,7 @@ mkStringExprFSWith lookupM str
   where
     chars = unpackFS str
     safeChar c = ord c >= 1 && ord c <= 0x7F
-    lit = Lit (MachStr (fastStringToByteString str))
+    lit = Lit (LitString (fastStringToByteString str))
 
 {-
 ************************************************************************
@@ -551,7 +549,7 @@ data FloatBind
   = FloatLet  CoreBind
   | FloatCase CoreExpr Id AltCon [Var]
       -- case e of y { C ys -> ... }
-      -- See Note [Floating cases] in SetLevels
+      -- See Note [Floating single-alternative cases] in SetLevels
 
 instance Outputable FloatBind where
   ppr (FloatLet b) = text "LET" <+> ppr b
@@ -660,7 +658,7 @@ mkRuntimeErrorApp err_id res_ty err_msg
   = mkApps (Var err_id) [ Type (getRuntimeRep res_ty)
                         , Type res_ty, err_string ]
   where
-    err_string = Lit (mkMachString err_msg)
+    err_string = Lit (mkLitString err_msg)
 
 mkImpossibleExpr :: Type -> CoreExpr
 mkImpossibleExpr res_ty
@@ -898,4 +896,4 @@ mkAbsentErrorApp :: Type         -- The type to instantiate 'a'
 mkAbsentErrorApp res_ty err_msg
   = mkApps (Var aBSENT_ERROR_ID) [ Type res_ty, err_string ]
   where
-    err_string = Lit (mkMachString err_msg)
+    err_string = Lit (mkLitString err_msg)

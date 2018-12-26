@@ -70,7 +70,7 @@ module VarEnv (
 
         -- * TidyEnv and its operation
         TidyEnv,
-        emptyTidyEnv
+        emptyTidyEnv, mkEmptyTidyEnv
     ) where
 
 import GhcPrelude
@@ -131,7 +131,7 @@ extendInScopeSet (InScope in_scope n) v
 
 extendInScopeSetList :: InScopeSet -> [Var] -> InScopeSet
 extendInScopeSetList (InScope in_scope n) vs
-   = InScope (foldl (\s v -> extendVarSet s v) in_scope vs)
+   = InScope (foldl' (\s v -> extendVarSet s v) in_scope vs)
                     (n + length vs)
 
 extendInScopeSetSet :: InScopeSet -> VarSet -> InScopeSet
@@ -401,6 +401,9 @@ type TidyEnv = (TidyOccEnv, VarEnv Var)
 
 emptyTidyEnv :: TidyEnv
 emptyTidyEnv = (emptyTidyOccEnv, emptyVarEnv)
+
+mkEmptyTidyEnv :: TidyOccEnv -> TidyEnv
+mkEmptyTidyEnv occ_env = (occ_env, emptyVarEnv)
 
 {-
 ************************************************************************

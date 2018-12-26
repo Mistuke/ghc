@@ -5,6 +5,7 @@
                                        -- orphan
 {-# LANGUAGE UndecidableInstances #-} -- Note [Pass sensitive types]
                                       -- in module PlaceHolder
+{-# LANGUAGE TypeFamilies #-}
 
 module TcEnv(
         TyThing(..), TcTyThing(..), TcId,
@@ -377,8 +378,13 @@ tcExtendRecEnv :: [(Name,TyThing)] -> TcM r -> TcM r
 -- Just like tcExtendGlobalEnv, except the argument is a list of pairs
 tcExtendRecEnv gbl_stuff thing_inside
  = do  { tcg_env <- getGblEnv
-       ; let ge' = extendNameEnvList (tcg_type_env tcg_env) gbl_stuff
-       ; tcg_env' <- setGlobalTypeEnv tcg_env ge'
+       ; let ge'      = extendNameEnvList (tcg_type_env tcg_env) gbl_stuff
+             tcg_env' = tcg_env { tcg_type_env = ge' }
+         -- No need for setGlobalTypeEnv (which side-effects the
+         -- tcg_type_env_var); tcExtendRecEnv is used just
+         -- when kind-check a group of type/class decls. It would
+         -- in any case be wrong for an interface-file decl to end up
+         -- with a TcTyCon in it!
        ; setGblEnv tcg_env' thing_inside }
 
 {-
@@ -466,18 +472,10 @@ tcExtendKindEnv extra_env thing_inside
 
 -----------------------
 -- Scoped type and kind variables
--- Before using this function, consider using TcHsType.scopeTyVars, which
--- bumps the TcLevel and thus prevents any of these TyVars from appearing
--- in kinds of tyvars in an outer scope.
--- Indeed, you should always use scopeTyVars unless some other code nearby
--- bumps the TcLevel.
 tcExtendTyVarEnv :: [TyVar] -> TcM r -> TcM r
 tcExtendTyVarEnv tvs thing_inside
   = tcExtendNameTyVarEnv (mkTyVarNamePairs tvs) thing_inside
 
--- Before using this function, consider using TcHsType.scopeTyVars2, which
--- bumps the TcLevel and thus prevents any of these TyVars from appearing
--- in kinds of tyvars in an outer scope.
 tcExtendNameTyVarEnv :: [(Name,TcTyVar)] -> TcM r -> TcM r
 tcExtendNameTyVarEnv binds thing_inside
   -- this should be used only for explicitly mentioned scoped variables.
@@ -568,7 +566,7 @@ tc_extend_local_env top_lvl extra_env thing_inside
 --
 -- Invariant: the ATcIds are fully zonked. Reasons:
 --      (a) The kinds of the forall'd type variables are defaulted
---          (see Kind.defaultKind, done in zonkQuantifiedTyVar)
+--          (see Kind.defaultKind, done in skolemiseQuantifiedTyVar)
 --      (b) There are no via-Indirect occurrences of the bound variables
 --          in the types, because instantiation does not look through such things
 --      (c) The call to tyCoVarsOfTypes is ok without looking through refs

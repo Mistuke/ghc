@@ -72,8 +72,11 @@ test('cgrun065', normal, compile_and_run, [''])
 test('cgrun066', normal, compile_and_run, [''])
 test('cgrun067', [extra_files(['Cgrun067A.hs'])], compile_and_run, [''])
 test('cgrun068', reqlib('random'), compile_and_run, [''])
-test('cgrun069', omit_ways(['ghci']), multi_compile_and_run,
-                 ['cgrun069', [('cgrun069_cmm.cmm', '')], ''])
+test('cgrun069',
+     [when(unregisterised(), expect_broken(15467)),
+      omit_ways(['ghci'])],
+     multi_compile_and_run,
+     ['cgrun069', [('cgrun069_cmm.cmm', '')], ''])
 test('cgrun070', normal, compile_and_run, [''])
 test('cgrun071', normal, compile_and_run, [''])
 test('cgrun072', normal, compile_and_run, [''])
@@ -161,6 +164,7 @@ test('T12855', normal, compile_and_run, [''])
 test('T9577', [ unless(arch('x86_64') or arch('i386'),skip),
                 when(opsys('darwin'), expect_broken(12937)),
                 when(opsys('mingw32'), expect_broken(12965)),
+                when(unregisterised(), skip),
                 only_ways(['normal']) ], compile_and_run, [''])
 
 test('T13425', normal, compile_and_run, ['-O'])
@@ -172,3 +176,19 @@ test('T13825-unit',
 test('T14619', normal, compile_and_run, [''])
 test('T14754', normal, compile_and_run, [''])
 test('T14346', only_ways(['threaded1','threaded2']), compile_and_run, ['-O -threaded'])
+test('T14251', [expect_broken_for(14251, ['optllvm'])],
+     compile_and_run, [''])
+
+# These actually used to fail with all optimisation settings, but adding -O just
+# to make sure
+test('T15696_1', normal, compile_and_run, ['-O'])
+test('T15696_2', normal, compile_and_run, ['-O'])
+# This requires -O
+test('T15696_3', normal, compile_and_run, ['-O'])
+
+test('T15892',
+     [ ignore_stdout,
+        # we want to do lots of major GC to make the bug more likely to
+        # happen, so -G1 -A32k:
+        extra_run_opts('+RTS -G1 -A32k -RTS') ],
+     compile_and_run, ['-O'])

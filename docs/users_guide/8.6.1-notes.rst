@@ -35,7 +35,7 @@ Language
   the common ``MonadTrans`` typeclass could now make the expectation that an
   applied transformer is must be a ``Monad`` ::
 
-      class (forall a. Monad m => Monad (t m)) => MonadTrans t where {- ... -}
+      class (forall m. Monad m => Monad (t m)) => MonadTrans t where {- ... -}
 
   Additionally, quantification can enable terminating instance resolution
   where this previously was not possible. See :ref:`quantified-constraints` for
@@ -266,7 +266,7 @@ for further change information.
     libraries/array/array.cabal:             Dependency of ``ghc`` library
     libraries/base/base.cabal:               Core library
     libraries/binary/binary.cabal:           Dependency of ``ghc`` library
-    libraries/bytestring/bytestring.cabal:   Deppendency of ``ghc`` library
+    libraries/bytestring/bytestring.cabal:   Dependency of ``ghc`` library
     libraries/Cabal/Cabal/Cabal.cabal:       Dependency of ``ghc-pkg`` utility
     libraries/containers/containers.cabal:   Dependency of ``ghc`` library
     libraries/deepseq/deepseq.cabal:         Dependency of ``ghc`` library

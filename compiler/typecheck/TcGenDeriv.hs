@@ -62,7 +62,8 @@ import SrcLoc
 import TyCon
 import TcEnv
 import TcType
-import TcValidity ( checkValidTyFamEqn )
+import TcValidity ( checkValidCoAxBranch )
+import CoAxiom    ( coAxiomSingleBranch )
 import TysPrim
 import TysWiredIn
 import Type
@@ -77,7 +78,7 @@ import FastString
 import Pair
 import Bag
 
-import Data.List  ( partition, intersperse )
+import Data.List  ( find, partition, intersperse )
 
 type BagDerivStuff = Bag DerivStuff
 
@@ -214,9 +215,11 @@ gen_Eq_binds loc tycon = do
       where
         nested_eq_expr []  [] [] = true_Expr
         nested_eq_expr tys as bs
-          = foldl1 and_Expr (zipWith3Equal "nested_eq" nested_eq tys as bs)
+          = foldr1 and_Expr (zipWith3Equal "nested_eq" nested_eq tys as bs)
+          -- Using 'foldr1' here ensures that the derived code is correctly
+          -- associated. See Trac #10859.
           where
-            nested_eq ty a b = nlHsPar (eq_Expr tycon ty (nlHsVar a) (nlHsVar b))
+            nested_eq ty a b = nlHsPar (eq_Expr ty (nlHsVar a) (nlHsVar b))
 
 {-
 ************************************************************************
@@ -454,7 +457,7 @@ gen_Ord_binds loc tycon = do
     -- Returns a case alternative  Ki b1 b2 ... bv -> compare (a1,a2,...) with (b1,b2,...)
     mkInnerEqAlt op data_con
       = mkHsCaseAlt (nlConVarPat data_con_RDR bs_needed) $
-        mkCompareFields tycon op (dataConOrigArgTys data_con)
+        mkCompareFields op (dataConOrigArgTys data_con)
       where
         data_con_RDR = getRdrName data_con
         bs_needed    = take (dataConSourceArity data_con) bs_RDRs
@@ -464,17 +467,17 @@ gen_Ord_binds loc tycon = do
     -- generates (case data2Tag a of a# -> case data2Tag b of b# -> a# `op` b#
     mkTagCmp dflags op =
       untag_Expr dflags tycon[(a_RDR, ah_RDR),(b_RDR, bh_RDR)] $
-        unliftedOrdOp tycon intPrimTy op ah_RDR bh_RDR
+        unliftedOrdOp intPrimTy op ah_RDR bh_RDR
 
-mkCompareFields :: TyCon -> OrdOp -> [Type] -> LHsExpr GhcPs
+mkCompareFields :: OrdOp -> [Type] -> LHsExpr GhcPs
 -- Generates nested comparisons for (a1,a2...) against (b1,b2,...)
 -- where the ai,bi have the given types
-mkCompareFields tycon op tys
+mkCompareFields op tys
   = go tys as_RDRs bs_RDRs
   where
     go []   _      _          = eqResult op
     go [ty] (a:_)  (b:_)
-      | isUnliftedType ty     = unliftedOrdOp tycon ty op a b
+      | isUnliftedType ty     = unliftedOrdOp ty op a b
       | otherwise             = genOpApp (nlHsVar a) (ordMethRdr op) (nlHsVar b)
     go (ty:tys) (a:as) (b:bs) = mk_compare ty a b
                                   (ltResult op)
@@ -496,10 +499,10 @@ mkCompareFields tycon op tys
       where
         a_expr = nlHsVar a
         b_expr = nlHsVar b
-        (lt_op, _, eq_op, _, _) = primOrdOps "Ord" tycon ty
+        (lt_op, _, eq_op, _, _) = primOrdOps "Ord" ty
 
-unliftedOrdOp :: TyCon -> Type -> OrdOp -> RdrName -> RdrName -> LHsExpr GhcPs
-unliftedOrdOp tycon ty op a b
+unliftedOrdOp :: Type -> OrdOp -> RdrName -> RdrName -> LHsExpr GhcPs
+unliftedOrdOp ty op a b
   = case op of
        OrdCompare -> unliftedCompare lt_op eq_op a_expr b_expr
                                      ltTag_Expr eqTag_Expr gtTag_Expr
@@ -508,7 +511,7 @@ unliftedOrdOp tycon ty op a b
        OrdGE      -> wrap ge_op
        OrdGT      -> wrap gt_op
   where
-   (lt_op, le_op, eq_op, ge_op, gt_op) = primOrdOps "Ord" tycon ty
+   (lt_op, le_op, eq_op, ge_op, gt_op) = primOrdOps "Ord" ty
    wrap prim_op = genPrimOpApp a_expr prim_op b_expr
    a_expr = nlHsVar a
    b_expr = nlHsVar b
@@ -1195,16 +1198,25 @@ gen_Show_binds get_fixity loc tycon
 
              show_arg :: RdrName -> Type -> LHsExpr GhcPs
              show_arg b arg_ty
-               | isUnliftedType arg_ty
-               -- See Note [Deriving and unboxed types] in TcDeriv
-               = nlHsApps compose_RDR [mk_shows_app boxed_arg,
-                                       mk_showString_app postfixMod]
-               | otherwise
-               = mk_showsPrec_app arg_prec arg
-                 where
-                   arg        = nlHsVar b
-                   boxed_arg  = box "Show" tycon arg arg_ty
-                   postfixMod = assoc_ty_id "Show" tycon postfixModTbl arg_ty
+                 | isUnliftedType arg_ty
+                 -- See Note [Deriving and unboxed types] in TcDerivInfer
+                 = with_conv $
+                    nlHsApps compose_RDR
+                        [mk_shows_app boxed_arg, mk_showString_app postfixMod]
+                 | otherwise
+                 = mk_showsPrec_app arg_prec arg
+               where
+                 arg        = nlHsVar b
+                 boxed_arg  = box "Show" arg arg_ty
+                 postfixMod = assoc_ty_id "Show" postfixModTbl arg_ty
+                 with_conv expr
+                    | (Just conv) <- assoc_ty_id_maybe primConvTbl arg_ty =
+                        nested_compose_Expr
+                            [ mk_showString_app ("(" ++ conv ++ " ")
+                            , expr
+                            , mk_showString_app ")"
+                            ]
+                    | otherwise = expr
 
                 -- Fixity stuff
              is_infix = dataConIsInfix data_con
@@ -1362,7 +1374,7 @@ gen_data dflags data_type_name constr_names loc rep_tc
 
     gfoldl_eqn con
       = ([nlVarPat k_RDR, z_Pat, nlConVarPat con_name as_needed],
-                   foldl mk_k_app (z_Expr `nlHsApp` nlHsVar con_name) as_needed)
+                   foldl' mk_k_app (z_Expr `nlHsApp` nlHsVar con_name) as_needed)
                    where
                      con_name ::  RdrName
                      con_name = getRdrName con
@@ -1440,10 +1452,16 @@ gfoldl_RDR, gunfold_RDR, toConstr_RDR, dataTypeOf_RDR, mkConstr_RDR,
     constr_RDR, dataType_RDR,
     eqChar_RDR  , ltChar_RDR  , geChar_RDR  , gtChar_RDR  , leChar_RDR  ,
     eqInt_RDR   , ltInt_RDR   , geInt_RDR   , gtInt_RDR   , leInt_RDR   ,
+    eqInt8_RDR  , ltInt8_RDR  , geInt8_RDR  , gtInt8_RDR  , leInt8_RDR  ,
+    eqInt16_RDR , ltInt16_RDR , geInt16_RDR , gtInt16_RDR , leInt16_RDR ,
     eqWord_RDR  , ltWord_RDR  , geWord_RDR  , gtWord_RDR  , leWord_RDR  ,
+    eqWord8_RDR , ltWord8_RDR , geWord8_RDR , gtWord8_RDR , leWord8_RDR ,
+    eqWord16_RDR, ltWord16_RDR, geWord16_RDR, gtWord16_RDR, leWord16_RDR,
     eqAddr_RDR  , ltAddr_RDR  , geAddr_RDR  , gtAddr_RDR  , leAddr_RDR  ,
     eqFloat_RDR , ltFloat_RDR , geFloat_RDR , gtFloat_RDR , leFloat_RDR ,
-    eqDouble_RDR, ltDouble_RDR, geDouble_RDR, gtDouble_RDR, leDouble_RDR :: RdrName
+    eqDouble_RDR, ltDouble_RDR, geDouble_RDR, gtDouble_RDR, leDouble_RDR,
+    extendWord8_RDR, extendInt8_RDR,
+    extendWord16_RDR, extendInt16_RDR :: RdrName
 gfoldl_RDR     = varQual_RDR  gENERICS (fsLit "gfoldl")
 gunfold_RDR    = varQual_RDR  gENERICS (fsLit "gunfold")
 toConstr_RDR   = varQual_RDR  gENERICS (fsLit "toConstr")
@@ -1472,11 +1490,35 @@ leInt_RDR      = varQual_RDR  gHC_PRIM (fsLit "<=#")
 gtInt_RDR      = varQual_RDR  gHC_PRIM (fsLit ">#" )
 geInt_RDR      = varQual_RDR  gHC_PRIM (fsLit ">=#")
 
+eqInt8_RDR     = varQual_RDR  gHC_PRIM (fsLit "eqInt8#")
+ltInt8_RDR     = varQual_RDR  gHC_PRIM (fsLit "ltInt8#" )
+leInt8_RDR     = varQual_RDR  gHC_PRIM (fsLit "leInt8#")
+gtInt8_RDR     = varQual_RDR  gHC_PRIM (fsLit "gtInt8#" )
+geInt8_RDR     = varQual_RDR  gHC_PRIM (fsLit "geInt8#")
+
+eqInt16_RDR    = varQual_RDR  gHC_PRIM (fsLit "eqInt16#")
+ltInt16_RDR    = varQual_RDR  gHC_PRIM (fsLit "ltInt16#" )
+leInt16_RDR    = varQual_RDR  gHC_PRIM (fsLit "leInt16#")
+gtInt16_RDR    = varQual_RDR  gHC_PRIM (fsLit "gtInt16#" )
+geInt16_RDR    = varQual_RDR  gHC_PRIM (fsLit "geInt16#")
+
 eqWord_RDR     = varQual_RDR  gHC_PRIM (fsLit "eqWord#")
 ltWord_RDR     = varQual_RDR  gHC_PRIM (fsLit "ltWord#")
 leWord_RDR     = varQual_RDR  gHC_PRIM (fsLit "leWord#")
 gtWord_RDR     = varQual_RDR  gHC_PRIM (fsLit "gtWord#")
 geWord_RDR     = varQual_RDR  gHC_PRIM (fsLit "geWord#")
+
+eqWord8_RDR    = varQual_RDR  gHC_PRIM (fsLit "eqWord8#")
+ltWord8_RDR    = varQual_RDR  gHC_PRIM (fsLit "ltWord8#" )
+leWord8_RDR    = varQual_RDR  gHC_PRIM (fsLit "leWord8#")
+gtWord8_RDR    = varQual_RDR  gHC_PRIM (fsLit "gtWord8#" )
+geWord8_RDR    = varQual_RDR  gHC_PRIM (fsLit "geWord8#")
+
+eqWord16_RDR   = varQual_RDR  gHC_PRIM (fsLit "eqWord16#")
+ltWord16_RDR   = varQual_RDR  gHC_PRIM (fsLit "ltWord16#" )
+leWord16_RDR   = varQual_RDR  gHC_PRIM (fsLit "leWord16#")
+gtWord16_RDR   = varQual_RDR  gHC_PRIM (fsLit "gtWord16#" )
+geWord16_RDR   = varQual_RDR  gHC_PRIM (fsLit "geWord16#")
 
 eqAddr_RDR     = varQual_RDR  gHC_PRIM (fsLit "eqAddr#")
 ltAddr_RDR     = varQual_RDR  gHC_PRIM (fsLit "ltAddr#")
@@ -1495,6 +1537,13 @@ ltDouble_RDR   = varQual_RDR  gHC_PRIM (fsLit "<##" )
 leDouble_RDR   = varQual_RDR  gHC_PRIM (fsLit "<=##")
 gtDouble_RDR   = varQual_RDR  gHC_PRIM (fsLit ">##" )
 geDouble_RDR   = varQual_RDR  gHC_PRIM (fsLit ">=##")
+
+extendWord8_RDR = varQual_RDR  gHC_PRIM (fsLit "extendWord8#")
+extendInt8_RDR  = varQual_RDR  gHC_PRIM (fsLit "extendInt8#")
+
+extendWord16_RDR = varQual_RDR  gHC_PRIM (fsLit "extendWord16#")
+extendInt16_RDR  = varQual_RDR  gHC_PRIM (fsLit "extendInt16#")
+
 
 {-
 ************************************************************************
@@ -1553,7 +1602,7 @@ gen_Lift_binds loc tycon = (unitBag lift_bind, emptyBag)
                                                   (nlHsVar a)
               | otherwise = nlHsApp (nlHsVar litE_RDR)
                               (primLitOp (mkBoxExp (nlHsVar a)))
-              where (primLitOp, mkBoxExp) = primLitOps "Lift" tycon ty
+              where (primLitOp, mkBoxExp) = primLitOps "Lift" ty
 
             pkg_name = unitIdString . moduleUnitId
                      . nameModule $ tycon_name
@@ -1567,7 +1616,7 @@ gen_Lift_binds loc tycon = (unitBag lift_bind, emptyBag)
 
             lift_Expr
               | is_infix  = nlHsApps infixApp_RDR [a1, conE_Expr, a2]
-              | otherwise = foldl mk_appE_app conE_Expr lifted_as
+              | otherwise = foldl' mk_appE_app conE_Expr lifted_as
             (a1:a2:_) = lifted_as
 
 mk_appE_app :: LHsExpr GhcPs -> LHsExpr GhcPs -> LHsExpr GhcPs
@@ -1744,6 +1793,33 @@ a truly higher-rank type like so:
 
 Then the same situation will arise again. But at least it won't arise for the
 common case of methods with ordinary, prenex-quantified types.
+
+Note [GND and ambiguity]
+~~~~~~~~~~~~~~~~~~~~~~~~
+We make an effort to make the code generated through GND be robust w.r.t.
+ambiguous type variables. As one example, consider the following example
+(from #15637):
+
+  class C a where f :: String
+  instance C () where f = "foo"
+  newtype T = T () deriving C
+
+A naïve attempt and generating a C T instance would be:
+
+  instance C T where
+    f = coerce @String @String f
+          :: String
+
+This isn't going to typecheck, however, since GHC doesn't know what to
+instantiate the type variable `a` with in the call to `f` in the method body.
+(Note that `f :: forall a. String`!) To compensate for the possibility of
+ambiguity here, we explicitly instantiate `a` like so:
+
+  instance C T where
+    f = coerce @String @String (f @())
+          :: String
+
+All better now.
 -}
 
 gen_Newtype_binds :: SrcSpan
@@ -1777,25 +1853,32 @@ gen_Newtype_binds loc cls inst_tvs inst_tys rhs_ty
         rhs_expr = nlHsVar (getRdrName coerceId)
                                       `nlHsAppType`     from_tau
                                       `nlHsAppType`     to_tau
-                                      `nlHsApp`         nlHsVar meth_RDR
+                                      `nlHsApp`         meth_app
                                       `nlExprWithTySig` to_ty
+
+        -- The class method, applied to all of the class instance types
+        -- (including the representation type) to avoid potential ambiguity.
+        -- See Note [GND and ambiguity]
+        meth_app = foldl' nlHsAppType (nlHsVar meth_RDR) $
+                   filterOutInferredTypes (classTyCon cls) underlying_inst_tys
+                     -- Filter out any inferred arguments, since they can't be
+                     -- applied with visible type application.
 
     mk_atf_inst :: TyCon -> TcM FamInst
     mk_atf_inst fam_tc = do
         rep_tc_name <- newFamInstTyConName (L loc (tyConName fam_tc))
                                            rep_lhs_tys
-        let axiom = mkSingleCoAxiom Nominal rep_tc_name rep_tvs' rep_cvs'
+        let axiom = mkSingleCoAxiom Nominal rep_tc_name rep_tvs' [] rep_cvs'
                                     fam_tc rep_lhs_tys rep_rhs_ty
         -- Check (c) from Note [GND and associated type families] in TcDeriv
-        checkValidTyFamEqn (Just (cls, cls_tvs, lhs_env)) fam_tc rep_tvs'
-                           rep_cvs' rep_lhs_tys rep_rhs_ty pp_lhs loc
+        checkValidCoAxBranch fam_tc (coAxiomSingleBranch axiom)
         newFamInst SynFamilyInst axiom
       where
         cls_tvs     = classTyVars cls
         in_scope    = mkInScopeSet $ mkVarSet inst_tvs
         lhs_env     = zipTyEnv cls_tvs inst_tys
         lhs_subst   = mkTvSubst in_scope lhs_env
-        rhs_env     = zipTyEnv cls_tvs $ changeLast inst_tys rhs_ty
+        rhs_env     = zipTyEnv cls_tvs underlying_inst_tys
         rhs_subst   = mkTvSubst in_scope rhs_env
         fam_tvs     = tyConTyVars fam_tc
         rep_lhs_tys = substTyVars lhs_subst fam_tvs
@@ -1803,18 +1886,21 @@ gen_Newtype_binds loc cls inst_tvs inst_tys rhs_ty
         rep_rhs_ty  = mkTyConApp fam_tc rep_rhs_tys
         rep_tcvs    = tyCoVarsOfTypesList rep_lhs_tys
         (rep_tvs, rep_cvs) = partition isTyVar rep_tcvs
-        rep_tvs'    = toposortTyVars rep_tvs
-        rep_cvs'    = toposortTyVars rep_cvs
-        pp_lhs      = ppr (mkTyConApp fam_tc rep_lhs_tys)
+        rep_tvs'    = scopedSort rep_tvs
+        rep_cvs'    = scopedSort rep_cvs
+
+    -- Same as inst_tys, but with the last argument type replaced by the
+    -- representation type.
+    underlying_inst_tys :: [Type]
+    underlying_inst_tys = changeLast inst_tys rhs_ty
 
 nlHsAppType :: LHsExpr GhcPs -> Type -> LHsExpr GhcPs
-nlHsAppType e s = noLoc (HsAppType hs_ty e)
+nlHsAppType e s = noLoc (HsAppType noExt e hs_ty)
   where
     hs_ty = mkHsWildCardBndrs $ parenthesizeHsType appPrec (typeToLHsType s)
 
 nlExprWithTySig :: LHsExpr GhcPs -> Type -> LHsExpr GhcPs
-nlExprWithTySig e s = noLoc $ ExprWithTySig hs_ty
-                            $ parenthesizeHsExpr sigPrec e
+nlExprWithTySig e s = noLoc $ ExprWithTySig noExt (parenthesizeHsExpr sigPrec e) hs_ty
   where
     hs_ty = mkLHsSigWcType (typeToLHsType s)
 
@@ -1829,7 +1915,7 @@ mkCoerceClassMethEqn :: Class   -- the class being derived
 -- See Note [Newtype-deriving instances]
 -- See also Note [Newtype-deriving trickiness]
 -- The pair is the (from_type, to_type), where to_type is
--- the type of the method we are tyrying to get
+-- the type of the method we are trying to get
 mkCoerceClassMethEqn cls inst_tvs inst_tys rhs_ty id
   = Pair (substTy rhs_subst user_meth_ty)
          (substTy lhs_subst user_meth_ty)
@@ -2035,54 +2121,77 @@ mkRdrFunBindSE arity
 
 
 box ::         String           -- The class involved
-            -> TyCon            -- The tycon involved
             -> LHsExpr GhcPs    -- The argument
             -> Type             -- The argument type
             -> LHsExpr GhcPs    -- Boxed version of the arg
--- See Note [Deriving and unboxed types] in TcDeriv
-box cls_str tycon arg arg_ty = nlHsApp (nlHsVar box_con) arg
-  where
-    box_con = assoc_ty_id cls_str tycon boxConTbl arg_ty
+-- See Note [Deriving and unboxed types] in TcDerivInfer
+box cls_str arg arg_ty = assoc_ty_id cls_str boxConTbl arg_ty arg
 
 ---------------------
 primOrdOps :: String    -- The class involved
-           -> TyCon     -- The tycon involved
            -> Type      -- The type
            -> (RdrName, RdrName, RdrName, RdrName, RdrName)  -- (lt,le,eq,ge,gt)
--- See Note [Deriving and unboxed types] in TcDeriv
-primOrdOps str tycon ty = assoc_ty_id str tycon ordOpTbl ty
+-- See Note [Deriving and unboxed types] in TcDerivInfer
+primOrdOps str ty = assoc_ty_id str ordOpTbl ty
 
 primLitOps :: String -- The class involved
-           -> TyCon  -- The tycon involved
            -> Type   -- The type
            -> ( LHsExpr GhcPs -> LHsExpr GhcPs -- Constructs a Q Exp value
               , LHsExpr GhcPs -> LHsExpr GhcPs -- Constructs a boxed value
               )
-primLitOps str tycon ty = ( assoc_ty_id str tycon litConTbl ty
-                          , \v -> nlHsVar boxRDR `nlHsApp` v
-                          )
+primLitOps str ty = (assoc_ty_id str litConTbl ty, \v -> boxed v)
   where
-    boxRDR
-      | ty `eqType` addrPrimTy = unpackCString_RDR
-      | otherwise = assoc_ty_id str tycon boxConTbl ty
+    boxed v
+      | ty `eqType` addrPrimTy = nlHsVar unpackCString_RDR `nlHsApp` v
+      | otherwise = assoc_ty_id str boxConTbl ty v
 
 ordOpTbl :: [(Type, (RdrName, RdrName, RdrName, RdrName, RdrName))]
 ordOpTbl
- =  [(charPrimTy  , (ltChar_RDR  , leChar_RDR  , eqChar_RDR  , geChar_RDR  , gtChar_RDR  ))
-    ,(intPrimTy   , (ltInt_RDR   , leInt_RDR   , eqInt_RDR   , geInt_RDR   , gtInt_RDR   ))
-    ,(wordPrimTy  , (ltWord_RDR  , leWord_RDR  , eqWord_RDR  , geWord_RDR  , gtWord_RDR  ))
-    ,(addrPrimTy  , (ltAddr_RDR  , leAddr_RDR  , eqAddr_RDR  , geAddr_RDR  , gtAddr_RDR  ))
-    ,(floatPrimTy , (ltFloat_RDR , leFloat_RDR , eqFloat_RDR , geFloat_RDR , gtFloat_RDR ))
-    ,(doublePrimTy, (ltDouble_RDR, leDouble_RDR, eqDouble_RDR, geDouble_RDR, gtDouble_RDR)) ]
+ =  [(charPrimTy  , (ltChar_RDR  , leChar_RDR
+     , eqChar_RDR  , geChar_RDR  , gtChar_RDR  ))
+    ,(intPrimTy   , (ltInt_RDR   , leInt_RDR
+     , eqInt_RDR   , geInt_RDR   , gtInt_RDR   ))
+    ,(int8PrimTy  , (ltInt8_RDR  , leInt8_RDR
+     , eqInt8_RDR  , geInt8_RDR  , gtInt8_RDR   ))
+    ,(int16PrimTy , (ltInt16_RDR , leInt16_RDR
+     , eqInt16_RDR , geInt16_RDR , gtInt16_RDR   ))
+    ,(wordPrimTy  , (ltWord_RDR  , leWord_RDR
+     , eqWord_RDR  , geWord_RDR  , gtWord_RDR  ))
+    ,(word8PrimTy , (ltWord8_RDR , leWord8_RDR
+     , eqWord8_RDR , geWord8_RDR , gtWord8_RDR   ))
+    ,(word16PrimTy, (ltWord16_RDR, leWord16_RDR
+     , eqWord16_RDR, geWord16_RDR, gtWord16_RDR  ))
+    ,(addrPrimTy  , (ltAddr_RDR  , leAddr_RDR
+     , eqAddr_RDR  , geAddr_RDR  , gtAddr_RDR  ))
+    ,(floatPrimTy , (ltFloat_RDR , leFloat_RDR
+     , eqFloat_RDR , geFloat_RDR , gtFloat_RDR ))
+    ,(doublePrimTy, (ltDouble_RDR, leDouble_RDR
+     , eqDouble_RDR, geDouble_RDR, gtDouble_RDR)) ]
 
-boxConTbl :: [(Type, RdrName)]
-boxConTbl
-  = [(charPrimTy  , getRdrName charDataCon  )
-    ,(intPrimTy   , getRdrName intDataCon   )
-    ,(wordPrimTy  , getRdrName wordDataCon  )
-    ,(floatPrimTy , getRdrName floatDataCon )
-    ,(doublePrimTy, getRdrName doubleDataCon)
+-- A mapping from a primitive type to a function that constructs its boxed
+-- version.
+-- NOTE: Int8#/Word8# will become Int/Word.
+boxConTbl :: [(Type, LHsExpr GhcPs -> LHsExpr GhcPs)]
+boxConTbl =
+    [ (charPrimTy  , nlHsApp (nlHsVar $ getRdrName charDataCon))
+    , (intPrimTy   , nlHsApp (nlHsVar $ getRdrName intDataCon))
+    , (wordPrimTy  , nlHsApp (nlHsVar $ getRdrName wordDataCon ))
+    , (floatPrimTy , nlHsApp (nlHsVar $ getRdrName floatDataCon ))
+    , (doublePrimTy, nlHsApp (nlHsVar $ getRdrName doubleDataCon))
+    , (int8PrimTy,
+        nlHsApp (nlHsVar $ getRdrName intDataCon)
+        . nlHsApp (nlHsVar extendInt8_RDR))
+    , (word8PrimTy,
+        nlHsApp (nlHsVar $ getRdrName wordDataCon)
+        .  nlHsApp (nlHsVar extendWord8_RDR))
+    , (int16PrimTy,
+        nlHsApp (nlHsVar $ getRdrName intDataCon)
+        . nlHsApp (nlHsVar extendInt16_RDR))
+    , (word16PrimTy,
+        nlHsApp (nlHsVar $ getRdrName wordDataCon)
+        .  nlHsApp (nlHsVar extendWord16_RDR))
     ]
+
 
 -- | A table of postfix modifiers for unboxed values.
 postfixModTbl :: [(Type, String)]
@@ -2092,6 +2201,18 @@ postfixModTbl
     ,(wordPrimTy  , "##")
     ,(floatPrimTy , "#" )
     ,(doublePrimTy, "##")
+    ,(int8PrimTy, "#")
+    ,(word8PrimTy, "##")
+    ,(int16PrimTy, "#")
+    ,(word16PrimTy, "##")
+    ]
+
+primConvTbl :: [(Type, String)]
+primConvTbl =
+    [ (int8PrimTy, "narrowInt8#")
+    , (word8PrimTy, "narrowWord8#")
+    , (int16PrimTy, "narrowInt16#")
+    , (word16PrimTy, "narrowWord16#")
     ]
 
 litConTbl :: [(Type, LHsExpr GhcPs -> LHsExpr GhcPs)]
@@ -2115,17 +2236,20 @@ litConTbl
     ]
 
 -- | Lookup `Type` in an association list.
-assoc_ty_id :: String           -- The class involved
-            -> TyCon            -- The tycon involved
+assoc_ty_id :: HasCallStack => String           -- The class involved
             -> [(Type,a)]       -- The table
             -> Type             -- The type
             -> a                -- The result of the lookup
-assoc_ty_id cls_str _ tbl ty
-  | null res = pprPanic "Error in deriving:" (text "Can't derive" <+> text cls_str <+>
-                                              text "for primitive type" <+> ppr ty)
-  | otherwise = head res
-  where
-    res = [id | (ty',id) <- tbl, ty `eqType` ty']
+assoc_ty_id cls_str tbl ty
+  | Just a <- assoc_ty_id_maybe tbl ty = a
+  | otherwise =
+      pprPanic "Error in deriving:"
+          (text "Can't derive" <+> text cls_str <+>
+           text "for primitive type" <+> ppr ty)
+
+-- | Lookup `Type` in an association list.
+assoc_ty_id_maybe :: [(Type, a)] -> Type -> Maybe a
+assoc_ty_id_maybe tbl ty = snd <$> find (\(t, _) -> t `eqType` ty) tbl
 
 -----------------------------------------------------------------------
 
@@ -2134,12 +2258,12 @@ and_Expr a b = genOpApp a and_RDR    b
 
 -----------------------------------------------------------------------
 
-eq_Expr :: TyCon -> Type -> LHsExpr GhcPs -> LHsExpr GhcPs -> LHsExpr GhcPs
-eq_Expr tycon ty a b
+eq_Expr :: Type -> LHsExpr GhcPs -> LHsExpr GhcPs -> LHsExpr GhcPs
+eq_Expr ty a b
     | not (isUnliftedType ty) = genOpApp a eq_RDR b
     | otherwise               = genPrimOpApp a prim_eq b
  where
-   (_, _, prim_eq, _, _) = primOrdOps "Eq" tycon ty
+   (_, _, prim_eq, _, _) = primOrdOps "Eq" ty
 
 untag_Expr :: DynFlags -> TyCon -> [( RdrName,  RdrName)]
               -> LHsExpr GhcPs -> LHsExpr GhcPs

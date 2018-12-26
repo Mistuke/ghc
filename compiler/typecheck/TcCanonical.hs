@@ -43,7 +43,7 @@ import Bag
 import MonadUtils
 import Control.Monad
 import Data.Maybe ( isJust )
-import Data.List  ( zip4, foldl' )
+import Data.List  ( zip4 )
 import BasicTypes
 
 import Data.Bifunctor ( bimap )
@@ -487,11 +487,17 @@ mk_strict_superclasses rec_clss ev tvs theta cls tys
     size      = sizeTypes tys
 
     do_one_given evar given_loc sel_id
-      = do { let sc_pred = funResultTy (piResultTys (idType sel_id) tys)
-                 given_ty = mkInfSigmaTy tvs theta sc_pred
-           ; given_ev <- newGivenEvVar given_loc $
+      | isUnliftedType sc_pred
+      , not (null tvs && null theta)
+      = -- See Note [Equality superclasses in quantified constraints]
+        return []
+      | otherwise
+      = do { given_ev <- newGivenEvVar given_loc $
                          (given_ty, mk_sc_sel evar sel_id)
            ; mk_superclasses rec_clss given_ev tvs theta sc_pred }
+      where
+        sc_pred  = funResultTy (piResultTys (idType sel_id) tys)
+        given_ty = mkInfSigmaTy tvs theta sc_pred
 
     mk_sc_sel evar sel_id
       = EvExpr $ mkLams tvs $ mkLams dict_ids $
@@ -574,7 +580,43 @@ mk_superclasses_of rec_clss ev tvs theta cls tys
                              , qci_pend_sc = loop_found })
 
 
-{-
+{- Note [Equality superclasses in quantified constraints]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider (Trac #15359, #15593, #15625)
+  f :: (forall a. theta => a ~ b) => stuff
+
+It's a bit odd to have a local, quantified constraint for `(a~b)`,
+but some people want such a thing (see the tickets). And for
+Coercible it is definitely useful
+  f :: forall m. (forall p q. Coercible p q => Coercible (m p) (m q)))
+                 => stuff
+
+Moreover it's not hard to arrange; we just need to look up /equality/
+constraints in the quantified-constraint environment, which we do in
+TcInteract.doTopReactOther.
+
+There is a wrinkle though, in the case where 'theta' is empty, so
+we have
+  f :: (forall a. a~b) => stuff
+
+Now, potentially, the superclass machinery kicks in, in
+makeSuperClasses, giving us a a second quantified constrait
+       (forall a. a ~# b)
+BUT this is an unboxed value!  And nothing has prepared us for
+dictionary "functions" that are unboxed.  Actually it does just
+about work, but the simplier ends up with stuff like
+   case (/\a. eq_sel d) of df -> ...(df @Int)...
+and fails to simplify that any further.  And it doesn't satisfy
+isPredTy any more.
+
+So for now we simply decline to take superclasses in the quantified
+case.  Instead we have a special case in TcInteract.doTopReactOther,
+which looks for primitive equalities specially in the quantified
+constraints.
+
+See also Note [Evidence for quantified constraints] in Type.
+
+
 ************************************************************************
 *                                                                      *
 *                      Irreducibles canonicalization
@@ -671,7 +713,6 @@ Here are the moving parts
 
   * TcCanonical.canForAll deals with solving a
     forall-constraint.  See
-       Note [Solving a Wanted forall-constraint]
        Note [Solving a Wanted forall-constraint]
 
   * We augment the kick-out code to kick out an inert
@@ -942,8 +983,8 @@ can_eq_nc_forall :: CtEvidence -> EqRel
 can_eq_nc_forall ev eq_rel s1 s2
  | CtWanted { ctev_loc = loc, ctev_dest = orig_dest } <- ev
  = do { let free_tvs       = tyCoVarsOfTypes [s1,s2]
-            (bndrs1, phi1) = tcSplitForAllTyVarBndrs s1
-            (bndrs2, phi2) = tcSplitForAllTyVarBndrs s2
+            (bndrs1, phi1) = tcSplitForAllVarBndrs s1
+            (bndrs2, phi2) = tcSplitForAllVarBndrs s2
       ; if not (equalLength bndrs1 bndrs2)
         then do { traceTcS "Forall failure" $
                      vcat [ ppr s1, ppr s2, ppr bndrs1, ppr bndrs2
@@ -1144,7 +1185,7 @@ zonk_eq_types = go
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Consider
   newtype N m a = MkN (m a)
-Then N will get a conservative, Nominal role for its second paramter 'a',
+Then N will get a conservative, Nominal role for its second parameter 'a',
 because it appears as an argument to the unknown 'm'. Now consider
   [W] N Maybe a  ~R#  N Maybe b
 
@@ -1278,8 +1319,8 @@ can_eq_app ev s1 t1 s2 t2
        ; canEqNC evar_s NomEq s1 s2 }
 
   where
-    s1k = typeKind s1
-    s2k = typeKind s2
+    s1k = tcTypeKind s1
+    s2k = tcTypeKind s2
 
     k1 `mismatches` k2
       =  isForAllTy k1 && not (isForAllTy k2)
@@ -1714,6 +1755,11 @@ the new one, so we use dischargeFmv. This also kicks out constraints
 from the inert set; this behavior is correct, as the kind-change may
 allow more constraints to be solved.
 
+We use `isTcReflexiveCo`, to ensure that we only use the hetero-kinded case
+if we really need to.  Of course `flattenArgsNom` should return `Refl`
+whenever possible, but Trac #15577 was an infinite loop because even
+though the coercion was homo-kinded, `kind_co` was not `Refl`, so we
+made a new (identical) CFunEqCan, and then the entire process repeated.
 -}
 
 canCFunEqCan :: CtEvidence
@@ -1727,19 +1773,27 @@ canCFunEqCan :: CtEvidence
 canCFunEqCan ev fn tys fsk
   = do { (tys', cos, kind_co) <- flattenArgsNom ev fn tys
                         -- cos :: tys' ~ tys
+
        ; let lhs_co  = mkTcTyConAppCo Nominal fn cos
                         -- :: F tys' ~ F tys
              new_lhs = mkTyConApp fn tys'
 
              flav    = ctEvFlavour ev
        ; (ev', fsk')
-              -- See Note [canCFunEqCan]
-           <- if isTcReflCo kind_co
-              then do { let fsk_ty = mkTyVarTy fsk
+           <- if isTcReflexiveCo kind_co   -- See Note [canCFunEqCan]
+              then do { traceTcS "canCFunEqCan: refl" (ppr new_lhs)
+                      ; let fsk_ty = mkTyVarTy fsk
                       ; ev' <- rewriteEqEvidence ev NotSwapped new_lhs fsk_ty
                                                  lhs_co (mkTcNomReflCo fsk_ty)
                       ; return (ev', fsk) }
-              else do { (ev', new_co, new_fsk)
+              else do { traceTcS "canCFunEqCan: non-refl" $
+                        vcat [ text "Kind co:" <+> ppr kind_co
+                             , text "RHS:" <+> ppr fsk <+> dcolon <+> ppr (tyVarKind fsk)
+                             , text "LHS:" <+> hang (ppr (mkTyConApp fn tys))
+                                                  2 (dcolon <+> ppr (tcTypeKind (mkTyConApp fn tys)))
+                             , text "New LHS" <+> hang (ppr new_lhs)
+                                                     2 (dcolon <+> ppr (tcTypeKind new_lhs)) ]
+                      ; (ev', new_co, new_fsk)
                           <- newFlattenSkolem flav (ctEvLoc ev) fn tys'
                       ; let xi = mkTyVarTy new_fsk `mkCastTy` kind_co
                                -- sym lhs_co :: F tys ~ F tys'
@@ -1828,7 +1882,7 @@ canEqTyVar ev eq_rel swapped tv1 ps_ty1 xi2 ps_xi2
     xi1 = mkTyVarTy tv1
 
     k1 = tyVarKind tv1
-    k2 = typeKind xi2
+    k2 = tcTypeKind xi2
 
     loc  = ctEvLoc ev
     flav = ctEvFlavour ev
@@ -1882,7 +1936,7 @@ canEqTyVarHetero ev eq_rel tv1 co1 ki1 ps_tv1 xi2 ki2 ps_xi2
     loc  = ctev_loc ev
     role = eqRelRole eq_rel
 
--- guaranteed that typeKind lhs == typeKind rhs
+-- guaranteed that tcTypeKind lhs == tcTypeKind rhs
 canEqTyVarHomo :: CtEvidence
                -> EqRel -> SwapFlag
                -> TcTyVar                -- lhs: tv1
@@ -2002,7 +2056,7 @@ canEqTyVarTyVar, are these
    gets eliminated (improves error messages)
 
  * If one is a flatten-skolem, put it on the left so that it is
-   substituted out  Note [Elminate flat-skols]
+   substituted out  Note [Eliminate flat-skols] in TcUinfy
         fsk ~ a
 
 Note [Equalities with incompatible kinds]
@@ -2234,7 +2288,7 @@ rewriteEqEvidence :: CtEvidence         -- Old evidence :: olhs ~ orhs (not swap
                                         --              or orhs ~ olhs (swapped)
                   -> SwapFlag
                   -> TcType -> TcType   -- New predicate  nlhs ~ nrhs
-                                        -- Should be zonked, because we use typeKind on nlhs/nrhs
+                                        -- Should be zonked, because we use tcTypeKind on nlhs/nrhs
                   -> TcCoercion         -- lhs_co, of type :: nlhs ~ olhs
                   -> TcCoercion         -- rhs_co, of type :: nrhs ~ orhs
                   -> TcS CtEvidence     -- Of type nlhs ~ nrhs
@@ -2310,7 +2364,7 @@ unifyWanted :: CtLoc -> Role
 -- See Note [unifyWanted and unifyDerived]
 -- The returned coercion's role matches the input parameter
 unifyWanted loc Phantom ty1 ty2
-  = do { kind_co <- unifyWanted loc Nominal (typeKind ty1) (typeKind ty2)
+  = do { kind_co <- unifyWanted loc Nominal (tcTypeKind ty1) (tcTypeKind ty2)
        ; return (mkPhantomCo kind_co ty1 ty2) }
 
 unifyWanted loc role orig_ty1 orig_ty2

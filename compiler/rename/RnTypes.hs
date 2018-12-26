@@ -6,13 +6,15 @@
 
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module RnTypes (
         -- Type related stuff
         rnHsType, rnLHsType, rnLHsTypes, rnContext,
         rnHsKind, rnLHsKind,
         rnHsSigType, rnHsWcType,
-        rnHsSigWcType, rnHsSigWcTypeScoped,
+        HsSigWcTypeScoping(..), rnHsSigWcType, rnHsSigWcTypeScoped,
         rnLHsInstType,
         newTyVarNameRn, collectAnonWildCards,
         rnConDeclFields,
@@ -83,13 +85,29 @@ to break several loop.
 *********************************************************
 -}
 
-rnHsSigWcType :: HsDocContext -> LHsSigWcType GhcPs
-            -> RnM (LHsSigWcType GhcRn, FreeVars)
-rnHsSigWcType doc sig_ty
-  = rn_hs_sig_wc_type False doc sig_ty $ \sig_ty' ->
+data HsSigWcTypeScoping = AlwaysBind
+                          -- ^ Always bind any free tyvars of the given type,
+                          --   regardless of whether we have a forall at the top
+                        | BindUnlessForall
+                          -- ^ Unless there's forall at the top, do the same
+                          --   thing as 'AlwaysBind'
+                        | NeverBind
+                          -- ^ Never bind any free tyvars
+
+rnHsSigWcType :: HsSigWcTypeScoping -> HsDocContext -> LHsSigWcType GhcPs
+              -> RnM (LHsSigWcType GhcRn, FreeVars)
+rnHsSigWcType scoping doc sig_ty
+  = rn_hs_sig_wc_type scoping doc sig_ty $ \sig_ty' ->
     return (sig_ty', emptyFVs)
 
-rnHsSigWcTypeScoped :: HsDocContext -> LHsSigWcType GhcPs
+rnHsSigWcTypeScoped :: HsSigWcTypeScoping
+                       -- AlwaysBind: for pattern type sigs and rules we /do/ want
+                       --             to bring those type variables into scope, even
+                       --             if there's a forall at the top which usually
+                       --             stops that happening
+                       -- e.g  \ (x :: forall a. a-> b) -> e
+                       -- Here we do bring 'b' into scope
+                    -> HsDocContext -> LHsSigWcType GhcPs
                     -> (LHsSigWcType GhcRn -> RnM (a, FreeVars))
                     -> RnM (a, FreeVars)
 -- Used for
@@ -97,33 +115,26 @@ rnHsSigWcTypeScoped :: HsDocContext -> LHsSigWcType GhcPs
 --   - Pattern type signatures
 -- Wildcards are allowed
 -- type signatures on binders only allowed with ScopedTypeVariables
-rnHsSigWcTypeScoped ctx sig_ty thing_inside
+rnHsSigWcTypeScoped scoping ctx sig_ty thing_inside
   = do { ty_sig_okay <- xoptM LangExt.ScopedTypeVariables
        ; checkErr ty_sig_okay (unexpectedTypeSigErr sig_ty)
-       ; rn_hs_sig_wc_type True ctx sig_ty thing_inside
+       ; rn_hs_sig_wc_type scoping ctx sig_ty thing_inside
        }
-    -- True: for pattern type sigs and rules we /do/ want
-    --       to bring those type variables into scope, even
-    --       if there's a forall at the top which usually
-    --       stops that happening
-    -- e.g  \ (x :: forall a. a-> b) -> e
-    -- Here we do bring 'b' into scope
 
-rn_hs_sig_wc_type :: Bool   -- True <=> always bind any free tyvars of the
-                            --          type, regardless of whether it has
-                            --          a forall at the top
-                  -> HsDocContext
-                  -> LHsSigWcType GhcPs
+rn_hs_sig_wc_type :: HsSigWcTypeScoping -> HsDocContext -> LHsSigWcType GhcPs
                   -> (LHsSigWcType GhcRn -> RnM (a, FreeVars))
                   -> RnM (a, FreeVars)
 -- rn_hs_sig_wc_type is used for source-language type signatures
-rn_hs_sig_wc_type always_bind_free_tvs ctxt
+rn_hs_sig_wc_type scoping ctxt
                   (HsWC { hswc_body = HsIB { hsib_body = hs_ty }})
                   thing_inside
   = do { free_vars <- extractFilteredRdrTyVarsDups hs_ty
        ; (tv_rdrs, nwc_rdrs') <- partition_nwcs free_vars
        ; let nwc_rdrs = nubL nwc_rdrs'
-             bind_free_tvs = always_bind_free_tvs || not (isLHsForAllTy hs_ty)
+             bind_free_tvs = case scoping of
+                               AlwaysBind       -> True
+                               BindUnlessForall -> not (isLHsForAllTy hs_ty)
+                               NeverBind        -> False
        ; rnImplicitBndrs bind_free_tvs tv_rdrs $ \ vars ->
     do { (wcs, hs_ty', fvs1) <- rnWcBody ctxt nwc_rdrs hs_ty
        ; let sig_ty' = HsWC { hswc_ext = wcs, hswc_body = ib_ty' }
@@ -158,10 +169,10 @@ rnWcBody ctxt nwc_rdrs hs_ty
        ; let awcs = collectAnonWildCards hs_ty'
        ; return (nwcs ++ awcs, hs_ty', fvs) }
   where
-    rn_lty env (L loc hs_ty)
+    rn_lty env (dL->L loc hs_ty)
       = setSrcSpan loc $
         do { (hs_ty', fvs) <- rn_ty env hs_ty
-           ; return (L loc hs_ty', fvs) }
+           ; return (cL loc hs_ty', fvs) }
 
     rn_ty :: RnTyKiEnv -> HsType GhcPs -> RnM (HsType GhcRn, FreeVars)
     -- A lot of faff just to allow the extra-constraints wildcard to appear
@@ -171,24 +182,26 @@ rnWcBody ctxt nwc_rdrs hs_ty
            ; return (HsForAllTy { hst_xforall = noExt, hst_bndrs = tvs'
                                 , hst_body = hs_body' }, fvs) }
 
-    rn_ty env (HsQualTy { hst_ctxt = L cx hs_ctxt, hst_body = hs_ty })
+    rn_ty env (HsQualTy { hst_ctxt = dL->L cx hs_ctxt
+                        , hst_body = hs_ty })
       | Just (hs_ctxt1, hs_ctxt_last) <- snocView hs_ctxt
-      , L lx (HsWildCardTy _)  <- ignoreParens hs_ctxt_last
+      , (dL->L lx (HsWildCardTy _))  <- ignoreParens hs_ctxt_last
       = do { (hs_ctxt1', fvs1) <- mapFvRn (rn_top_constraint env) hs_ctxt1
            ; wc' <- setSrcSpan lx $
                     do { checkExtraConstraintWildCard env hs_ctxt1
                        ; rnAnonWildCard }
-           ; let hs_ctxt' = hs_ctxt1' ++ [L lx (HsWildCardTy wc')]
+           ; let hs_ctxt' = hs_ctxt1' ++ [cL lx (HsWildCardTy wc')]
            ; (hs_ty', fvs2) <- rnLHsTyKi env hs_ty
            ; return (HsQualTy { hst_xqual = noExt
-                              , hst_ctxt = L cx hs_ctxt', hst_body = hs_ty' }
+                              , hst_ctxt = cL cx hs_ctxt', hst_body = hs_ty' }
                     , fvs1 `plusFV` fvs2) }
 
       | otherwise
       = do { (hs_ctxt', fvs1) <- mapFvRn (rn_top_constraint env) hs_ctxt
            ; (hs_ty', fvs2)   <- rnLHsTyKi env hs_ty
            ; return (HsQualTy { hst_xqual = noExt
-                              , hst_ctxt = L cx hs_ctxt', hst_body = hs_ty' }
+                              , hst_ctxt = cL cx hs_ctxt'
+                              , hst_body = hs_ty' }
                     , fvs1 `plusFV` fvs2) }
 
     rn_ty env hs_ty = rnHsTyKi env hs_ty
@@ -245,7 +258,7 @@ extraConstraintWildCardsAllowed env
 extractFilteredRdrTyVars :: LHsType GhcPs -> RnM FreeKiTyVarsNoDups
 extractFilteredRdrTyVars hs_ty
   = do { rdr_env <- getLocalRdrEnv
-       ; filterInScope rdr_env <$> extractHsTyRdrTyVars hs_ty }
+       ; return (filterInScope rdr_env (extractHsTyRdrTyVars hs_ty)) }
 
 -- | Finds free type and kind variables in a type,
 --     with duplicates, but
@@ -255,7 +268,7 @@ extractFilteredRdrTyVars hs_ty
 extractFilteredRdrTyVarsDups :: LHsType GhcPs -> RnM FreeKiTyVarsWithDups
 extractFilteredRdrTyVarsDups hs_ty
   = do { rdr_env <- getLocalRdrEnv
-       ; filterInScope rdr_env <$> extractHsTyRdrTyVarsDups hs_ty }
+       ; return (filterInScope rdr_env (extractHsTyRdrTyVarsDups hs_ty)) }
 
 -- | When the NamedWildCards extension is enabled, partition_nwcs
 -- removes type variables that start with an underscore from the
@@ -344,8 +357,8 @@ rnImplicitBndrs bind_free_tvs
 
        ; loc <- getSrcSpanM
           -- NB: kinds before tvs, as mandated by
-          -- Note [Ordering of implicit variables] in HsTypes
-       ; vars <- mapM (newLocalBndrRn . L loc . unLoc) (kvs ++ real_tvs)
+          -- Note [Ordering of implicit variables]
+       ; vars <- mapM (newLocalBndrRn . cL loc . unLoc) (kvs ++ real_tvs)
 
        ; traceRn "checkMixedVars2" $
            vcat [ text "kvs_with_dups" <+> ppr kvs_with_dups
@@ -480,11 +493,11 @@ rnHsKind ctxt kind = rnHsTyKi  (mkTyKiEnv ctxt KindLevel RnTypeBody) kind
 --------------
 rnTyKiContext :: RnTyKiEnv -> LHsContext GhcPs
               -> RnM (LHsContext GhcRn, FreeVars)
-rnTyKiContext env (L loc cxt)
+rnTyKiContext env (dL->L loc cxt)
   = do { traceRn "rncontext" (ppr cxt)
        ; let env' = env { rtke_what = RnConstraint }
        ; (cxt', fvs) <- mapFvRn (rnLHsTyKi env') cxt
-       ; return (L loc cxt', fvs) }
+       ; return (cL loc cxt', fvs) }
 
 rnContext :: HsDocContext -> LHsContext GhcPs
           -> RnM (LHsContext GhcRn, FreeVars)
@@ -492,10 +505,10 @@ rnContext doc theta = rnTyKiContext (mkTyKiEnv doc TypeLevel RnConstraint) theta
 
 --------------
 rnLHsTyKi  :: RnTyKiEnv -> LHsType GhcPs -> RnM (LHsType GhcRn, FreeVars)
-rnLHsTyKi env (L loc ty)
+rnLHsTyKi env (dL->L loc ty)
   = setSrcSpan loc $
     do { (ty', fvs) <- rnHsTyKi env ty
-       ; return (L loc ty', fvs) }
+       ; return (cL loc ty', fvs) }
 
 rnHsTyKi :: RnTyKiEnv -> HsType GhcPs -> RnM (HsType GhcRn, FreeVars)
 
@@ -516,7 +529,7 @@ rnHsTyKi env ty@(HsQualTy { hst_ctxt = lctxt, hst_body = tau })
                           , hst_body =  tau' }
                 , fvs1 `plusFV` fvs2) }
 
-rnHsTyKi env (HsTyVar _ ip (L loc rdr_name))
+rnHsTyKi env (HsTyVar _ ip (dL->L loc rdr_name))
   = do { when (isRnKindLevel env && isRdrTyVar rdr_name) $
          unlessXOptM LangExt.PolyKinds $ addErr $
          withHsDocContext (rtke_ctxt env) $
@@ -525,7 +538,7 @@ rnHsTyKi env (HsTyVar _ ip (L loc rdr_name))
            -- Any type variable at the kind level is illegal without the use
            -- of PolyKinds (see #14710)
        ; name <- rnTyVar env rdr_name
-       ; return (HsTyVar noExt ip (L loc name), unitFV name) }
+       ; return (HsTyVar noExt ip (cL loc name), unitFV name) }
 
 rnHsTyKi env ty@(HsOpTy _ ty1 l_op ty2)
   = setSrcSpan (getLoc l_op) $
@@ -669,20 +682,20 @@ rnTyVar env rdr_name
 
 rnLTyVar :: Located RdrName -> RnM (Located Name)
 -- Called externally; does not deal with wildards
-rnLTyVar (L loc rdr_name)
+rnLTyVar (dL->L loc rdr_name)
   = do { tyvar <- lookupTypeOccRn rdr_name
-       ; return (L loc tyvar) }
+       ; return (cL loc tyvar) }
 
 --------------
 rnHsTyOp :: Outputable a
          => RnTyKiEnv -> a -> Located RdrName
          -> RnM (Located Name, FreeVars)
-rnHsTyOp env overall_ty (L loc op)
+rnHsTyOp env overall_ty (dL->L loc op)
   = do { ops_ok <- xoptM LangExt.TypeOperators
        ; op' <- rnTyVar env op
        ; unless (ops_ok || op' `hasKey` eqTyConKey) $
            addErr (opTyErr op overall_ty)
-       ; let l_op' = L loc op'
+       ; let l_op' = cL loc op'
        ; return (l_op', unitFV op') }
 
 --------------
@@ -752,7 +765,7 @@ rnAnonWildCard
   = do { loc <- getSrcSpanM
        ; uniq <- newUnique
        ; let name = mkInternalName uniq (mkTyVarOcc "_") loc
-       ; return (AnonWildCard (L loc name)) }
+       ; return (AnonWildCard (cL loc name)) }
 
 ---------------
 -- | Ensures either that we're in a type or that -XPolyKinds is set
@@ -818,7 +831,7 @@ bindHsQTyVars :: forall a b.
               -> (LHsQTyVars GhcRn -> Bool -> RnM (b, FreeVars))
                   -- The Bool is True <=> all kind variables used in the
                   -- kind signature are bound on the left.  Reason:
-                  -- the TypeInType clause of Note [Complete user-supplied
+                  -- the last clause of Note [CUSKs: Complete user-supplied
                   -- kind signatures] in HsDecls
               -> RnM (b, FreeVars)
 
@@ -830,16 +843,17 @@ bindHsQTyVars :: forall a b.
 --
 bindHsQTyVars doc mb_in_doc mb_assoc body_kv_occs hsq_bndrs thing_inside
   = do { let hs_tv_bndrs = hsQTvExplicit hsq_bndrs
-       ; bndr_kv_occs <- extractHsTyVarBndrsKVs hs_tv_bndrs
-       ; rdr_env <- getLocalRdrEnv
+             bndr_kv_occs = extractHsTyVarBndrsKVs hs_tv_bndrs
 
        ; let -- See Note [bindHsQTyVars examples] for what
              -- all these various things are doing
              bndrs, kv_occs, implicit_kvs :: [Located RdrName]
              bndrs        = map hsLTyVarLocName hs_tv_bndrs
-             kv_occs      = nubL (body_kv_occs ++ bndr_kv_occs)
-             implicit_kvs = filter_occs rdr_env bndrs kv_occs
-                                 -- Deleting bndrs: See Note [Kind-variable ordering]
+             kv_occs      = nubL (bndr_kv_occs ++ body_kv_occs)
+                                 -- Make sure to list the binder kvs before the
+                                 -- body kvs, as mandated by
+                                 -- Note [Ordering of implicit variables]
+             implicit_kvs = filter_occs bndrs kv_occs
              -- dep_bndrs is the subset of bndrs that are dependent
              --   i.e. appear in bndr/body_kv_occs
              -- Can't use implicit_kvs because we've deleted bndrs from that!
@@ -867,17 +881,15 @@ bindHsQTyVars doc mb_in_doc mb_assoc body_kv_occs hsq_bndrs thing_inside
                       all_bound_on_lhs } }
 
   where
-    filter_occs :: LocalRdrEnv         -- In scope
-                -> [Located RdrName]   -- Bound here
+    filter_occs :: [Located RdrName]   -- Bound here
                 -> [Located RdrName]   -- Potential implicit binders
                 -> [Located RdrName]   -- Final implicit binders
     -- Filter out any potential implicit binders that are either
-    -- already in scope, or are explicitly bound here
-    filter_occs rdr_env bndrs occs
+    -- already in scope, or are explicitly bound in the same HsQTyVars
+    filter_occs bndrs occs
       = filterOut is_in_scope occs
       where
-        is_in_scope locc@(L _ occ) = isJust (lookupLocalRdrEnv rdr_env occ)
-                                  || locc `elemRdr` bndrs
+        is_in_scope locc = locc `elemRdr` bndrs
 
 {- Note [bindHsQTyVars examples]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1010,39 +1022,43 @@ bindLHsTyVarBndr :: HsDocContext
                  -> LHsTyVarBndr GhcPs
                  -> (LHsTyVarBndr GhcRn -> RnM (b, FreeVars))
                  -> RnM (b, FreeVars)
-bindLHsTyVarBndr _doc mb_assoc (L loc (UserTyVar x lrdr@(L lv _))) thing_inside
+bindLHsTyVarBndr _doc mb_assoc (dL->L loc
+                                 (UserTyVar x
+                                    lrdr@(dL->L lv _))) thing_inside
   = do { nm <- newTyVarNameRn mb_assoc lrdr
        ; bindLocalNamesFV [nm] $
-         thing_inside (L loc (UserTyVar x (L lv nm))) }
+         thing_inside (cL loc (UserTyVar x (cL lv nm))) }
 
-bindLHsTyVarBndr doc mb_assoc (L loc (KindedTyVar x lrdr@(L lv _) kind))
+bindLHsTyVarBndr doc mb_assoc (dL->L loc (KindedTyVar x lrdr@(dL->L lv _) kind))
                  thing_inside
   = do { sig_ok <- xoptM LangExt.KindSignatures
            ; unless sig_ok (badKindSigErr doc kind)
            ; (kind', fvs1) <- rnLHsKind doc kind
            ; tv_nm  <- newTyVarNameRn mb_assoc lrdr
-           ; (b, fvs2) <- bindLocalNamesFV [tv_nm] $
-                         thing_inside (L loc (KindedTyVar x (L lv tv_nm) kind'))
+           ; (b, fvs2) <- bindLocalNamesFV [tv_nm]
+               $ thing_inside (cL loc (KindedTyVar x (cL lv tv_nm) kind'))
            ; return (b, fvs1 `plusFV` fvs2) }
 
-bindLHsTyVarBndr _ _ (L _ (XTyVarBndr{})) _ = panic "bindLHsTyVarBndr"
+bindLHsTyVarBndr _ _ (dL->L _ (XTyVarBndr{})) _ = panic "bindLHsTyVarBndr"
+bindLHsTyVarBndr _ _ _ _ = panic "bindLHsTyVarBndr: Impossible Match"
+                             -- due to #15884
 
 newTyVarNameRn :: Maybe a -> Located RdrName -> RnM Name
-newTyVarNameRn mb_assoc (L loc rdr)
+newTyVarNameRn mb_assoc (dL->L loc rdr)
   = do { rdr_env <- getLocalRdrEnv
        ; case (mb_assoc, lookupLocalRdrEnv rdr_env rdr) of
            (Just _, Just n) -> return n
               -- Use the same Name as the parent class decl
 
-           _                -> newLocalBndrRn (L loc rdr) }
+           _                -> newLocalBndrRn (cL loc rdr) }
 
 ---------------------
 collectAnonWildCards :: LHsType GhcRn -> [Name]
 -- | Extract all wild cards from a type.
 collectAnonWildCards lty = go lty
   where
-    go (L _ ty) = case ty of
-      HsWildCardTy (AnonWildCard (L _ wc)) -> [wc]
+    go lty = case unLoc lty of
+      HsWildCardTy (AnonWildCard wc) -> [unLoc wc]
       HsAppTy _ ty1 ty2              -> go ty1 `mappend` go ty2
       HsFunTy _ ty1 ty2              -> go ty1 `mappend` go ty2
       HsListTy _ ty                  -> go ty
@@ -1058,11 +1074,11 @@ collectAnonWildCards lty = go lty
       HsExplicitListTy _ _ tys       -> gos tys
       HsExplicitTupleTy _ tys        -> gos tys
       HsForAllTy { hst_bndrs = bndrs
-                 , hst_body = ty } -> collectAnonWildCardsBndrs bndrs
-                                      `mappend` go ty
-      HsQualTy { hst_ctxt = L _ ctxt
-               , hst_body = ty }  -> gos ctxt `mappend` go ty
-      HsSpliceTy _ (HsSpliced _ _ (HsSplicedTy ty)) -> go $ L noSrcSpan ty
+                 , hst_body  = ty }  -> collectAnonWildCardsBndrs bndrs
+                                        `mappend` go ty
+      HsQualTy { hst_ctxt = ctxt
+               , hst_body = ty }     -> gos (unLoc ctxt) `mappend` go ty
+      HsSpliceTy _ (HsSpliced _ _ (HsSplicedTy ty)) -> go $ cL noSrcSpan ty
       HsSpliceTy{} -> mempty
       HsTyLit{} -> mempty
       HsTyVar{} -> mempty
@@ -1104,20 +1120,23 @@ rnConDeclFields ctxt fls fields
 
 rnField :: FastStringEnv FieldLabel -> RnTyKiEnv -> LConDeclField GhcPs
         -> RnM (LConDeclField GhcRn, FreeVars)
-rnField fl_env env (L l (ConDeclField _ names ty haddock_doc))
+rnField fl_env env (dL->L l (ConDeclField _ names ty haddock_doc))
   = do { let new_names = map (fmap lookupField) names
        ; (new_ty, fvs) <- rnLHsTyKi env ty
        ; new_haddock_doc <- rnMbLHsDoc haddock_doc
-       ; return (L l (ConDeclField noExt new_names new_ty new_haddock_doc)
+       ; return (cL l (ConDeclField noExt new_names new_ty new_haddock_doc)
                 , fvs) }
   where
     lookupField :: FieldOcc GhcPs -> FieldOcc GhcRn
-    lookupField (FieldOcc _ (L lr rdr)) = FieldOcc (flSelector fl) (L lr rdr)
+    lookupField (FieldOcc _ (dL->L lr rdr)) =
+        FieldOcc (flSelector fl) (cL lr rdr)
       where
         lbl = occNameFS $ rdrNameOcc rdr
         fl  = expectJust "rnField" $ lookupFsEnv fl_env lbl
     lookupField (XFieldOcc{}) = panic "rnField"
-rnField _ _ (L _ (XConDeclField _)) = panic "rnField"
+rnField _ _ (dL->L _ (XConDeclField _)) = panic "rnField"
+rnField _ _ _ = panic "rnField: Impossible Match"
+                             -- due to #15884
 
 {-
 ************************************************************************
@@ -1151,13 +1170,13 @@ mkHsOpTyRn :: (LHsType GhcRn -> LHsType GhcRn -> HsType GhcRn)
            -> Name -> Fixity -> LHsType GhcRn -> LHsType GhcRn
            -> RnM (HsType GhcRn)
 
-mkHsOpTyRn mk1 pp_op1 fix1 ty1 (L loc2 (HsOpTy noExt ty21 op2 ty22))
+mkHsOpTyRn mk1 pp_op1 fix1 ty1 (dL->L loc2 (HsOpTy noExt ty21 op2 ty22))
   = do  { fix2 <- lookupTyFixityRn op2
         ; mk_hs_op_ty mk1 pp_op1 fix1 ty1
                       (\t1 t2 -> HsOpTy noExt t1 op2 t2)
                       (unLoc op2) fix2 ty21 ty22 loc2 }
 
-mkHsOpTyRn mk1 pp_op1 fix1 ty1 (L loc2 (HsFunTy _ ty21 ty22))
+mkHsOpTyRn mk1 pp_op1 fix1 ty1 (dL->L loc2 (HsFunTy _ ty21 ty22))
   = mk_hs_op_ty mk1 pp_op1 fix1 ty1
                 (HsFunTy noExt) funTyConName funTyFixity ty21 ty22 loc2
 
@@ -1173,8 +1192,8 @@ mk_hs_op_ty :: (LHsType GhcRn -> LHsType GhcRn -> HsType GhcRn)
 mk_hs_op_ty mk1 op1 fix1 ty1
             mk2 op2 fix2 ty21 ty22 loc2
   | nofix_error     = do { precParseErr (NormalOp op1,fix1) (NormalOp op2,fix2)
-                         ; return (mk1 ty1 (L loc2 (mk2 ty21 ty22))) }
-  | associate_right = return (mk1 ty1 (L loc2 (mk2 ty21 ty22)))
+                         ; return (mk1 ty1 (cL loc2 (mk2 ty21 ty22))) }
+  | associate_right = return (mk1 ty1 (cL loc2 (mk2 ty21 ty22)))
   | otherwise       = do { -- Rearrange to ((ty1 `op1` ty21) `op2` ty22)
                            new_ty <- mkHsOpTyRn mk1 op1 fix1 ty1 ty21
                          ; return (mk2 (noLoc new_ty) ty22) }
@@ -1190,36 +1209,36 @@ mkOpAppRn :: LHsExpr GhcRn             -- Left operand; already rearranged
           -> RnM (HsExpr GhcRn)
 
 -- (e11 `op1` e12) `op2` e2
-mkOpAppRn e1@(L _ (OpApp fix1 e11 op1 e12)) op2 fix2 e2
+mkOpAppRn e1@(dL->L _ (OpApp fix1 e11 op1 e12)) op2 fix2 e2
   | nofix_error
   = do precParseErr (get_op op1,fix1) (get_op op2,fix2)
        return (OpApp fix2 e1 op2 e2)
 
   | associate_right = do
     new_e <- mkOpAppRn e12 op2 fix2 e2
-    return (OpApp fix1 e11 op1 (L loc' new_e))
+    return (OpApp fix1 e11 op1 (cL loc' new_e))
   where
     loc'= combineLocs e12 e2
     (nofix_error, associate_right) = compareFixity fix1 fix2
 
 ---------------------------
 --      (- neg_arg) `op` e2
-mkOpAppRn e1@(L _ (NegApp _ neg_arg neg_name)) op2 fix2 e2
+mkOpAppRn e1@(dL->L _ (NegApp _ neg_arg neg_name)) op2 fix2 e2
   | nofix_error
   = do precParseErr (NegateOp,negateFixity) (get_op op2,fix2)
        return (OpApp fix2 e1 op2 e2)
 
   | associate_right
   = do new_e <- mkOpAppRn neg_arg op2 fix2 e2
-       return (NegApp noExt (L loc' new_e) neg_name)
+       return (NegApp noExt (cL loc' new_e) neg_name)
   where
     loc' = combineLocs neg_arg e2
     (nofix_error, associate_right) = compareFixity negateFixity fix2
 
 ---------------------------
 --      e1 `op` - neg_arg
-mkOpAppRn e1 op1 fix1 e2@(L _ (NegApp {}))     -- NegApp can occur on the right
-  | not associate_right                 -- We *want* right association
+mkOpAppRn e1 op1 fix1 e2@(dL->L _ (NegApp {})) -- NegApp can occur on the right
+  | not associate_right                        -- We *want* right association
   = do precParseErr (get_op op1, fix1) (NegateOp, negateFixity)
        return (OpApp fix1 e1 op1 e2)
   where
@@ -1251,10 +1270,10 @@ instance Outputable OpName where
 get_op :: LHsExpr GhcRn -> OpName
 -- An unbound name could be either HsVar or HsUnboundVar
 -- See RnExpr.rnUnboundVar
-get_op (L _ (HsVar _ (L _ n)))   = NormalOp n
-get_op (L _ (HsUnboundVar _ uv)) = UnboundOp uv
-get_op (L _ (HsRecFld _ fld))    = RecFldOp fld
-get_op other                     = pprPanic "get_op" (ppr other)
+get_op (dL->L _ (HsVar _ n))         = NormalOp (unLoc n)
+get_op (dL->L _ (HsUnboundVar _ uv)) = UnboundOp uv
+get_op (dL->L _ (HsRecFld _ fld))    = RecFldOp fld
+get_op other                         = pprPanic "get_op" (ppr other)
 
 -- Parser left-associates everything, but
 -- derived instances may have correctly-associated things to
@@ -1286,8 +1305,10 @@ mkOpFormRn :: LHsCmdTop GhcRn            -- Left operand; already rearranged
           -> RnM (HsCmd GhcRn)
 
 -- (e11 `op1` e12) `op2` e2
-mkOpFormRn a1@(L loc (HsCmdTop _ (L _ (HsCmdArrForm x op1 f (Just fix1)
-                                     [a11,a12]))))
+mkOpFormRn a1@(dL->L loc
+                    (HsCmdTop _
+                     (dL->L _ (HsCmdArrForm x op1 f (Just fix1)
+                        [a11,a12]))))
         op2 fix2 a2
   | nofix_error
   = do precParseErr (get_op op1,fix1) (get_op op2,fix2)
@@ -1296,7 +1317,7 @@ mkOpFormRn a1@(L loc (HsCmdTop _ (L _ (HsCmdArrForm x op1 f (Just fix1)
   | associate_right
   = do new_c <- mkOpFormRn a12 op2 fix2 a2
        return (HsCmdArrForm noExt op1 f (Just fix1)
-               [a11, L loc (HsCmdTop [] (L loc new_c))])
+               [a11, cL loc (HsCmdTop [] (cL loc new_c))])
         -- TODO: locs are wrong
   where
     (nofix_error, associate_right) = compareFixity fix1 fix2
@@ -1310,7 +1331,7 @@ mkOpFormRn arg1 op fix arg2                     -- Default case, no rearrangment
 mkConOpPatRn :: Located Name -> Fixity -> LPat GhcRn -> LPat GhcRn
              -> RnM (Pat GhcRn)
 
-mkConOpPatRn op2 fix2 p1@(L loc (ConPatIn op1 (InfixCon p11 p12))) p2
+mkConOpPatRn op2 fix2 p1@(dL->L loc (ConPatIn op1 (InfixCon p11 p12))) p2
   = do  { fix1 <- lookupFixityRn (unLoc op1)
         ; let (nofix_error, associate_right) = compareFixity fix1 fix2
 
@@ -1321,7 +1342,8 @@ mkConOpPatRn op2 fix2 p1@(L loc (ConPatIn op1 (InfixCon p11 p12))) p2
 
           else if associate_right then do
                 { new_p <- mkConOpPatRn op2 fix2 p12 p2
-                ; return (ConPatIn op1 (InfixCon p11 (L loc new_p))) } -- XXX loc right?
+                ; return (ConPatIn op1 (InfixCon p11 (cL loc new_p))) }
+                -- XXX loc right?
           else return (ConPatIn op2 (InfixCon p1 p2)) }
 
 mkConOpPatRn op _ p1 p2                         -- Default case, no rearrangment
@@ -1338,10 +1360,12 @@ checkPrecMatch :: Name -> MatchGroup GhcRn body -> RnM ()
   --   eg  a `op` b `C` c = ...
   -- See comments with rnExpr (OpApp ...) about "deriving"
 
-checkPrecMatch op (MG { mg_alts = L _ ms })
+checkPrecMatch op (MG { mg_alts = (dL->L _ ms) })
   = mapM_ check ms
   where
-    check (L _ (Match { m_pats = L l1 p1 : L l2 p2 :_ }))
+    check (dL->L _ (Match { m_pats = (dL->L l1 p1)
+                                   : (dL->L l2 p2)
+                                   : _ }))
       = setSrcSpan (combineSrcSpans l1 l2) $
         do checkPrec op p1 False
            checkPrec op p2 True
@@ -1450,7 +1474,7 @@ unexpectedTypeSigErr ty
        2 (text "Type signatures are only allowed in patterns with ScopedTypeVariables")
 
 badKindSigErr :: HsDocContext -> LHsType GhcPs -> TcM ()
-badKindSigErr doc (L loc ty)
+badKindSigErr doc (dL->L loc ty)
   = setSrcSpan loc $ addErr $
     withHsDocContext doc $
     hang (text "Illegal kind signature:" <+> quotes (ppr ty))
@@ -1468,7 +1492,7 @@ inTypeDoc :: HsType GhcPs -> SDoc
 inTypeDoc ty = text "In the type" <+> quotes (ppr ty)
 
 warnUnusedForAll :: SDoc -> LHsTyVarBndr GhcRn -> FreeVars -> TcM ()
-warnUnusedForAll in_doc (L loc tv) used_names
+warnUnusedForAll in_doc (dL->L loc tv) used_names
   = whenWOptM Opt_WarnUnusedForalls $
     unless (hsTyVarName tv `elemNameSet` used_names) $
     addWarnAt (Reason Opt_WarnUnusedForalls) loc $
@@ -1519,7 +1543,10 @@ In general we want to walk over a type, and find
   * The free kind variables of any kind signatures in the type
 
 Hence we return a pair (kind-vars, type vars)
-See also Note [HsBSig binder lists] in HsTypes
+(See Note [HsBSig binder lists] in HsTypes.)
+Moreover, we preserve the left-to-right order of the first occurrence of each
+variable, while preserving dependency order.
+(See Note [Ordering of implicit variables].)
 
 Most clients of this code just want to know the kind/type vars, without
 duplicates. The function rmDupsInRdrTyVars removes duplicates. That function
@@ -1548,12 +1575,56 @@ var, then this would prevent it from being implicitly quantified (see
 rnImplicitBndrs). In the `foo` example above, that would have the consequence
 of the k in Proxy k being reported as out of scope.
 
+Note [Ordering of implicit variables]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Since the advent of -XTypeApplications, GHC makes promises about the ordering
+of implicit variable quantification. Specifically, we offer that implicitly
+quantified variables (such as those in const :: a -> b -> a, without a `forall`)
+will occur in left-to-right order of first occurrence. Here are a few examples:
+
+  const :: a -> b -> a       -- forall a b. ...
+  f :: Eq a => b -> a -> a   -- forall a b. ...  contexts are included
+
+  type a <-< b = b -> a
+  g :: a <-< b               -- forall a b. ...  type synonyms matter
+
+  class Functor f where
+    fmap :: (a -> b) -> f a -> f b   -- forall f a b. ...
+    -- The f is quantified by the class, so only a and b are considered in fmap
+
+This simple story is complicated by the possibility of dependency: all variables
+must come after any variables mentioned in their kinds.
+
+  typeRep :: Typeable a => TypeRep (a :: k)   -- forall k a. ...
+
+The k comes first because a depends on k, even though the k appears later than
+the a in the code. Thus, GHC does ScopedSort on the variables.
+See Note [ScopedSort] in Type.
+
+Implicitly bound variables are collected by any function which returns a
+FreeKiTyVars, FreeKiTyVarsWithDups, or FreeKiTyVarsNoDups, which notably
+includes the `extract-` family of functions (extractHsTysRdrTyVars,
+extractHsTyVarBndrsKVs, etc.).
+These functions thus promise to keep left-to-right ordering.
+Look for pointers to this note to see the places where the action happens.
+
+Note that we also maintain this ordering in kind signatures. Even though
+there's no visible kind application (yet), having implicit variables be
+quantified in left-to-right order in kind signatures is nice since:
+
+* It's consistent with the treatment for type signatures.
+* It can affect how types are displayed with -fprint-explicit-kinds (see
+  #15568 for an example), which is a situation where knowing the order in
+  which implicit variables are quantified can be useful.
+* In the event that visible kind application is implemented, the order in
+  which we would expect implicit variables to be ordered in kinds will have
+  already been established.
 -}
 
 -- See Note [Kind and type-variable binders]
 -- These lists are guaranteed to preserve left-to-right ordering of
 -- the types the variables were extracted from. See also
--- Note [Ordering of implicit variables] in HsTypes.
+-- Note [Ordering of implicit variables].
 data FreeKiTyVars = FKTV { fktv_kis    :: [Located RdrName]
                          , fktv_tys    :: [Located RdrName] }
 
@@ -1564,13 +1635,13 @@ type FreeKiTyVarsWithDups = FreeKiTyVars
 type FreeKiTyVarsNoDups   = FreeKiTyVars
 
 instance Outputable FreeKiTyVars where
-  ppr (FKTV kis tys) = ppr (kis, tys)
+  ppr (FKTV { fktv_kis = kis, fktv_tys = tys}) = ppr (kis, tys)
 
 emptyFKTV :: FreeKiTyVarsNoDups
-emptyFKTV = FKTV [] []
+emptyFKTV = FKTV { fktv_kis = [], fktv_tys = [] }
 
 freeKiTyVarsAllVars :: FreeKiTyVars -> [Located RdrName]
-freeKiTyVarsAllVars (FKTV tys kvs) = tys ++ kvs
+freeKiTyVarsAllVars (FKTV { fktv_kis = kvs, fktv_tys = tvs }) = kvs ++ tvs
 
 freeKiTyVarsKindVars :: FreeKiTyVars -> [Located RdrName]
 freeKiTyVarsKindVars = fktv_kis
@@ -1579,11 +1650,11 @@ freeKiTyVarsTypeVars :: FreeKiTyVars -> [Located RdrName]
 freeKiTyVarsTypeVars = fktv_tys
 
 filterInScope :: LocalRdrEnv -> FreeKiTyVars -> FreeKiTyVars
-filterInScope rdr_env (FKTV kis tys)
-  = FKTV (filterOut in_scope kis)
-         (filterOut in_scope tys)
+filterInScope rdr_env (FKTV { fktv_kis = kis, fktv_tys = tys })
+  = FKTV { fktv_kis = filterOut in_scope kis
+         , fktv_tys = filterOut in_scope tys }
   where
-    in_scope         = inScope rdr_env . unLoc
+    in_scope = inScope rdr_env . unLoc
 
 inScope :: LocalRdrEnv -> RdrName -> Bool
 inScope rdr_env rdr = rdr `elemLocalRdrEnv` rdr_env
@@ -1596,9 +1667,9 @@ inScope rdr_env rdr = rdr `elemLocalRdrEnv` rdr_env
 -- When the same name occurs multiple times in the types, only the first
 -- occurrence is returned.
 -- See Note [Kind and type-variable binders]
-extractHsTyRdrTyVars :: LHsType GhcPs -> RnM FreeKiTyVarsNoDups
+extractHsTyRdrTyVars :: LHsType GhcPs -> FreeKiTyVarsNoDups
 extractHsTyRdrTyVars ty
-  = rmDupsInRdrTyVars <$> extractHsTyRdrTyVarsDups ty
+  = rmDupsInRdrTyVars (extractHsTyRdrTyVarsDups ty)
 
 -- | 'extractHsTyRdrTyVarsDups' find the
 --        free (kind, type) variables of an 'HsType'
@@ -1607,63 +1678,70 @@ extractHsTyRdrTyVars ty
 -- Does not return any wildcards.
 -- When the same name occurs multiple times in the types, all occurrences
 -- are returned.
-extractHsTyRdrTyVarsDups :: LHsType GhcPs -> RnM FreeKiTyVarsWithDups
+extractHsTyRdrTyVarsDups :: LHsType GhcPs -> FreeKiTyVarsWithDups
 extractHsTyRdrTyVarsDups ty
   = extract_lty TypeLevel ty emptyFKTV
 
 -- | Extracts the free kind variables (but not the type variables) of an
 -- 'HsType'. Does not return any wildcards.
 -- When the same name occurs multiple times in the type, only the first
--- occurrence is returned.
--- See Note [Kind and type-variable binders]
-extractHsTyRdrTyVarsKindVars :: LHsType GhcPs -> RnM [Located RdrName]
+-- occurrence is returned, and the left-to-right order of variables is
+-- preserved.
+-- See Note [Kind and type-variable binders] and
+-- Note [Ordering of implicit variables].
+extractHsTyRdrTyVarsKindVars :: LHsType GhcPs -> [Located RdrName]
 extractHsTyRdrTyVarsKindVars ty
-  = freeKiTyVarsKindVars <$> extractHsTyRdrTyVars ty
+  = freeKiTyVarsKindVars (extractHsTyRdrTyVars ty)
 
 -- | Extracts free type and kind variables from types in a list.
 -- When the same name occurs multiple times in the types, only the first
 -- occurrence is returned and the rest is filtered out.
 -- See Note [Kind and type-variable binders]
-extractHsTysRdrTyVars :: [LHsType GhcPs] -> RnM FreeKiTyVarsNoDups
+extractHsTysRdrTyVars :: [LHsType GhcPs] -> FreeKiTyVarsNoDups
 extractHsTysRdrTyVars tys
-  = rmDupsInRdrTyVars <$> extractHsTysRdrTyVarsDups tys
+  = rmDupsInRdrTyVars (extractHsTysRdrTyVarsDups tys)
 
 -- | Extracts free type and kind variables from types in a list.
 -- When the same name occurs multiple times in the types, all occurrences
 -- are returned.
-extractHsTysRdrTyVarsDups :: [LHsType GhcPs] -> RnM FreeKiTyVarsWithDups
+extractHsTysRdrTyVarsDups :: [LHsType GhcPs] -> FreeKiTyVarsWithDups
 extractHsTysRdrTyVarsDups tys
   = extract_ltys TypeLevel tys emptyFKTV
 
-extractHsTyVarBndrsKVs :: [LHsTyVarBndr GhcPs] -> RnM [Located RdrName]
--- Returns the free kind variables of any explictly-kinded binders
+extractHsTyVarBndrsKVs :: [LHsTyVarBndr GhcPs] -> [Located RdrName]
+-- Returns the free kind variables of any explictly-kinded binders, returning
+-- variable occurrences in left-to-right order.
+-- See Note [Ordering of implicit variables].
 -- NB: Does /not/ delete the binders themselves.
 --     However duplicates are removed
 --     E.g. given  [k1, a:k1, b:k2]
 --          the function returns [k1,k2], even though k1 is bound here
 extractHsTyVarBndrsKVs tv_bndrs
-  = do { kvs <- extract_hs_tv_bndrs_kvs tv_bndrs
-       ; return (nubL kvs) }
+  = nubL (extract_hs_tv_bndrs_kvs tv_bndrs)
 
 -- | Removes multiple occurrences of the same name from FreeKiTyVars. If a
 -- variable occurs as both a kind and a type variable, only keep the occurrence
 -- as a kind variable.
 -- See also Note [Kind and type-variable binders]
 rmDupsInRdrTyVars :: FreeKiTyVarsWithDups -> FreeKiTyVarsNoDups
-rmDupsInRdrTyVars (FKTV kis tys)
-  = FKTV kis' tys'
+rmDupsInRdrTyVars (FKTV { fktv_kis = kis, fktv_tys = tys })
+  = FKTV { fktv_kis = kis'
+         , fktv_tys = nubL (filterOut (`elemRdr` kis') tys) }
   where
     kis' = nubL kis
-    tys' = nubL (filterOut (`elemRdr` kis') tys)
 
-extractRdrKindSigVars :: LFamilyResultSig GhcPs -> RnM [Located RdrName]
-extractRdrKindSigVars (L _ resultSig)
-    | KindSig _ k                          <- resultSig = kindRdrNameFromSig k
-    | TyVarSig _ (L _ (KindedTyVar _ _ k)) <- resultSig = kindRdrNameFromSig k
-    | otherwise = return []
-    where kindRdrNameFromSig k = freeKiTyVarsAllVars <$> extractHsTyRdrTyVars k
+extractRdrKindSigVars :: LFamilyResultSig GhcPs -> [Located RdrName]
+-- Returns the free kind variables in a type family result signature, returning
+-- variable occurrences in left-to-right order.
+-- See Note [Ordering of implicit variables].
+extractRdrKindSigVars (dL->L _ resultSig)
+  | KindSig _ k                              <- resultSig = kindRdrNameFromSig k
+  | TyVarSig _ (dL->L _ (KindedTyVar _ _ k)) <- resultSig = kindRdrNameFromSig k
+  | otherwise =  []
+    where
+      kindRdrNameFromSig k = freeKiTyVarsAllVars (extractHsTyRdrTyVars k)
 
-extractDataDefnKindVars :: HsDataDefn GhcPs -> RnM [Located RdrName]
+extractDataDefnKindVars :: HsDataDefn GhcPs -> [Located RdrName]
 -- Get the scoped kind variables mentioned free in the constructor decls
 -- Eg: data T a = T1 (S (a :: k) | forall (b::k). T2 (S b)
 --     Here k should scope over the whole definition
@@ -1677,148 +1755,150 @@ extractDataDefnKindVars :: HsDataDefn GhcPs -> RnM [Located RdrName]
 --         data D = D
 --         instance forall k (a::k). C @k @* a D where ...
 --
+-- This returns variable occurrences in left-to-right order.
+-- See Note [Ordering of implicit variables].
 extractDataDefnKindVars (HsDataDefn { dd_ctxt = ctxt, dd_kindSig = ksig
                                     , dd_cons = cons })
-  = (nubL . freeKiTyVarsKindVars) <$>
-    (extract_lctxt TypeLevel ctxt =<<
-     extract_mb extract_lkind ksig =<<
-     foldrM (extract_con . unLoc) emptyFKTV cons)
+  = (nubL . freeKiTyVarsKindVars) $
+    (extract_lctxt TypeLevel ctxt  $
+     extract_mb extract_lkind ksig $
+     foldr (extract_con . unLoc) emptyFKTV cons)
   where
-    extract_con (ConDeclGADT { }) acc = return acc
+    extract_con (ConDeclGADT { }) acc = acc
     extract_con (ConDeclH98 { con_ex_tvs = ex_tvs
                             , con_mb_cxt = ctxt, con_args = args }) acc
-      = extract_hs_tv_bndrs ex_tvs acc =<<
-        extract_mlctxt ctxt =<<
+      = extract_hs_tv_bndrs ex_tvs acc $
+        extract_mlctxt ctxt            $
         extract_ltys TypeLevel (hsConDeclArgTys args) emptyFKTV
     extract_con (XConDecl { }) _ = panic "extractDataDefnKindVars"
 extractDataDefnKindVars (XHsDataDefn _) = panic "extractDataDefnKindVars"
 
 extract_mlctxt :: Maybe (LHsContext GhcPs)
-               -> FreeKiTyVarsWithDups -> RnM FreeKiTyVarsWithDups
-extract_mlctxt Nothing     acc = return acc
+               -> FreeKiTyVarsWithDups -> FreeKiTyVarsWithDups
+extract_mlctxt Nothing     acc = acc
 extract_mlctxt (Just ctxt) acc = extract_lctxt TypeLevel ctxt acc
 
 extract_lctxt :: TypeOrKind
               -> LHsContext GhcPs
-              -> FreeKiTyVarsWithDups -> RnM FreeKiTyVarsWithDups
+              -> FreeKiTyVarsWithDups -> FreeKiTyVarsWithDups
 extract_lctxt t_or_k ctxt = extract_ltys t_or_k (unLoc ctxt)
 
 extract_ltys :: TypeOrKind
              -> [LHsType GhcPs]
-             -> FreeKiTyVarsWithDups -> RnM FreeKiTyVarsWithDups
-extract_ltys t_or_k tys acc = foldrM (extract_lty t_or_k) acc tys
+             -> FreeKiTyVarsWithDups -> FreeKiTyVarsWithDups
+extract_ltys t_or_k tys acc = foldr (extract_lty t_or_k) acc tys
 
-extract_mb :: (a -> FreeKiTyVarsWithDups -> RnM FreeKiTyVarsWithDups)
+extract_mb :: (a -> FreeKiTyVarsWithDups -> FreeKiTyVarsWithDups)
            -> Maybe a
-           -> FreeKiTyVarsWithDups -> RnM FreeKiTyVarsWithDups
-extract_mb _ Nothing  acc = return acc
+           -> FreeKiTyVarsWithDups -> FreeKiTyVarsWithDups
+extract_mb _ Nothing  acc = acc
 extract_mb f (Just x) acc = f x acc
 
-extract_lkind :: LHsType GhcPs -> FreeKiTyVars -> RnM FreeKiTyVars
+extract_lkind :: LHsType GhcPs -> FreeKiTyVars -> FreeKiTyVars
 extract_lkind = extract_lty KindLevel
 
 extract_lty :: TypeOrKind -> LHsType GhcPs
-            -> FreeKiTyVarsWithDups -> RnM FreeKiTyVarsWithDups
-extract_lty t_or_k (L _ ty) acc
+            -> FreeKiTyVarsWithDups -> FreeKiTyVarsWithDups
+extract_lty t_or_k (dL->L _ ty) acc
   = case ty of
       HsTyVar _ _  ltv            -> extract_tv t_or_k ltv acc
       HsBangTy _ _ ty             -> extract_lty t_or_k ty acc
-      HsRecTy _ flds              -> foldrM (extract_lty t_or_k
-                                             . cd_fld_type . unLoc) acc
+      HsRecTy _ flds              -> foldr (extract_lty t_or_k
+                                            . cd_fld_type . unLoc) acc
                                            flds
-      HsAppTy _ ty1 ty2           -> extract_lty t_or_k ty1 =<<
+      HsAppTy _ ty1 ty2           -> extract_lty t_or_k ty1 $
                                      extract_lty t_or_k ty2 acc
       HsListTy _ ty               -> extract_lty t_or_k ty acc
       HsTupleTy _ _ tys           -> extract_ltys t_or_k tys acc
       HsSumTy _ tys               -> extract_ltys t_or_k tys acc
-      HsFunTy _ ty1 ty2           -> extract_lty t_or_k ty1 =<<
+      HsFunTy _ ty1 ty2           -> extract_lty t_or_k ty1 $
                                      extract_lty t_or_k ty2 acc
       HsIParamTy _ _ ty           -> extract_lty t_or_k ty acc
-      HsOpTy _ ty1 tv ty2         -> extract_tv t_or_k tv =<<
-                                     extract_lty t_or_k ty1 =<<
+      HsOpTy _ ty1 tv ty2         -> extract_tv t_or_k tv   $
+                                     extract_lty t_or_k ty1 $
                                      extract_lty t_or_k ty2 acc
       HsParTy _ ty                -> extract_lty t_or_k ty acc
-      HsSpliceTy {}               -> return acc  -- Type splices mention no tvs
+      HsSpliceTy {}               -> acc  -- Type splices mention no tvs
       HsDocTy _ ty _              -> extract_lty t_or_k ty acc
       HsExplicitListTy _ _ tys    -> extract_ltys t_or_k tys acc
       HsExplicitTupleTy _ tys     -> extract_ltys t_or_k tys acc
-      HsTyLit _ _                 -> return acc
-      HsStarTy _ _                -> return acc
-      HsKindSig _ ty ki           -> extract_lty t_or_k ty =<<
+      HsTyLit _ _                 -> acc
+      HsStarTy _ _                -> acc
+      HsKindSig _ ty ki           -> extract_lty t_or_k ty $
                                      extract_lkind ki acc
       HsForAllTy { hst_bndrs = tvs, hst_body = ty }
-                                  -> extract_hs_tv_bndrs tvs acc =<<
+                                  -> extract_hs_tv_bndrs tvs acc $
                                      extract_lty t_or_k ty emptyFKTV
       HsQualTy { hst_ctxt = ctxt, hst_body = ty }
-                                  -> extract_lctxt t_or_k ctxt   =<<
+                                  -> extract_lctxt t_or_k ctxt $
                                      extract_lty t_or_k ty acc
-      XHsType {}                  -> return acc
+      XHsType {}                  -> acc
       -- We deal with these separately in rnLHsTypeWithWildCards
-      HsWildCardTy {}             -> return acc
+      HsWildCardTy {}             -> acc
 
 extractHsTvBndrs :: [LHsTyVarBndr GhcPs]
                  -> FreeKiTyVarsWithDups           -- Free in body
-                 -> RnM FreeKiTyVarsWithDups       -- Free in result
+                 -> FreeKiTyVarsWithDups       -- Free in result
 extractHsTvBndrs tv_bndrs body_fvs
   = extract_hs_tv_bndrs tv_bndrs emptyFKTV body_fvs
 
 extract_hs_tv_bndrs :: [LHsTyVarBndr GhcPs]
                     -> FreeKiTyVarsWithDups  -- Accumulator
                     -> FreeKiTyVarsWithDups  -- Free in body
-                    -> RnM FreeKiTyVarsWithDups
+                    -> FreeKiTyVarsWithDups
 -- In (forall (a :: Maybe e). a -> b) we have
 --     'a' is bound by the forall
 --     'b' is a free type variable
 --     'e' is a free kind variable
 extract_hs_tv_bndrs tv_bndrs
-                    (FKTV acc_kvs  acc_tvs)   -- Accumulator
-                    (FKTV body_kvs body_tvs)  -- Free in the body
+      (FKTV { fktv_kis = acc_kvs,  fktv_tys = acc_tvs })   -- Accumulator
+      (FKTV { fktv_kis = body_kvs, fktv_tys = body_tvs })  -- Free in the body
   | null tv_bndrs
-  = return $
-    FKTV (body_kvs ++ acc_kvs) (body_tvs ++ acc_tvs)
+  = FKTV { fktv_kis = body_kvs ++ acc_kvs
+         , fktv_tys = body_tvs ++ acc_tvs }
   | otherwise
-  = do { bndr_kvs <- extract_hs_tv_bndrs_kvs tv_bndrs
+  = FKTV { fktv_kis = filterOut (`elemRdr` tv_bndr_rdrs) all_kv_occs
+                      -- NB: delete all tv_bndr_rdrs from bndr_kvs as well
+                      -- as body_kvs; see Note [Kind variable scoping]
+                      ++ acc_kvs
+         , fktv_tys = filterOut (`elemRdr` tv_bndr_rdrs) body_tvs ++ acc_tvs }
+  where
+    bndr_kvs = extract_hs_tv_bndrs_kvs tv_bndrs
 
-       ; let tv_bndr_rdrs, all_kv_occs :: [Located RdrName]
-             tv_bndr_rdrs = map hsLTyVarLocName tv_bndrs
-             -- We must include both kind variables from the binding as well
-             -- as the body of the `forall` type.
-             -- See Note [Variables used as both types and kinds].
-             all_kv_occs = bndr_kvs ++ body_kvs
+    tv_bndr_rdrs, all_kv_occs :: [Located RdrName]
+    tv_bndr_rdrs = map hsLTyVarLocName tv_bndrs
+    all_kv_occs = bndr_kvs ++ body_kvs
+       -- We must include both kind variables from the binding as well
+       -- as the body of the `forall` type.
+       -- See Note [Variables used as both types and kinds].
 
-       ; traceRn "checkMixedVars1" $
-           vcat [ text "bndr_kvs"     <+> ppr bndr_kvs
-                , text "body_kvs"     <+> ppr body_kvs
-                , text "all_kv_occs"  <+> ppr all_kv_occs
-                , text "tv_bndr_rdrs" <+> ppr tv_bndr_rdrs ]
-
-       ; return $
-         FKTV (filterOut (`elemRdr` tv_bndr_rdrs) all_kv_occs
-                    -- NB: delete all tv_bndr_rdrs from bndr_kvs as well
-                    -- as body_kvs; see Note [Kind variable scoping]
-                ++ acc_kvs)
-              (filterOut (`elemRdr` tv_bndr_rdrs) body_tvs ++ acc_tvs) }
-
-extract_hs_tv_bndrs_kvs :: [LHsTyVarBndr GhcPs] -> RnM [Located RdrName]
--- Returns the free kind variables of any explictly-kinded binders
+extract_hs_tv_bndrs_kvs :: [LHsTyVarBndr GhcPs] -> [Located RdrName]
+-- Returns the free kind variables of any explictly-kinded binders, returning
+-- variable occurrences in left-to-right order.
+-- See Note [Ordering of implicit variables].
 -- NB: Does /not/ delete the binders themselves.
 --     Duplicates are /not/ removed
 --     E.g. given  [k1, a:k1, b:k2]
 --          the function returns [k1,k2], even though k1 is bound here
 extract_hs_tv_bndrs_kvs tv_bndrs
-  = do { fktvs <- foldrM extract_lkind emptyFKTV
-                  [k | L _ (KindedTyVar _ _ k) <- tv_bndrs]
-       ; return (freeKiTyVarsKindVars fktvs) }
-         -- There will /be/ no free tyvars!
+  = freeKiTyVarsKindVars $        -- There will /be/ no free tyvars!
+    foldr extract_lkind emptyFKTV
+          [k | (dL->L _ (KindedTyVar _ _ k)) <- tv_bndrs]
 
 extract_tv :: TypeOrKind -> Located RdrName
-           -> FreeKiTyVarsWithDups -> RnM FreeKiTyVarsWithDups
-extract_tv t_or_k ltv@(L _ tv) acc@(FKTV kvs tvs)
-  | not (isRdrTyVar tv) = return acc
-  | isTypeLevel t_or_k  = return (FKTV kvs (ltv : tvs))
-  | otherwise           = return (FKTV (ltv : kvs) tvs)
+           -> FreeKiTyVarsWithDups -> FreeKiTyVarsWithDups
+extract_tv t_or_k ltv@(dL->L _ tv) acc@(FKTV kvs tvs)
+  | not (isRdrTyVar tv) = acc
+  | isTypeLevel t_or_k  = FKTV { fktv_kis = kvs, fktv_tys = ltv : tvs }
+  | otherwise           = FKTV { fktv_kis = ltv : kvs, fktv_tys = tvs }
 
--- just used in this module; seemed convenient here
+-- Deletes duplicates in a list of Located things.
+--
+-- Importantly, this function is stable with respect to the original ordering
+-- of things in the list. This is important, as it is a property that GHC
+-- relies on to maintain the left-to-right ordering of implicitly quantified
+-- type variables.
+-- See Note [Ordering of implicit variables].
 nubL :: Eq a => [Located a] -> [Located a]
 nubL = nubBy eqLocated
 

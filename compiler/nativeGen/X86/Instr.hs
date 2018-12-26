@@ -11,7 +11,7 @@
 module X86.Instr (Instr(..), Operand(..), PrefetchVariant(..), JumpDest(..),
                   getJumpDestBlockId, canShortcut, shortcutStatics,
                   shortcutJump, i386_insert_ffrees, allocMoreStack,
-                  maxSpillSlots, archWordFormat)
+                  maxSpillSlots, archWordFormat )
 where
 
 #include "HsVersions.h"
@@ -383,7 +383,13 @@ x86_regUsageOfInstr platform instr
     SUB    _ src dst    -> usageRM src dst
     SBB    _ src dst    -> usageRM src dst
     IMUL   _ src dst    -> usageRM src dst
-    IMUL2  _ src       -> mkRU (eax:use_R src []) [eax,edx]
+
+    -- Result of IMULB will be in just in %ax
+    IMUL2  II8 src       -> mkRU (eax:use_R src []) [eax]
+    -- Result of IMUL for wider values, will be split between %dx/%edx/%rdx and
+    -- %ax/%eax/%rax.
+    IMUL2  _ src        -> mkRU (eax:use_R src []) [eax,edx]
+
     MUL    _ src dst    -> usageRM src dst
     MUL2   _ src        -> mkRU (eax:use_R src []) [eax,edx]
     DIV    _ op -> mkRU (eax:edx:use_R op []) [eax,edx]
@@ -1055,9 +1061,9 @@ allocMoreStack
   :: Platform
   -> Int
   -> NatCmmDecl statics X86.Instr.Instr
-  -> UniqSM (NatCmmDecl statics X86.Instr.Instr)
+  -> UniqSM (NatCmmDecl statics X86.Instr.Instr, [(BlockId,BlockId)])
 
-allocMoreStack _ _ top@(CmmData _ _) = return top
+allocMoreStack _ _ top@(CmmData _ _) = return (top,[])
 allocMoreStack platform slots proc@(CmmProc info lbl live (ListGraph code)) = do
     let entries = entryBlocks proc
 
@@ -1070,8 +1076,10 @@ allocMoreStack platform slots proc@(CmmProc info lbl live (ListGraph code)) = do
       alloc   = mkStackAllocInstr   platform delta
       dealloc = mkStackDeallocInstr platform delta
 
+      retargetList = (zip entries (map mkBlockId uniqs))
+
       new_blockmap :: LabelMap BlockId
-      new_blockmap = mapFromList (zip entries (map mkBlockId uniqs))
+      new_blockmap = mapFromList retargetList
 
       insert_stack_insns (BasicBlock id insns)
          | Just new_blockid <- mapLookup id new_blockmap
@@ -1090,9 +1098,15 @@ allocMoreStack platform slots proc@(CmmProc info lbl live (ListGraph code)) = do
 
       new_code = concatMap insert_stack_insns code
     -- in
-    return (CmmProc info lbl live (ListGraph new_code))
+    return (CmmProc info lbl live (ListGraph new_code), retargetList)
 
 data JumpDest = DestBlockId BlockId | DestImm Imm
+
+-- Debug Instance
+instance Outputable JumpDest where
+  ppr (DestBlockId bid) = text "jd<blk>:" <> ppr bid
+  ppr (DestImm _imm)    = text "jd<imm>:noShow"
+
 
 getJumpDestBlockId :: JumpDest -> Maybe BlockId
 getJumpDestBlockId (DestBlockId bid) = Just bid

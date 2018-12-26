@@ -1,4 +1,4 @@
-cabal-version: 2.1
+cabal-version: 2.5
 name: rts
 version: 1.0
 license: BSD-3-Clause
@@ -28,7 +28,20 @@ flag leading-underscore
   default: @CabalLeadingUnderscore@
 flag smp
   default: True
+flag find-ptr
+  default: False
+-- Some cabal flags used to control the flavours we want to produce
+-- for libHSrts in hadrian. By default, we just produce vanilla and
+-- threaded. The flags "compose": if you enable debug and profiling,
+-- you will produce vanilla, _thr, _debug, _p but also _thr_p,
+-- _thr_debug_p and so on.
 flag profiling
+  default: False
+flag debug
+  default: False
+flag logging
+  default: False
+flag dynamic
   default: False
 
 library
@@ -40,25 +53,30 @@ library
       extra-bundled-libraries: Cffi-6
     else
       extra-bundled-libraries: Cffi
-    -- the rts comes in a variety of flavours that ar built outside
-    -- of cabal.  The combination of extra-bundled-libraries and
-    -- extra-library-flavours results in the following libraries to
-    -- be copied:
-    -- libHSrts-1.0_debug libHSrts-1.0_l libHSrts-1.0_p
-    -- libHSrts-1.0_thr libHSrts-1.0_thr_debug libHSrts-1.0_thr_l
-    -- libHSrts-1.0_thr_p
-    -- libCffi_debug libCffi_ libCffi_l libCffi_p
-    -- libCffi_thr libCffi_thr_debug libCffi_thr_l libCffi_thr_p
-    extra-library-flavours: _debug _l _thr _thr_debug _thr_l
 
-    -- The make build system seems to be doing something "magic"/special
-    -- for generating profiled builds of those libraries, but we need to
-    -- be transparent for hadrian which gets information about the rts
-    -- "package" through Cabal and this cabal file. We therefore declare
-    -- two profiling-enabled flavours to be available when passing the
-    -- 'profiling' flag when configuring the RTS from hadrian, using Cabal.
+    -- The make build system does something special in config.mk.in
+    -- for generating profiled, debugged, etc builds of those
+    -- libraries, but we need to be transparent for hadrian which
+    -- gets information about the rts "package" through Cabal and
+    -- this cabal file. We therefore declare several
+    -- flavours to be available when passing the suitable (combination of)
+    -- flag(s) when configuring the RTS from hadrian, using Cabal.
+    extra-library-flavours: _thr
+
     if flag(profiling)
       extra-library-flavours: _p _thr_p
+      if flag(debug)
+        extra-library-flavours: _debug_p _thr_debug_p
+    if flag(debug)
+      extra-library-flavours: _debug _thr_debug
+      if flag(dynamic)
+        extra-dynamic-library-flavours: _debug _thr_debug
+    if flag(logging)
+      extra-library-flavours: _l _thr_l
+      if flag(dynamic)
+        extra-dynamic-library-flavours: _l _thr_l
+    if flag(dynamic)
+      extra-dynamic-library-flavours: _thr
 
     exposed: True
     exposed-modules:
@@ -136,7 +154,8 @@ library
                       rts/Profiling.h
                       rts/Signals.h
                       rts/SpinLock.h
-                      rts/Stable.h
+                      rts/StableName.h
+                      rts/StablePtr.h
                       rts/StaticPtrTable.h
                       rts/TTY.h
                       rts/Threads.h
@@ -261,9 +280,12 @@ library
          "-Wl,-u,_hs_atomicwrite8"
          "-Wl,-u,_hs_atomicwrite16"
          "-Wl,-u,_hs_atomicwrite32"
-         -- This symbol is useful in gdb, but not referred to anywhere,
-         -- so we need to force it to be included in the binary.
-         "-Wl,-u,_findPtr"
+
+      if flag(find-ptr)
+        -- This symbol is useful in gdb, but not referred to anywhere,
+        -- so we need to force it to be included in the binary.
+        ld-options: "-Wl,-u,_findPtr"
+
     else
       ld-options:
          "-Wl,-u,base_GHCziTopHandler_runIO_closure"
@@ -335,9 +357,15 @@ library
          "-Wl,-u,hs_atomicwrite8"
          "-Wl,-u,hs_atomicwrite16"
          "-Wl,-u,hs_atomicwrite32"
+
+      if flag(find-ptr)
+        -- This symbol is useful in gdb, but not referred to anywhere,
+        -- so we need to force it to be included in the binary.
+        ld-options: "-Wl,-u,findPtr"
          -- This symbol is useful in gdb, but not referred to anywhere,
          -- so we need to force it to be included in the binary.
          "-Wl,-u,findPtr"
+
     if os(windows)
       if flag(leading-underscore)
         ld-options:
@@ -411,7 +439,8 @@ library
                STM.c
                Schedule.c
                Sparks.c
-               Stable.c
+               StableName.c
+               StablePtr.c
                StaticPtrTable.c
                Stats.c
                StgCRun.c

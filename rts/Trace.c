@@ -218,6 +218,11 @@ static void traceSchedEvent_stderr (Capability *cap, EventTypeNum tag,
         if (info1 == 6 + BlockedOnBlackHole) {
             debugBelch("cap %d: thread %" FMT_Word " stopped (blocked on black hole owned by thread %lu)\n",
                        cap->no, (W_)tso->id, (long)info2);
+        } else if (info1 == StackOverflow) {
+            debugBelch("cap %d: thead %" FMT_Word
+                       " stopped (stack overflow, size %lu)\n",
+                      cap->no, (W_)tso->id, (long)info2);
+
         } else {
             debugBelch("cap %d: thread %" FMT_Word " stopped (%s)\n",
                        cap->no, (W_)tso->id, thread_stop_reasons[info1]);
@@ -478,16 +483,6 @@ void traceOSProcessInfo_(void) {
                                    argc, argv);
             }
         }
-        {
-            int envc = 0; char **envv;
-            getProgEnvv(&envc, &envv);
-            if (envc != 0) {
-                postCapsetVecEvent(EVENT_PROGRAM_ENV,
-                                   CAPSET_OSPROCESS_DEFAULT,
-                                   envc, envv);
-            }
-            freeProgEnvv(envc, envv);
-        }
     }
 }
 
@@ -744,6 +739,17 @@ void traceUserMsg(Capability *cap, char *msg)
         }
     }
     dtraceUserMsg(cap->no, msg);
+}
+
+void traceUserBinaryMsg(Capability *cap, uint8_t *msg, size_t size)
+{
+    /* Note: normally we don't check the TRACE_* flags here as they're checked
+       by the wrappers in Trace.h. But traceUserMsg is special since it has no
+       wrapper (it's called from cmm code), so we check TRACE_user here
+     */
+    if (eventlog_enabled && TRACE_user) {
+        postUserBinaryEvent(cap, EVENT_USER_BINARY_MSG, msg, size);
+    }
 }
 
 void traceUserMarker(Capability *cap, char *markername)

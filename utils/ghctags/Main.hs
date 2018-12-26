@@ -183,7 +183,7 @@ flagsFromCabal :: FilePath -> IO [String]
 flagsFromCabal distPref = do
   lbi <- getPersistBuildConfig distPref
   let pd = localPkgDescr lbi
-  case componentNameTargets' pd lbi CLibName of
+  case componentNameTargets' pd lbi (CLibName LMainLibName) of
     [target] ->
       let clbi = targetCLBI target
           CLib lib = getComponent pd (componentLocalName clbi)
@@ -270,7 +270,7 @@ boundValues mod group =
   in vals ++ tys ++ fors
   where found = foundOfLName mod
 
-startOfLocated :: Located a -> RealSrcLoc
+startOfLocated :: HasSrcSpan a => a -> RealSrcLoc
 startOfLocated lHs = case getLoc lHs of
                      RealSrcSpan l -> realSrcSpanStart l
                      UnhelpfulSpan _ -> panic "startOfLocated UnhelpfulSpan"
@@ -306,7 +306,7 @@ boundThings modname lbinding =
                LitPat _ _ -> tl
                NPat {} -> tl -- form of literal pattern?
                NPlusKPat _ id _ _ _ _ -> thing id : tl
-               SigPat _ p -> patThings p tl
+               SigPat _ p _ -> patThings p tl
                _ -> error "boundThings"
         conArgs (PrefixCon ps) tl = foldr patThings tl ps
         conArgs (RecCon (HsRecFields { rec_flds = flds })) tl

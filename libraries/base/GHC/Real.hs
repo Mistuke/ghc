@@ -138,7 +138,7 @@ class  (Num a, Ord a) => Real a  where
 --
 -- The Haskell Report defines no laws for 'Integral'. However, 'Integral'
 -- instances are customarily expected to define a Euclidean domain and have the
--- following properties for the 'div'/'mod' and 'quot'/'rem' pairs, given
+-- following properties for the `div`\/`mod` and `quot`\/`rem` pairs, given
 -- suitable Euclidean functions @f@ and @g@:
 --
 -- * @x@ = @y * quot x y + rem x y@ with @rem x y@ = @fromInteger 0@ or
@@ -182,21 +182,21 @@ class  (Real a, Enum a) => Integral a  where
 
 -- | Fractional numbers, supporting real division.
 --
--- The Haskell Report defines no laws for 'Fractional'. However, '(+)' and
--- '(*)' are customarily expected to define a division ring and have the
+-- The Haskell Report defines no laws for 'Fractional'. However, @('+')@ and
+-- @('*')@ are customarily expected to define a division ring and have the
 -- following properties:
 --
 -- [__'recip' gives the multiplicative inverse__]:
 -- @x * recip x@ = @recip x * x@ = @fromInteger 1@
 --
 -- Note that it /isn't/ customarily expected that a type instance of
--- 'Fractional' implement a field. However, all instances in 'base' do.
+-- 'Fractional' implement a field. However, all instances in @base@ do.
 class  (Num a) => Fractional a  where
     {-# MINIMAL fromRational, (recip | (/)) #-}
 
-    -- | fractional division
+    -- | Fractional division.
     (/)                 :: a -> a -> a
-    -- | reciprocal fraction
+    -- | Reciprocal fraction.
     recip               :: a -> a
     -- | Conversion from a 'Rational' (that is @'Ratio' 'Integer'@).
     -- A floating literal stands for an application of 'fromRational'

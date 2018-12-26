@@ -1,24 +1,19 @@
 TYPE SIGNATURES
-  DataFamilyInstanceLHS.A :: MyKind
-  DataFamilyInstanceLHS.B :: MyKind
-  DataFamilyInstanceLHS.SingA ::
-    forall (_ :: MyKind).
-    (_ ~ 'A) =>
-    DataFamilyInstanceLHS.R:SingMyKind_ _
-  DataFamilyInstanceLHS.SingB ::
-    forall (_ :: MyKind).
-    (_ ~ 'B) =>
-    DataFamilyInstanceLHS.R:SingMyKind_ _
   foo :: Sing 'A
 TYPE CONSTRUCTORS
-  data MyKind = A | B
-  data family Sing (a :: k)
+  data type MyKind{0} :: *
+  data family Sing{2} :: forall k. k -> *
+    roles nominal nominal
 COERCION AXIOMS
   axiom DataFamilyInstanceLHS.D:R:SingMyKind_0 ::
-    Sing _ = DataFamilyInstanceLHS.R:SingMyKind_
-      -- Defined at DataFamilyInstanceLHS.hs:8:15
+      Sing = DataFamilyInstanceLHS.R:SingMyKind_
+DATA CONSTRUCTORS
+  A :: MyKind
+  B :: MyKind
+  SingA :: Sing 'A
+  SingB :: Sing 'B
 FAMILY INSTANCES
-  data instance Sing
+  data instance Sing _ -- Defined at DataFamilyInstanceLHS.hs:8:15
 Dependent modules: []
 Dependent packages: [base-4.12.0.0, ghc-prim-0.5.3,
                      integer-gmp-1.0.2.0]

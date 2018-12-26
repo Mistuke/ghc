@@ -165,6 +165,9 @@ noBindS e = do { e1 <- e; return (NoBindS e1) }
 parS :: [[StmtQ]] -> StmtQ
 parS sss = do { sss1 <- mapM sequence sss; return (ParS sss1) }
 
+recS :: [StmtQ] -> StmtQ
+recS ss = do { ss1 <- sequence ss; return (RecS ss1) }
+
 -------------------------------------------------------------------------------
 -- *   Range
 
@@ -305,6 +308,9 @@ caseE e ms = do { e1 <- e; ms1 <- sequence ms; return (CaseE e1 ms1) }
 doE :: [StmtQ] -> ExpQ
 doE ss = do { ss1 <- sequence ss; return (DoE ss1) }
 
+mdoE :: [StmtQ] -> ExpQ
+mdoE ss = do { ss1 <- sequence ss; return (MDoE ss1) }
+
 compE :: [StmtQ] -> ExpQ
 compE ss = do { ss1 <- sequence ss; return (CompE ss1) }
 
@@ -338,6 +344,9 @@ unboundVarE s = return (UnboundVarE s)
 
 labelE :: String -> ExpQ
 labelE s = return (LabelE s)
+
+implicitParamVarE :: String -> ExpQ
+implicitParamVarE n = return (ImplicitParamVarE n)
 
 -- ** 'arithSeqE' Shortcuts
 fromE :: ExpQ -> ExpQ
@@ -460,13 +469,15 @@ pragSpecInstD ty
       ty1    <- ty
       return $ PragmaD $ SpecialiseInstP ty1
 
-pragRuleD :: String -> [RuleBndrQ] -> ExpQ -> ExpQ -> Phases -> DecQ
-pragRuleD n bndrs lhs rhs phases
+pragRuleD :: String -> Maybe [TyVarBndrQ] -> [RuleBndrQ] -> ExpQ -> ExpQ
+          -> Phases -> DecQ
+pragRuleD n ty_bndrs tm_bndrs lhs rhs phases
   = do
-      bndrs1 <- sequence bndrs
+      ty_bndrs1 <- traverse sequence ty_bndrs
+      tm_bndrs1 <- sequence tm_bndrs
       lhs1   <- lhs
       rhs1   <- rhs
-      return $ PragmaD $ RuleP n bndrs1 lhs1 rhs1 phases
+      return $ PragmaD $ RuleP n ty_bndrs1 tm_bndrs1 lhs1 rhs1 phases
 
 pragAnnD :: AnnTarget -> ExpQ -> DecQ
 pragAnnD target expr
@@ -480,27 +491,29 @@ pragLineD line file = return $ PragmaD $ LineP line file
 pragCompleteD :: [Name] -> Maybe Name -> DecQ
 pragCompleteD cls mty = return $ PragmaD $ CompleteP cls mty
 
-dataInstD :: CxtQ -> Name -> [TypeQ] -> Maybe KindQ -> [ConQ]
-          -> [DerivClauseQ] -> DecQ
-dataInstD ctxt tc tys ksig cons derivs =
+dataInstD :: CxtQ -> Name -> (Maybe [TyVarBndrQ]) -> [TypeQ] -> Maybe KindQ
+          -> [ConQ] -> [DerivClauseQ] -> DecQ
+dataInstD ctxt tc mb_bndrs tys ksig cons derivs =
   do
-    ctxt1   <- ctxt
-    tys1    <- sequenceA tys
-    ksig1   <- sequenceA ksig
-    cons1   <- sequenceA cons
-    derivs1 <- sequenceA derivs
-    return (DataInstD ctxt1 tc tys1 ksig1 cons1 derivs1)
+    ctxt1     <- ctxt
+    mb_bndrs1 <- traverse sequence mb_bndrs
+    tys1      <- sequenceA tys
+    ksig1     <- sequenceA ksig
+    cons1     <- sequenceA cons
+    derivs1   <- sequenceA derivs
+    return (DataInstD ctxt1 tc mb_bndrs1 tys1 ksig1 cons1 derivs1)
 
-newtypeInstD :: CxtQ -> Name -> [TypeQ] -> Maybe KindQ -> ConQ
-             -> [DerivClauseQ] -> DecQ
-newtypeInstD ctxt tc tys ksig con derivs =
+newtypeInstD :: CxtQ -> Name -> (Maybe [TyVarBndrQ]) -> [TypeQ] -> Maybe KindQ
+             -> ConQ -> [DerivClauseQ] -> DecQ
+newtypeInstD ctxt tc mb_bndrs tys ksig con derivs =
   do
-    ctxt1   <- ctxt
-    tys1    <- sequenceA tys
-    ksig1   <- sequenceA ksig
-    con1    <- con
-    derivs1 <- sequence derivs
-    return (NewtypeInstD ctxt1 tc tys1 ksig1 con1 derivs1)
+    ctxt1     <- ctxt
+    mb_bndrs1 <- traverse sequence mb_bndrs
+    tys1      <- sequenceA tys
+    ksig1     <- sequenceA ksig
+    con1      <- con
+    derivs1   <- sequence derivs
+    return (NewtypeInstD ctxt1 tc mb_bndrs1 tys1 ksig1 con1 derivs1)
 
 tySynInstD :: Name -> TySynEqnQ -> DecQ
 tySynInstD tc eqn =
@@ -563,12 +576,21 @@ patSynSigD nm ty =
   do ty' <- ty
      return $ PatSynSigD nm ty'
 
-tySynEqn :: [TypeQ] -> TypeQ -> TySynEqnQ
-tySynEqn lhs rhs =
+-- | Implicit parameter binding declaration. Can only be used in let
+-- and where clauses which consist entirely of implicit bindings.
+implicitParamBindD :: String -> ExpQ -> DecQ
+implicitParamBindD n e =
   do
+    e' <- e
+    return $ ImplicitParamBindD n e'
+
+tySynEqn :: (Maybe [TyVarBndrQ]) -> [TypeQ] -> TypeQ -> TySynEqnQ
+tySynEqn mb_bndrs lhs rhs =
+  do
+    mb_bndrs1 <- traverse sequence mb_bndrs
     lhs1 <- sequence lhs
     rhs1 <- rhs
-    return (TySynEqn lhs1 rhs1)
+    return (TySynEqn mb_bndrs1 lhs1 rhs1)
 
 cxt :: [PredQ] -> CxtQ
 cxt = sequence
@@ -680,6 +702,12 @@ equalityT = return EqualityT
 
 wildCardT :: TypeQ
 wildCardT = return WildCardT
+
+implicitParamT :: String -> TypeQ -> TypeQ
+implicitParamT n t
+  = do
+      t' <- t
+      return $ ImplicitParamT n t'
 
 {-# DEPRECATED classP "As of template-haskell-2.10, constraint predicates (Pred) are just types (Type), in keeping with ConstraintKinds. Please use 'conT' and 'appT'." #-}
 classP :: Name -> [Q Type] -> Q Pred

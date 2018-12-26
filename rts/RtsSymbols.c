@@ -617,6 +617,8 @@
       SymI_HasProto(hs_exit_nowait)                                     \
       SymI_HasProto(hs_set_argv)                                        \
       SymI_HasProto(hs_perform_gc)                                      \
+      SymI_HasProto(hs_lock_stable_ptr_table)                           \
+      SymI_HasProto(hs_unlock_stable_ptr_table)                         \
       SymI_HasProto(hs_lock_stable_tables)                              \
       SymI_HasProto(hs_unlock_stable_tables)                            \
       SymI_HasProto(hs_free_stable_ptr)                                 \
@@ -912,6 +914,7 @@
       SymI_HasProto(stg_traceCcszh)                                     \
       SymI_HasProto(stg_traceEventzh)                                   \
       SymI_HasProto(stg_traceMarkerzh)                                  \
+      SymI_HasProto(stg_traceBinaryEventzh)                             \
       SymI_HasProto(stg_getThreadAllocationCounterzh)                   \
       SymI_HasProto(stg_setThreadAllocationCounterzh)                   \
       SymI_HasProto(getMonotonicNSec)                                   \

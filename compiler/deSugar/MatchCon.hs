@@ -8,6 +8,7 @@ Pattern-matching constructors
 
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module MatchCon ( matchConFamily, matchPatSyn ) where
 
@@ -20,6 +21,7 @@ import {-# SOURCE #-} Match     ( match )
 import HsSyn
 import DsBinds
 import ConLike
+import BasicTypes ( Origin(..) )
 import TcType
 import DsMonad
 import DsUtils
@@ -120,7 +122,10 @@ matchOneConLike :: [Id]
                 -> [EquationInfo]
                 -> DsM (CaseAlt ConLike)
 matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
-  = do  { let inst_tys = ASSERT( tvs1 `equalLength` ex_tvs )
+  = do  { let inst_tys = ASSERT( all tcIsTcTyVar ex_tvs )
+                           -- ex_tvs can only be tyvars as data types in source
+                           -- Haskell cannot mention covar yet (Aug 2018).
+                         ASSERT( tvs1 `equalLength` ex_tvs )
                          arg_tys ++ mkTyVarTys tvs1
 
               val_arg_tys = conLikeInstOrigArgTys con1 inst_tys
@@ -144,7 +149,8 @@ matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
                      return ( wrapBinds (tvs `zip` tvs1)
                             . wrapBinds (ds  `zip` dicts1)
                             . mkCoreLets ds_bind
-                            , eqn { eqn_pats = conArgPats val_arg_tys args ++ pats }
+                            , eqn { eqn_orig = Generated
+                                  , eqn_pats = conArgPats val_arg_tys args ++ pats }
                             )
               shift (_, (EqnInfo { eqn_pats = ps })) = pprPanic "matchOneCon/shift" (ppr ps)
 
@@ -164,12 +170,13 @@ matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
                               alt_wrapper = wrapper1,
                               alt_result = foldr1 combineMatchResults match_results } }
   where
-    ConPatOut { pat_con = L _ con1, pat_arg_tys = arg_tys, pat_wrap = wrapper1,
+    ConPatOut { pat_con = (dL->L _ con1)
+              , pat_arg_tys = arg_tys, pat_wrap = wrapper1,
                 pat_tvs = tvs1, pat_dicts = dicts1, pat_args = args1 }
               = firstPat eqn1
     fields1 = map flSelector (conLikeFieldLabels con1)
 
-    ex_tvs = conLikeExTyVars con1
+    ex_tvs = conLikeExTyCoVars con1
 
     -- Choose the right arg_vars in the right order for this group
     -- Note [Record patterns]
@@ -185,7 +192,7 @@ matchOneConLike vars ty (eqn1 : eqns)   -- All eqns for a single constructor
       = arg_vars
       where
         fld_var_env = mkNameEnv $ zipEqual "get_arg_vars" fields1 arg_vars
-        lookup_fld (L _ rpat) = lookupNameEnv_NF fld_var_env
+        lookup_fld (dL->L _ rpat) = lookupNameEnv_NF fld_var_env
                                             (idName (unLoc (hsRecFieldId rpat)))
     select_arg_vars _ [] = panic "matchOneCon/select_arg_vars []"
 matchOneConLike _ _ [] = panic "matchOneCon []"
@@ -202,7 +209,7 @@ compatible_pats _                 _                 = True -- Prefix or infix co
 same_fields :: HsRecFields GhcTc (LPat GhcTc) -> HsRecFields GhcTc (LPat GhcTc)
             -> Bool
 same_fields flds1 flds2
-  = all2 (\(L _ f1) (L _ f2)
+  = all2 (\(dL->L _ f1) (dL->L _ f2)
                           -> unLoc (hsRecFieldId f1) == unLoc (hsRecFieldId f2))
          (rec_flds flds1) (rec_flds flds2)
 

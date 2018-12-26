@@ -9,6 +9,7 @@ Desugaring foreign declarations (see also DsCCall).
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module DsForeign ( dsForeigns ) where
 
@@ -97,7 +98,7 @@ dsForeigns' fos = do
              (vcat cs $$ vcat fe_init_code),
             foldr (appOL . toOL) nilOL bindss)
   where
-   do_ldecl (L loc decl) = putSrcSpanDs loc (do_decl decl)
+   do_ldecl (dL->L loc decl) = putSrcSpanDs loc (do_decl decl)
 
    do_decl (ForeignImport { fd_name = id, fd_i_ext = co, fd_fi = spec }) = do
       traceIf (text "fi start" <+> ppr id)
@@ -106,8 +107,10 @@ dsForeigns' fos = do
       traceIf (text "fi end" <+> ppr id)
       return (h, c, [], bs)
 
-   do_decl (ForeignExport { fd_name = L _ id, fd_e_ext = co
-                          , fd_fe = CExport (L _ (CExportStatic _ ext_nm cconv)) _ }) = do
+   do_decl (ForeignExport { fd_name = (dL->L _ id)
+                          , fd_e_ext = co
+                          , fd_fe = CExport
+                              (dL->L _ (CExportStatic _ ext_nm cconv)) _ }) = do
       (h, c, _, _) <- dsFExport id co ext_nm cconv False
       return (h, c, [id], [])
    do_decl (XForeignDecl _) = panic "dsForeigns'"
@@ -163,7 +166,7 @@ dsCImport id co (CLabel cid) cconv _ _ = do
    (resTy, foRhs) <- resultWrapper ty
    ASSERT(fromJust resTy `eqType` addrPrimTy)    -- typechecker ensures this
     let
-        rhs = foRhs (Lit (MachLabel cid stdcall_info fod))
+        rhs = foRhs (Lit (LitLabel cid stdcall_info fod))
         rhs' = Cast rhs co
         stdcall_info = fun_type_arg_stdcall_info dflags cconv ty
     in
@@ -203,7 +206,7 @@ dsFCall :: Id -> Coercion -> ForeignCall -> Maybe Header
 dsFCall fn_id co fcall mDeclHeader = do
     let
         ty                   = pFst $ coercionKind co
-        (tv_bndrs, rho)      = tcSplitForAllTyVarBndrs ty
+        (tv_bndrs, rho)      = tcSplitForAllVarBndrs ty
         (arg_tys, io_res_ty) = tcSplitFunTys rho
 
     args <- newSysLocalsDs arg_tys  -- no FFI levity-polymorphism
@@ -442,8 +445,8 @@ dsFExportDynamic id co0 cconv = do
          -}
         adj_args      = [ mkIntLitInt dflags (ccallConvToInt cconv)
                         , Var stbl_value
-                        , Lit (MachLabel fe_nm mb_sz_args IsFunction)
-                        , Lit (mkMachString typestring)
+                        , Lit (LitLabel fe_nm mb_sz_args IsFunction)
+                        , Lit (mkLitString typestring)
                         ]
           -- name of external entry point providing these services.
           -- (probably in the RTS.)
@@ -605,7 +608,7 @@ mkFExportCBits dflags c_nm maybe_target arg_htys res_hty is_IO_res_ty cc
 
   -- the expression we give to rts_evalIO
   expr_to_run
-     = foldl appArg the_cfun arg_info -- NOT aug_arg_info
+     = foldl' appArg the_cfun arg_info -- NOT aug_arg_info
        where
           appArg acc (arg_cname, _, arg_hty, _)
              = text "rts_apply"

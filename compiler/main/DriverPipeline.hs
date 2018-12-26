@@ -75,6 +75,8 @@ import Data.Maybe
 import Data.Version
 import Data.Either      ( partitionEithers )
 
+import Data.Time        ( UTCTime )
+
 -- ---------------------------------------------------------------------------
 -- Pre-process
 
@@ -762,6 +764,7 @@ getOutputFilename stop_phase output basename dflags next_phase maybe_location
           odir       = objectDir dflags
           osuf       = objectSuf dflags
           keep_hc    = gopt Opt_KeepHcFiles dflags
+          keep_hscpp = gopt Opt_KeepHscppFiles dflags
           keep_s     = gopt Opt_KeepSFiles dflags
           keep_bc    = gopt Opt_KeepLlvmFiles dflags
 
@@ -778,6 +781,7 @@ getOutputFilename stop_phase output basename dflags next_phase maybe_location
                        As _    | keep_s     -> True
                        LlvmOpt | keep_bc    -> True
                        HCc     | keep_hc    -> True
+                       HsPp _  | keep_hscpp -> True   -- See Trac #10869
                        _other               -> False
 
           suffix = myPhaseInputExt next_phase
@@ -1014,6 +1018,7 @@ runPhase (RealPhase (Hsc src_flavour)) input_fn dflags0
 
         let o_file = ml_obj_file location -- The real object file
             hi_file = ml_hi_file location
+            hie_file = ml_hie_file location
             dest_file | writeInterfaceOnlyMode dflags
                             = hi_file
                       | otherwise
@@ -1021,7 +1026,7 @@ runPhase (RealPhase (Hsc src_flavour)) input_fn dflags0
 
   -- Figure out if the source has changed, for recompilation avoidance.
   --
-  -- Setting source_unchanged to True means that M.o seems
+  -- Setting source_unchanged to True means that M.o (or M.hie) seems
   -- to be up to date wrt M.hs; so no need to recompile unless imports have
   -- changed (which the compiler itself figures out).
   -- Setting source_unchanged to False tells the compiler that M.o is out of
@@ -1035,13 +1040,14 @@ runPhase (RealPhase (Hsc src_flavour)) input_fn dflags0
                 --      (b) we aren't going all the way to .o file (e.g. ghc -S)
              then return SourceModified
                 -- Otherwise look at file modification dates
-             else do dest_file_exists <- doesFileExist dest_file
-                     if not dest_file_exists
-                        then return SourceModified       -- Need to recompile
-                        else do t2 <- getModificationUTCTime dest_file
-                                if t2 > src_timestamp
-                                  then return SourceUnmodified
-                                  else return SourceModified
+             else do dest_file_mod <- sourceModified dest_file src_timestamp
+                     hie_file_mod <- if gopt Opt_WriteHie dflags
+                                        then sourceModified hie_file
+                                                            src_timestamp
+                                        else pure False
+                     if dest_file_mod || hie_file_mod
+                        then return SourceModified
+                        else return SourceUnmodified
 
         PipeState{hsc_env=hsc_env'} <- getPipeState
 
@@ -1060,6 +1066,7 @@ runPhase (RealPhase (Hsc src_flavour)) input_fn dflags0
                                         ms_obj_date  = Nothing,
                                         ms_parsed_mod   = Nothing,
                                         ms_iface_date   = Nothing,
+                                        ms_hie_date     = Nothing,
                                         ms_textual_imps = imps,
                                         ms_srcimps      = src_imps }
 
@@ -1337,6 +1344,11 @@ runPhase (RealPhase (As with_cpp)) input_fn dflags
                        (local_includes ++ global_includes
                        -- See Note [-fPIC for assembler]
                        ++ map SysTools.Option pic_c_flags
+                       -- See Note [Produce big objects on Windows]
+                       ++ [ SysTools.Option "-Wa,-mbig-obj"
+                          | platformOS (targetPlatform dflags) == OSMinGW32
+                          , not $ target32Bit (targetPlatform dflags)
+                          ]
 
         -- We only support SparcV9 and better because V8 lacks an atomic CAS
         -- instruction so we have to make sure that the assembler accepts the
@@ -1627,8 +1639,9 @@ getLocation src_flavour mod_name = do
         location1 <- liftIO $ mkHomeModLocation2 dflags mod_name basename suff
 
         -- Boot-ify it if necessary
-        let location2 | HsBootFile <- src_flavour = addBootSuffixLocn location1
-                      | otherwise                 = location1
+        let location2
+              | HsBootFile <- src_flavour = addBootSuffixLocnOut location1
+              | otherwise                 = location1
 
 
         -- Take -ohi into account if present
@@ -2149,6 +2162,32 @@ generateMacros prefix name version =
 -- ---------------------------------------------------------------------------
 -- join object files into a single relocatable object file, using ld -r
 
+{-
+Note [Produce big objects on Windows]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The Windows Portable Executable object format has a limit of 32k sections, which
+we tend to blow through pretty easily. Thankfully, there is a "big object"
+extension, which raises this limit to 2^32. However, it must be explicitly
+enabled in the toolchain:
+
+ * the assembler accepts the -mbig-obj flag, which causes it to produce a
+   bigobj-enabled COFF object.
+
+ * the linker accepts the --oformat pe-bigobj-x86-64 flag. Despite what the name
+   suggests, this tells the linker to produce a bigobj-enabled COFF object, no a
+   PE executable.
+
+We must enable bigobj output in a few places:
+
+ * When merging object files (DriverPipeline.joinObjectFiles)
+
+ * When assembling (DriverPipeline.runPhase (RealPhase As ...))
+
+Unfortunately the big object format is not supported on 32-bit targets so
+none of this can be used in that case.
+-}
+
 joinObjectFiles :: DynFlags -> [FilePath] -> FilePath -> IO ()
 joinObjectFiles dflags o_files output_fn = do
   let mySettings = settings dflags
@@ -2158,7 +2197,7 @@ joinObjectFiles dflags o_files output_fn = do
                        SysTools.Option "-nostdlib",
                        SysTools.Option "-Wl,-r"
                      ]
-                        -- See Note [No PIE while linking] in SysTools
+                        -- See Note [No PIE while linking] in DynFlags
                      ++ (if sGccSupportsNoPie mySettings
                           then [SysTools.Option "-no-pie"]
                           else [])
@@ -2177,6 +2216,11 @@ joinObjectFiles dflags o_files output_fn = do
                          && ldIsGnuLd
                             then [SysTools.Option "-Wl,-no-relax"]
                             else [])
+                        -- See Note [Produce big objects on Windows]
+                     ++ [ SysTools.Option "-Wl,--oformat,pe-bigobj-x86-64"
+                        | OSMinGW32 == osInfo
+                        , not $ target32Bit (targetPlatform dflags)
+                        ]
                      ++ map SysTools.Option ld_build_id
                      ++ [ SysTools.Option "-o",
                           SysTools.FileOption "" output_fn ]
@@ -2212,6 +2256,18 @@ writeInterfaceOnlyMode :: DynFlags -> Bool
 writeInterfaceOnlyMode dflags =
  gopt Opt_WriteInterface dflags &&
  HscNothing == hscTarget dflags
+
+-- | Figure out if a source file was modified after an output file (or if we
+-- anyways need to consider the source file modified since the output is gone).
+sourceModified :: FilePath -- ^ destination file we are looking for
+               -> UTCTime  -- ^ last time of modification of source file
+               -> IO Bool  -- ^ do we need to regenerate the output?
+sourceModified dest_file src_timestamp = do
+  dest_file_exists <- doesFileExist dest_file
+  if not dest_file_exists
+    then return True       -- Need to recompile
+     else do t2 <- getModificationUTCTime dest_file
+             return (t2 <= src_timestamp)
 
 -- | What phase to run after one of the backend code generators has run
 hscPostBackendPhase :: DynFlags -> HscSource -> HscTarget -> Phase

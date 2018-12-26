@@ -214,7 +214,7 @@ buildDynCon' dflags platform binder _ _cc con [arg]
 buildDynCon' dflags platform binder _ _cc con [arg]
   | maybeCharLikeCon con
   , platformOS platform /= OSMinGW32 || not (positionIndependent dflags)
-  , NonVoid (StgLitArg (MachChar val)) <- arg
+  , NonVoid (StgLitArg (LitChar val)) <- arg
   , let val_int = ord val :: Int
   , val_int <= mAX_CHARLIKE dflags
   , val_int >= mIN_CHARLIKE dflags
@@ -272,14 +272,12 @@ bindConArgs (DataAlt con) base args
            -- when accessing the constructor field.
            bind_arg :: (NonVoid Id, ByteOff) -> FCode (Maybe LocalReg)
            bind_arg (arg@(NonVoid b), offset)
-             | isDeadBinder b =
-                 -- Do not load unused fields from objects to local variables.
-                 -- (CmmSink can optimize this, but it's cheap and common enough
-                 -- to handle here)
-                 return Nothing
-             | otherwise      = do
-                 emit $ mkTaggedObjectLoad dflags (idToReg dflags arg) base offset tag
-                 Just <$> bindArgToReg arg
+             | isDeadBinder b  -- See Note [Dead-binder optimisation] in StgCmmExpr
+             = return Nothing
+             | otherwise
+             = do { emit $ mkTaggedObjectLoad dflags (idToReg dflags arg)
+                                              base offset tag
+                  ; Just <$> bindArgToReg arg }
 
        mapMaybeM bind_arg args_w_offsets
 

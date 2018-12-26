@@ -1,4 +1,4 @@
-test('WCompatWarningsOn',    normal, compile, [''])
-test('WCompatWarningsOff',   normal, compile, [''])
-test('WCompatWarningsNotOn', normal, compile, [''])
-test('WCompatWarningsOnOff', normal, compile, [''])
+# N.B. the source files are all stubs; edit Template.hs
+test('WCompatWarningsOn',    extra_files(['Template.hs']), compile, [''])
+test('WCompatWarningsOff',   extra_files(['Template.hs']), compile, [''])
+test('WCompatWarningsOnOff', extra_files(['Template.hs']), compile, [''])

@@ -1067,6 +1067,13 @@ When the program is linked with the :ghc-flag:`-eventlog` option
     `ghc-events <http://hackage.haskell.org/package/ghc-events>`__
     package.
 
+.. rts-flag:: -ol ⟨filename⟩
+
+    :default: :file:`<program>.eventlog`
+    :since: 8.8
+
+    Sets the destination for the eventlog produced with the :rts-flag:`-l` flag.
+
 .. rts-flag:: -v [⟨flags⟩]
 
     Log events as text to standard output, instead of to the
@@ -1219,6 +1226,7 @@ Getting information about the RTS
         ,("Word size", "64")
         ,("Compiler unregisterised", "NO")
         ,("Tables next to code", "YES")
+        ,("Flag -with-rtsopts", "")
         ]
 
     The information is formatted such that it can be read as a of type
@@ -1269,3 +1277,6 @@ Getting information about the RTS
         performance optimisation that is not available on all platforms.
         This field tells you whether the program has been compiled with this
         optimisation. (Usually yes, except on unusual platforms.)
+
+    ``Flag -with-rtsopts``
+        The value of the GHC flag :ghc-flag:`-with-rtsopts=⟨opts⟩` at compile/link time.

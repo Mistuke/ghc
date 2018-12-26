@@ -22,6 +22,7 @@ module MkIface (
         RecompileRequired(..), recompileRequired,
         mkIfaceExports,
 
+        coAxiomToIfaceDecl,
         tyThingToIfaceDecl -- Converting things to their Iface equivalents
  ) where
 
@@ -118,12 +119,12 @@ import Data.Ord
 import Data.IORef
 import System.Directory
 import System.FilePath
-import Plugins ( PluginRecompile(..), Plugin(..), LoadedPlugin(..))
-#if __GLASGOW_HASKELL__ < 840
+import Plugins ( PluginRecompile(..), PluginWithArgs(..), LoadedPlugin(..),
+                 pluginRecompile', plugins )
+
 --Qualified import so we can define a Semigroup instance
 -- but it doesn't clash with Outputable.<>
 import qualified Data.Semigroup
-#endif
 
 {-
 ************************************************************************
@@ -189,7 +190,7 @@ mkIfaceTc hsc_env maybe_old_fingerprint safe_mode mod_details
   = do
           let used_names = mkUsedNames tc_result
           let pluginModules =
-                map lpModule (plugins (hsc_dflags hsc_env))
+                map lpModule (cachedPlugins (hsc_dflags hsc_env))
           deps <- mkDependencies
                     (thisInstalledUnitId (hsc_dflags hsc_env))
                     (map mi_module pluginModules) tc_result
@@ -460,8 +461,18 @@ addFingerprints hsc_env mb_old_fingerprint iface0 new_decls
        -- See also Note [Identity versus semantic module]
        declABI decl = (this_mod, decl, extras)
         where extras = declExtras fix_fn ann_fn non_orph_rules non_orph_insts
-                                  non_orph_fis decl
+                                  non_orph_fis top_lvl_name_env decl
 
+       -- This is used for looking up the Name of a default method
+       -- from its OccName. See Note [default method Name]
+       top_lvl_name_env =
+         mkOccEnv [ (nameOccName nm, nm)
+                  | IfaceId { ifName = nm } <- new_decls ]
+
+       -- Dependency edges between declarations in the current module.
+       -- This is computed by finding the free external names of each
+       -- declaration, including IfaceDeclExtras (things that a
+       -- declaration implicitly depends on).
        edges :: [ Node Unique IfaceDeclABI ]
        edges = [ DigraphNode abi (getUnique (getOccName decl)) out
                | decl <- new_decls
@@ -858,6 +869,12 @@ data IfaceDeclExtras
                                 -- See Note [Orphans] in InstEnv
        [AnnPayload]             -- Annotations of the type itself
        [IfaceIdExtras]          -- For each class method: fixity, RULES and annotations
+       [IfExtName]              -- Default methods. If a module
+                                -- mentions a class, then it can
+                                -- instantiate the class and thereby
+                                -- use the default methods, so we must
+                                -- include these in the fingerprint of
+                                -- a class.
 
   | IfaceSynonymExtras (Maybe Fixity) [AnnPayload]
 
@@ -893,8 +910,9 @@ freeNamesDeclExtras (IfaceIdExtras id_extras)
   = freeNamesIdExtras id_extras
 freeNamesDeclExtras (IfaceDataExtras  _ insts _ subs)
   = unionNameSets (mkNameSet insts : map freeNamesIdExtras subs)
-freeNamesDeclExtras (IfaceClassExtras _ insts _ subs)
-  = unionNameSets (mkNameSet insts : map freeNamesIdExtras subs)
+freeNamesDeclExtras (IfaceClassExtras _ insts _ subs defms)
+  = unionNameSets $
+      mkNameSet insts : mkNameSet defms : map freeNamesIdExtras subs
 freeNamesDeclExtras (IfaceSynonymExtras _ _)
   = emptyNameSet
 freeNamesDeclExtras (IfaceFamilyExtras _ insts _)
@@ -912,8 +930,9 @@ instance Outputable IfaceDeclExtras where
   ppr (IfaceFamilyExtras fix finsts anns) = vcat [ppr fix, ppr finsts, ppr anns]
   ppr (IfaceDataExtras fix insts anns stuff) = vcat [ppr fix, ppr_insts insts, ppr anns,
                                                 ppr_id_extras_s stuff]
-  ppr (IfaceClassExtras fix insts anns stuff) = vcat [ppr fix, ppr_insts insts, ppr anns,
-                                                 ppr_id_extras_s stuff]
+  ppr (IfaceClassExtras fix insts anns stuff defms) =
+    vcat [ppr fix, ppr_insts insts, ppr anns,
+          ppr_id_extras_s stuff, ppr defms]
 
 ppr_insts :: [IfaceInstABI] -> SDoc
 ppr_insts _ = text "<insts>"
@@ -931,8 +950,13 @@ instance Binary IfaceDeclExtras where
    putByte bh 1; put_ bh extras
   put_ bh (IfaceDataExtras fix insts anns cons) = do
    putByte bh 2; put_ bh fix; put_ bh insts; put_ bh anns; put_ bh cons
-  put_ bh (IfaceClassExtras fix insts anns methods) = do
-   putByte bh 3; put_ bh fix; put_ bh insts; put_ bh anns; put_ bh methods
+  put_ bh (IfaceClassExtras fix insts anns methods defms) = do
+   putByte bh 3
+   put_ bh fix
+   put_ bh insts
+   put_ bh anns
+   put_ bh methods
+   put_ bh defms
   put_ bh (IfaceSynonymExtras fix anns) = do
    putByte bh 4; put_ bh fix; put_ bh anns
   put_ bh (IfaceFamilyExtras fix finsts anns) = do
@@ -948,10 +972,11 @@ declExtras :: (OccName -> Maybe Fixity)
            -> OccEnv [IfaceRule]
            -> OccEnv [IfaceClsInst]
            -> OccEnv [IfaceFamInst]
+           -> OccEnv IfExtName          -- lookup default method names
            -> IfaceDecl
            -> IfaceDeclExtras
 
-declExtras fix_fn ann_fn rule_env inst_env fi_env decl
+declExtras fix_fn ann_fn rule_env inst_env fi_env dm_env decl
   = case decl of
       IfaceId{} -> IfaceIdExtras (id_extras n)
       IfaceData{ifCons=cons} ->
@@ -961,13 +986,18 @@ declExtras fix_fn ann_fn rule_env inst_env fi_env decl
                         (ann_fn n)
                         (map (id_extras . occName . ifConName) (visibleIfConDecls cons))
       IfaceClass{ifBody = IfConcreteClass { ifSigs=sigs, ifATs=ats }} ->
-                     IfaceClassExtras (fix_fn n)
-                        (map ifDFun $ (concatMap at_extras ats)
+                     IfaceClassExtras (fix_fn n) insts (ann_fn n) meths defms
+          where
+            insts = (map ifDFun $ (concatMap at_extras ats)
                                     ++ lookupOccEnvL inst_env n)
                            -- Include instances of the associated types
                            -- as well as instances of the class (Trac #5147)
-                        (ann_fn n)
-                        [id_extras (getOccName op) | IfaceClassOp op _ _ <- sigs]
+            meths = [id_extras (getOccName op) | IfaceClassOp op _ _ <- sigs]
+            -- Names of all the default methods (see Note [default method Name])
+            defms = [ dmName
+                    | IfaceClassOp bndr _ (Just _) <- sigs
+                    , let dmOcc = mkDefaultMethodOcc (nameOccName bndr)
+                    , Just dmName <- [lookupOccEnv dm_env dmOcc] ]
       IfaceSynonym{} -> IfaceSynonymExtras (fix_fn n)
                                            (ann_fn n)
       IfaceFamily{} -> IfaceFamilyExtras (fix_fn n)
@@ -979,6 +1009,29 @@ declExtras fix_fn ann_fn rule_env inst_env fi_env decl
         id_extras occ = IdExtras (fix_fn occ) (lookupOccEnvL rule_env occ) (ann_fn occ)
         at_extras (IfaceAT decl _) = lookupOccEnvL inst_env (getOccName decl)
 
+
+{- Note [default method Name] (see also #15970)
+
+The Names for the default methods aren't available in the IfaceSyn.
+
+* We originally start with a DefMethInfo from the class, contain a
+  Name for the default method
+
+* We turn that into IfaceSyn as a DefMethSpec which lacks a Name
+  entirely. Why? Because the Name can be derived from the method name
+  (in TcIface), so doesn't need to be serialised into the interface
+  file.
+
+But now we have to get the Name back, because the class declaration's
+fingerprint needs to depend on it (this was the bug in #15970).  This
+is done in a slightly convoluted way:
+
+* Then, in addFingerprints we build a map that maps OccNames to Names
+
+* We pass that map to declExtras which laboriously looks up in the map
+  (using the derived occurrence name) to recover the Name we have just
+  thrown away.
+-}
 
 lookupOccEnvL :: OccEnv [v] -> OccName -> [v]
 lookupOccEnvL env k = lookupOccEnv env k `orElse` []
@@ -1014,7 +1067,7 @@ mkOrphMap :: (decl -> IsOrphan) -- Extract orphan status from decl
                                 --      each sublist in canonical order
               [decl])           -- Orphan decls; in canonical order
 mkOrphMap get_key decls
-  = foldl go (emptyOccEnv, []) decls
+  = foldl' go (emptyOccEnv, []) decls
   where
     go (non_orphs, orphs) d
         | NotOrphan occ <- get_key d
@@ -1113,9 +1166,6 @@ instance Semigroup RecompileRequired where
 
 instance Monoid RecompileRequired where
   mempty = UpToDate
-#if __GLASGOW_HASKELL__ < 840
-  mappend = (Data.Semigroup.<>)
-#endif
 
 recompileRequired :: RecompileRequired -> Bool
 recompileRequired UpToDate = False
@@ -1241,6 +1291,8 @@ checkVersions hsc_env mod_summary iface
        ; if recompileRequired recomp then return (recomp, Nothing) else do {
        ; recomp <- checkHsig mod_summary iface
        ; if recompileRequired recomp then return (recomp, Nothing) else do {
+       ; recomp <- checkHie mod_summary
+       ; if recompileRequired recomp then return (recomp, Nothing) else do {
        ; recomp <- checkDependencies hsc_env mod_summary iface
        ; if recompileRequired recomp then return (recomp, Just iface) else do {
        ; recomp <- checkPlugins hsc_env iface
@@ -1263,7 +1315,7 @@ checkVersions hsc_env mod_summary iface
        ; updateEps_ $ \eps  -> eps { eps_is_boot = mod_deps }
        ; recomp <- checkList [checkModUsage this_pkg u | u <- mi_usages iface]
        ; return (recomp, Just iface)
-    }}}}}}}}}
+    }}}}}}}}}}
   where
     this_pkg = thisPackage (hsc_dflags hsc_env)
     -- This is a bit of a hack really
@@ -1273,19 +1325,19 @@ checkVersions hsc_env mod_summary iface
 -- | Check if any plugins are requesting recompilation
 checkPlugins :: HscEnv -> ModIface -> IfG RecompileRequired
 checkPlugins hsc iface = liftIO $ do
-  -- [(ModuleName, Plugin, [Opts])]
+  new_fingerprint <- fingerprintPlugins hsc
   let old_fingerprint = mi_plugin_hash iface
-      loaded_plugins = plugins (hsc_dflags hsc)
-  res <- mconcat <$> mapM checkPlugin loaded_plugins
-  return (pluginRecompileToRecompileRequired old_fingerprint res)
+  pr <- mconcat <$> mapM pluginRecompile' (plugins (hsc_dflags hsc))
+  return $
+    pluginRecompileToRecompileRequired old_fingerprint new_fingerprint pr
 
 fingerprintPlugins :: HscEnv -> IO Fingerprint
 fingerprintPlugins hsc_env = do
-  fingerprintPlugins' (plugins (hsc_dflags hsc_env))
+  fingerprintPlugins' $ plugins (hsc_dflags hsc_env)
 
-fingerprintPlugins' :: [LoadedPlugin] -> IO Fingerprint
+fingerprintPlugins' :: [PluginWithArgs] -> IO Fingerprint
 fingerprintPlugins' plugins = do
-  res <- mconcat <$> mapM checkPlugin plugins
+  res <- mconcat <$> mapM pluginRecompile' plugins
   return $ case res of
       NoForceRecompile ->  fingerprintString "NoForceRecompile"
       ForceRecompile   -> fingerprintString "ForceRecompile"
@@ -1295,17 +1347,49 @@ fingerprintPlugins' plugins = do
       (MaybeRecompile fp) -> fp
 
 
+pluginRecompileToRecompileRequired
+    :: Fingerprint -> Fingerprint -> PluginRecompile -> RecompileRequired
+pluginRecompileToRecompileRequired old_fp new_fp pr
+  | old_fp == new_fp =
+    case pr of
+      NoForceRecompile  -> UpToDate
 
-checkPlugin :: LoadedPlugin -> IO PluginRecompile
-checkPlugin (LoadedPlugin plugin _ opts) = pluginRecompile plugin opts
+      -- we already checked the fingerprint above so a mismatch is not possible
+      -- here, remember that: `fingerprint (MaybeRecomp x) == x`.
+      MaybeRecompile _  -> UpToDate
 
-pluginRecompileToRecompileRequired :: Fingerprint -> PluginRecompile -> RecompileRequired
-pluginRecompileToRecompileRequired old_fp pr =
-  case pr of
-    NoForceRecompile -> UpToDate
-    ForceRecompile   -> RecompBecause "Plugin forced recompilation"
-    MaybeRecompile fp  -> if fp == old_fp then UpToDate
-                                          else RecompBecause "Plugin fingerprint changed"
+      -- when we have an impure plugin in the stack we have to unconditionally
+      -- recompile since it might integrate all sorts of crazy IO results into
+      -- its compilation output.
+      ForceRecompile    -> RecompBecause "Impure plugin forced recompilation"
+
+  | old_fp `elem` magic_fingerprints ||
+    new_fp `elem` magic_fingerprints
+    -- The fingerprints do not match either the old or new one is a magic
+    -- fingerprint. This happens when non-pure plugins are added for the first
+    -- time or when we go from one recompilation strategy to another: (force ->
+    -- no-force, maybe-recomp -> no-force, no-force -> maybe-recomp etc.)
+    --
+    -- For example when we go from from ForceRecomp to NoForceRecomp
+    -- recompilation is triggered since the old impure plugins could have
+    -- changed the build output which is now back to normal.
+    = RecompBecause "Plugins changed"
+
+  | otherwise =
+    let reason = "Plugin fingerprint changed" in
+    case pr of
+      -- even though a plugin is forcing recompilation the fingerprint changed
+      -- which would cause recompilation anyways so we report the fingerprint
+      -- change instead.
+      ForceRecompile   -> RecompBecause reason
+
+      _                -> RecompBecause reason
+
+ where
+   magic_fingerprints =
+       [ fingerprintString "NoForceRecompile"
+       , fingerprintString "ForceRecompile"
+       ]
 
 
 -- | Check if an hsig file needs recompilation because its
@@ -1319,6 +1403,22 @@ checkHsig mod_summary iface = do
     case inner_mod == mi_semantic_module iface of
         True -> up_to_date (text "implementing module unchanged")
         False -> return (RecompBecause "implementing module changed")
+
+-- | Check if @.hie@ file is out of date or missing.
+checkHie :: ModSummary -> IfG RecompileRequired
+checkHie mod_summary = do
+    dflags <- getDynFlags
+    let hie_date_opt = ms_hie_date mod_summary
+        hs_date = ms_hs_date mod_summary
+    pure $ case gopt Opt_WriteHie dflags of
+               False -> UpToDate
+               True -> case hie_date_opt of
+                           Nothing -> RecompBecause "HIE file is missing"
+                           Just hie_date
+                               | hie_date < hs_date
+                               -> RecompBecause "HIE file is out of date"
+                               | otherwise
+                               -> UpToDate
 
 -- | Check the flags haven't changed
 checkFlagHash :: HscEnv -> ModIface -> IfG RecompileRequired
@@ -1638,18 +1738,16 @@ coAxBranchToIfaceBranch tc lhs_s
 -- use this one for standalone branches without incompatibles
 coAxBranchToIfaceBranch' :: TyCon -> CoAxBranch -> IfaceAxBranch
 coAxBranchToIfaceBranch' tc (CoAxBranch { cab_tvs = tvs, cab_cvs = cvs
+                                        , cab_eta_tvs = eta_tvs
                                         , cab_lhs = lhs
                                         , cab_roles = roles, cab_rhs = rhs })
-  = IfaceAxBranch { ifaxbTyVars  = toIfaceTvBndrs tidy_tvs
-                  , ifaxbCoVars  = map toIfaceIdBndr cvs
-                  , ifaxbLHS     = tidyToIfaceTcArgs env1 tc lhs
-                  , ifaxbRoles   = roles
-                  , ifaxbRHS     = tidyToIfaceType env1 rhs
-                  , ifaxbIncomps = [] }
-  where
-    (env1, tidy_tvs) = tidyTyCoVarBndrs emptyTidyEnv tvs
-    -- Don't re-bind in-scope tyvars
-    -- See Note [CoAxBranch type variables] in CoAxiom
+  = IfaceAxBranch { ifaxbTyVars    = toIfaceTvBndrs tvs
+                  , ifaxbCoVars    = map toIfaceIdBndr cvs
+                  , ifaxbEtaTyVars = toIfaceTvBndrs eta_tvs
+                  , ifaxbLHS       = toIfaceTcArgs tc lhs
+                  , ifaxbRoles     = roles
+                  , ifaxbRHS       = toIfaceType rhs
+                  , ifaxbIncomps   = [] }
 
 -----------------
 tyConToIfaceDecl :: TidyEnv -> TyCon -> (TidyEnv, IfaceDecl)
@@ -1711,7 +1809,8 @@ tyConToIfaceDecl env tycon
     -- an error.
     (tc_env1, tc_binders) = tidyTyConBinders env (tyConBinders tycon)
     tc_tyvars      = binderVars tc_binders
-    if_binders     = toIfaceTyVarBinders tc_binders
+    if_binders     = toIfaceTyCoVarBinders tc_binders
+                     -- No tidying of the binders; they are already tidy
     if_res_kind    = tidyToIfaceType tc_env1 (tyConResKind tycon)
     if_syn_type ty = tidyToIfaceType tc_env1 ty
     if_res_var     = getOccFS `fmap` tyConFamilyResVar_maybe tycon
@@ -1722,19 +1821,16 @@ tyConToIfaceDecl env tycon
                                                    (tidyToIfaceTcArgs tc_env1 tc ty)
                Nothing           -> IfNoParent
 
-    to_if_fam_flav OpenSynFamilyTyCon        = IfaceOpenSynFamilyTyCon
+    to_if_fam_flav OpenSynFamilyTyCon             = IfaceOpenSynFamilyTyCon
+    to_if_fam_flav AbstractClosedSynFamilyTyCon   = IfaceAbstractClosedSynFamilyTyCon
+    to_if_fam_flav (DataFamilyTyCon {})           = IfaceDataFamilyTyCon
+    to_if_fam_flav (BuiltInSynFamTyCon {})        = IfaceBuiltInSynFamTyCon
+    to_if_fam_flav (ClosedSynFamilyTyCon Nothing) = IfaceClosedSynFamilyTyCon Nothing
     to_if_fam_flav (ClosedSynFamilyTyCon (Just ax))
       = IfaceClosedSynFamilyTyCon (Just (axn, ibr))
       where defs = fromBranches $ coAxiomBranches ax
             ibr  = map (coAxBranchToIfaceBranch' tycon) defs
             axn  = coAxiomName ax
-    to_if_fam_flav (ClosedSynFamilyTyCon Nothing)
-      = IfaceClosedSynFamilyTyCon Nothing
-    to_if_fam_flav AbstractClosedSynFamilyTyCon = IfaceAbstractClosedSynFamilyTyCon
-    to_if_fam_flav (DataFamilyTyCon {})         = IfaceDataFamilyTyCon
-    to_if_fam_flav (BuiltInSynFamTyCon {})      = IfaceBuiltInSynFamTyCon
-
-
 
     ifaceConDecls (NewTyCon { data_con = con })    = IfNewTyCon  (ifaceConDecl con)
     ifaceConDecls (DataTyCon { data_cons = cons }) = IfDataTyCon (map ifaceConDecl cons)
@@ -1752,7 +1848,7 @@ tyConToIfaceDecl env tycon
         = IfCon   { ifConName    = dataConName data_con,
                     ifConInfix   = dataConIsInfix data_con,
                     ifConWrapper = isJust (dataConWrapId_maybe data_con),
-                    ifConExTvs   = map toIfaceTvBndr ex_tvs',
+                    ifConExTCvs  = map toIfaceBndr ex_tvs',
                     ifConUserTvBinders = map toIfaceForAllBndr user_bndrs',
                     ifConEqSpec  = map (to_eq_spec . eqSpecPair) eq_spec,
                     ifConCtxt    = tidyToIfaceContext con_env2 theta,
@@ -1777,27 +1873,27 @@ tyConToIfaceDecl env tycon
           con_env1 = (fst tc_env1, mkVarEnv (zipEqual "ifaceConDecl" univ_tvs tc_tyvars))
                      -- A bit grimy, perhaps, but it's simple!
 
-          (con_env2, ex_tvs') = tidyTyCoVarBndrs con_env1 ex_tvs
-          user_bndrs' = map (tidyUserTyVarBinder con_env2) user_bndrs
+          (con_env2, ex_tvs') = tidyVarBndrs con_env1 ex_tvs
+          user_bndrs' = map (tidyUserTyCoVarBinder con_env2) user_bndrs
           to_eq_spec (tv,ty) = (tidyTyVar con_env2 tv, tidyToIfaceType con_env2 ty)
 
           -- By this point, we have tidied every universal and existential
-          -- tyvar. Because of the dcUserTyVarBinders invariant
+          -- tyvar. Because of the dcUserTyCoVarBinders invariant
           -- (see Note [DataCon user type variable binders]), *every*
           -- user-written tyvar must be contained in the substitution that
           -- tidying produced. Therefore, tidying the user-written tyvars is a
           -- simple matter of looking up each variable in the substitution,
-          -- which tidyTyVarOcc accomplishes.
-          tidyUserTyVarBinder :: TidyEnv -> TyVarBinder -> TyVarBinder
-          tidyUserTyVarBinder env (TvBndr tv vis) =
-            TvBndr (tidyTyVarOcc env tv) vis
+          -- which tidyTyCoVarOcc accomplishes.
+          tidyUserTyCoVarBinder :: TidyEnv -> TyCoVarBinder -> TyCoVarBinder
+          tidyUserTyCoVarBinder env (Bndr tv vis) =
+            Bndr (tidyTyCoVarOcc env tv) vis
 
 classToIfaceDecl :: TidyEnv -> Class -> (TidyEnv, IfaceDecl)
 classToIfaceDecl env clas
   = ( env1
     , IfaceClass { ifName   = getName tycon,
                    ifRoles  = tyConRoles (classTyCon clas),
-                   ifBinders = toIfaceTyVarBinders tc_binders,
+                   ifBinders = toIfaceTyCoVarBinders tc_binders,
                    ifBody   = body,
                    ifFDs    = map toIfaceFD clas_fds })
   where
@@ -1849,10 +1945,10 @@ tidyTyConBinder :: TidyEnv -> TyConBinder -> (TidyEnv, TyConBinder)
 -- If the type variable "binder" is in scope, don't re-bind it
 -- In a class decl, for example, the ATD binders mention
 -- (amd must mention) the class tyvars
-tidyTyConBinder env@(_, subst) tvb@(TvBndr tv vis)
+tidyTyConBinder env@(_, subst) tvb@(Bndr tv vis)
  = case lookupVarEnv subst tv of
-     Just tv' -> (env,  TvBndr tv' vis)
-     Nothing  -> tidyTyVarBinder env tvb
+     Just tv' -> (env,  Bndr tv' vis)
+     Nothing  -> tidyTyCoVarBinder env tvb
 
 tidyTyConBinders :: TidyEnv -> [TyConBinder] -> (TidyEnv, [TyConBinder])
 tidyTyConBinders = mapAccumL tidyTyConBinder

@@ -4,6 +4,7 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE TupleSections #-}
 
 -- | Highly random utility functions
 --
@@ -15,7 +16,7 @@ module Util (
 
         -- * General list processing
         zipEqual, zipWithEqual, zipWith3Equal, zipWith4Equal,
-        zipLazy, stretchZipWith, zipWithAndUnzip,
+        zipLazy, stretchZipWith, zipWithAndUnzip, zipAndUnzip,
 
         zipWithLazy, zipWith3Lazy,
 
@@ -27,9 +28,9 @@ module Util (
         mapAndUnzip, mapAndUnzip3, mapAccumL2,
         nOfThem, filterOut, partitionWith,
 
-        dropWhileEndLE, spanEnd,
+        dropWhileEndLE, spanEnd, last2,
 
-        foldl1', foldl2, count, all2,
+        foldl1', foldl2, count, countWhile, all2,
 
         lengthExceeds, lengthIs, lengthIsNot,
         lengthAtLeast, lengthAtMost, lengthLessThan,
@@ -47,7 +48,7 @@ module Util (
 
         -- * Tuples
         fstOf3, sndOf3, thdOf3,
-        firstM, first3M,
+        firstM, first3M, secondM,
         fst3, snd3, third3,
         uncurry3,
         liftFst, liftSnd,
@@ -60,7 +61,7 @@ module Util (
         nTimes,
 
         -- * Sorting
-        sortWith, minWith, nubSort,
+        sortWith, minWith, nubSort, ordNub,
 
         -- * Comparisons
         isEqual, eqListBy, eqMaybeBy,
@@ -271,6 +272,9 @@ firstM f (x, y) = liftM (\x' -> (x', y)) (f x)
 first3M :: Monad m => (a -> m d) -> (a, b, c) -> m (d, b, c)
 first3M f (x, y, z) = liftM (\x' -> (x', y, z)) (f x)
 
+secondM :: Monad m => (b -> m c) -> (a, b) -> m (a, c)
+secondM f (x, y) = (x,) <$> f y
+
 {-
 ************************************************************************
 *                                                                      *
@@ -436,6 +440,15 @@ zipWithAndUnzip f (a:as) (b:bs)
     in
     (r1:rs1, r2:rs2)
 zipWithAndUnzip _ _ _ = ([],[])
+
+-- | This has the effect of making the two lists have equal length by dropping
+-- the tail of the longer one.
+zipAndUnzip :: [a] -> [b] -> ([a],[b])
+zipAndUnzip (a:as) (b:bs)
+  = let (rs1, rs2) = zipAndUnzip as bs
+    in
+    (a:rs1, b:rs2)
+zipAndUnzip _ _ = ([],[])
 
 mapAccumL2 :: (s1 -> s2 -> a -> (s1, s2, b)) -> s1 -> s2 -> [a] -> (s1, s2, [b])
 mapAccumL2 f s1 s2 xs = (s1', s2', ys)
@@ -624,6 +637,18 @@ minWith get_key xs = ASSERT( not (null xs) )
 nubSort :: Ord a => [a] -> [a]
 nubSort = Set.toAscList . Set.fromList
 
+-- | Remove duplicates but keep elements in order.
+--   O(n * log n)
+ordNub :: Ord a => [a] -> [a]
+ordNub xs
+  = go Set.empty xs
+  where
+    go _ [] = []
+    go s (x:xs)
+      | Set.member x s = go s xs
+      | otherwise = x : go (Set.insert x s) xs
+
+
 {-
 ************************************************************************
 *                                                                      *
@@ -679,6 +704,12 @@ count p = go 0
   where go !n [] = n
         go !n (x:xs) | p x       = go (n+1) xs
                      | otherwise = go n xs
+
+countWhile :: (a -> Bool) -> [a] -> Int
+-- Length of an /initial prefix/ of the list satsifying p
+countWhile p = go 0
+  where go !n (x:xs) | p x = go (n+1) xs
+        go !n _            = n
 
 {-
 @splitAt@, @take@, and @drop@ but with length of another
@@ -741,6 +772,12 @@ spanEnd p l = go l [] [] l
           | p x       = go yes (x : rev_yes) rev_no                  xs
           | otherwise = go xs  []            (x : rev_yes ++ rev_no) xs
 
+-- | Get the last two elements in a list. Partial!
+{-# INLINE last2 #-}
+last2 :: [a] -> (a,a)
+last2 = foldl' (\(_,x2) x -> (x2,x)) (partialError,partialError)
+  where
+    partialError = panic "last2 - list length less than two"
 
 snocView :: [a] -> Maybe ([a],a)
         -- Split off the last element

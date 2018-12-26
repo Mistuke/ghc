@@ -52,7 +52,7 @@ dr :: Double -> Double
 [GblId,
  Arity=1,
  Caf=NoCafRefs,
- Str=<S(S),1*U(U)>m,
+ Str=<S,1*U(U)>m,
  Unf=Unf{Src=InlineStable, TopLvl=True, Value=True, ConLike=True,
          WorkFree=True, Expandable=True,
          Guidance=ALWAYS_IF(arity=1,unsat_ok=True,boring_ok=False)
@@ -65,11 +65,11 @@ dr
       case x of { GHC.Types.D# x1 -> GHC.Types.D# (GHC.Prim.+## x1 x1) }
 
 -- RHS size: {terms: 1, types: 0, coercions: 0, joins: 0/0}
-dl :: Double -> Double
+dl [InlPrag=NOUSERINLINE[2]] :: Double -> Double
 [GblId,
  Arity=1,
  Caf=NoCafRefs,
- Str=<S(S),1*U(U)>m,
+ Str=<S,1*U(U)>m,
  Unf=Unf{Src=InlineStable, TopLvl=True, Value=True, ConLike=True,
          WorkFree=True, Expandable=True,
          Guidance=ALWAYS_IF(arity=1,unsat_ok=True,boring_ok=False)
@@ -82,7 +82,7 @@ fr :: Float -> Float
 [GblId,
  Arity=1,
  Caf=NoCafRefs,
- Str=<S(S),1*U(U)>m,
+ Str=<S,1*U(U)>m,
  Unf=Unf{Src=InlineStable, TopLvl=True, Value=True, ConLike=True,
          WorkFree=True, Expandable=True,
          Guidance=ALWAYS_IF(arity=1,unsat_ok=True,boring_ok=False)
@@ -97,11 +97,11 @@ fr
       }
 
 -- RHS size: {terms: 1, types: 0, coercions: 0, joins: 0/0}
-fl :: Float -> Float
+fl [InlPrag=NOUSERINLINE[2]] :: Float -> Float
 [GblId,
  Arity=1,
  Caf=NoCafRefs,
- Str=<S(S),1*U(U)>m,
+ Str=<S,1*U(U)>m,
  Unf=Unf{Src=InlineStable, TopLvl=True, Value=True, ConLike=True,
          WorkFree=True, Expandable=True,
          Guidance=ALWAYS_IF(arity=1,unsat_ok=True,boring_ok=False)

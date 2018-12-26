@@ -84,57 +84,61 @@ defined in module B.
 How do we ensure that we maintain the necessary consistency?
 
 * Call a module which defines at least one type family instance a
-"family instance module". This flag `mi_finsts` is recorded in the
-interface file.
+  "family instance module". This flag `mi_finsts` is recorded in the
+  interface file.
 
 * For every module we calculate the set of all of its direct and
-indirect dependencies that are family instance modules. This list
-`dep_finsts` is also recorded in the interface file so we can compute
-this list for a module from the lists for its direct dependencies.
+  indirect dependencies that are family instance modules. This list
+  `dep_finsts` is also recorded in the interface file so we can compute
+  this list for a module from the lists for its direct dependencies.
 
 * When type checking a module M we check consistency of all the type
-family instances that are either provided by its `dep_finsts` or
-defined in the module M itself. This is a pairwise check, i.e., for
-every pair of instances we must check that they are consistent.
+  family instances that are either provided by its `dep_finsts` or
+  defined in the module M itself. This is a pairwise check, i.e., for
+  every pair of instances we must check that they are consistent.
 
-- For family instances coming from `dep_finsts`, this is checked in
-checkFamInstConsistency, called from tcRnImports. See Note
-[Checking family instance consistency] for details on this check (and
-in particular how we avoid having to do all these checks for every
-module we compile).
+  - For family instances coming from `dep_finsts`, this is checked in
+    checkFamInstConsistency, called from tcRnImports. See Note
+    [Checking family instance consistency] for details on this check
+    (and in particular how we avoid having to do all these checks for
+    every module we compile).
 
-- That leaves checking the family instances defined in M itself
-against instances defined in either M or its `dep_finsts`. This is
-checked in `tcExtendLocalFamInstEnv'.
+  - That leaves checking the family instances defined in M itself
+    against instances defined in either M or its `dep_finsts`. This is
+    checked in `tcExtendLocalFamInstEnv'.
 
-There are two subtle points in this scheme which have not been
+There are four subtle points in this scheme which have not been
 addressed yet.
 
 * We have checked consistency of the family instances *defined* by M
-or its imports, but this is not by definition the same thing as the
-family instances *used* by M or its imports.  Specifically, we need to
-ensure when we use a type family instance while compiling M that this
-instance was really defined from either M or one of its imports,
-rather than being an instance that we happened to know about from
-reading an interface file in the course of compiling an unrelated
-module. Otherwise, we'll end up with no record of the fact that M
-depends on this family instance and type safety will be compromised.
-See #13102.
+  or its imports, but this is not by definition the same thing as the
+  family instances *used* by M or its imports.  Specifically, we need to
+  ensure when we use a type family instance while compiling M that this
+  instance was really defined from either M or one of its imports,
+  rather than being an instance that we happened to know about from
+  reading an interface file in the course of compiling an unrelated
+  module. Otherwise, we'll end up with no record of the fact that M
+  depends on this family instance and type safety will be compromised.
+  See #13102.
 
 * It can also happen that M uses a function defined in another module
-which is not transitively imported by M. Examples include the
-desugaring of various overloaded constructs, and references inserted
-by Template Haskell splices. If that function's definition makes use
-of type family instances which are not checked against those visible
-from M, type safety can again be compromised. See #13251.
+  which is not transitively imported by M. Examples include the
+  desugaring of various overloaded constructs, and references inserted
+  by Template Haskell splices. If that function's definition makes use
+  of type family instances which are not checked against those visible
+  from M, type safety can again be compromised. See #13251.
 
 * When a module C imports a boot module B.hs-boot, we check that C's
-type family instances are compatible with those visible from
-B.hs-boot. However, C will eventually be linked against a different
-module B.hs, which might define additional type family instances which
-are inconsistent with C's. This can also lead to loss of type safety.
-See #9562.
+  type family instances are compatible with those visible from
+  B.hs-boot. However, C will eventually be linked against a different
+  module B.hs, which might define additional type family instances which
+  are inconsistent with C's. This can also lead to loss of type safety.
+  See #9562.
 
+* The call to checkFamConsistency for imported functions occurs very
+  early (in tcRnImports) and that causes problems if the imported
+  instances use type declared in the module being compiled.
+  See Note [Loading your own hi-boot file] in LoadIface.
 -}
 
 {-
@@ -150,7 +154,7 @@ See #9562.
 -- It is defined here to avoid a dependency from FamInstEnv on the monad
 -- code.
 
-newFamInst :: FamFlavor -> CoAxiom Unbranched -> TcRnIf gbl lcl FamInst
+newFamInst :: FamFlavor -> CoAxiom Unbranched -> TcM FamInst
 -- Freshen the type variables of the FamInst branches
 newFamInst flavor axiom@(CoAxiom { co_ax_tc = fam_tc })
   = ASSERT2( tyCoVarsOfTypes lhs `subVarSet` tcv_set, text "lhs" <+> pp_ax )
@@ -162,13 +166,22 @@ newFamInst flavor axiom@(CoAxiom { co_ax_tc = fam_tc })
        ; let lhs'     = substTys subst lhs
              rhs'     = substTy  subst rhs
              tcvs'    = tvs' ++ cvs'
-       ; when (gopt Opt_DoCoreLinting dflags) $
+       ; ifErrsM (return ()) $ -- Don't lint when there are errors, because
+                               -- errors might mean TcTyCons.
+                               -- See Note [Recover from validity error] in TcTyClsDecls
+         when (gopt Opt_DoCoreLinting dflags) $
            -- Check that the types involved in this instance are well formed.
            -- Do /not/ expand type synonyms, for the reasons discussed in
            -- Note [Linting type synonym applications].
            case lintTypes dflags tcvs' (rhs':lhs') of
              Nothing       -> pure ()
-             Just fail_msg -> pprPanic "Core Lint error" fail_msg
+             Just fail_msg -> pprPanic "Core Lint error" (vcat [ fail_msg
+                                                               , ppr fam_tc
+                                                               , ppr subst
+                                                               , ppr tvs'
+                                                               , ppr cvs'
+                                                               , ppr lhs'
+                                                               , ppr rhs' ])
        ; return (FamInst { fi_fam      = tyConName fam_tc
                          , fi_flavor   = flavor
                          , fi_tcs      = roughMatchTcs lhs
@@ -178,8 +191,8 @@ newFamInst flavor axiom@(CoAxiom { co_ax_tc = fam_tc })
                          , fi_rhs      = rhs'
                          , fi_axiom    = axiom }) }
   where
-    lhs_kind = typeKind (mkTyConApp fam_tc lhs)
-    rhs_kind = typeKind rhs
+    lhs_kind = tcTypeKind (mkTyConApp fam_tc lhs)
+    rhs_kind = tcTypeKind rhs
     tcv_set  = mkVarSet (tvs ++ cvs)
     pp_ax    = pprCoAxiom axiom
     CoAxBranch { cab_tvs = tvs
@@ -687,14 +700,13 @@ environments (one for the EPS and one for the HPT).
 checkForConflicts :: FamInstEnvs -> FamInst -> TcM Bool
 checkForConflicts inst_envs fam_inst
   = do { let conflicts = lookupFamInstEnvConflicts inst_envs fam_inst
-             no_conflicts = null conflicts
        ; traceTc "checkForConflicts" $
          vcat [ ppr (map fim_instance conflicts)
               , ppr fam_inst
               -- , ppr inst_envs
          ]
-       ; unless no_conflicts $ conflictInstErr fam_inst conflicts
-       ; return no_conflicts }
+       ; reportConflictInstErr fam_inst conflicts
+       ; return (null conflicts) }
 
 -- | Check whether a new open type family equation can be added without
 -- violating injectivity annotation supplied by the user. Returns True when
@@ -730,9 +742,9 @@ makeInjectivityErrors fi_ax axiom inj conflicts
   = ASSERT2( any id inj, text "No injective type variables" )
     let lhs             = coAxBranchLHS axiom
         rhs             = coAxBranchRHS axiom
-
+        fam_tc          = coAxiomTyCon fi_ax
         are_conflicts   = not $ null conflicts
-        unused_inj_tvs  = unusedInjTvsInRHS (coAxiomTyCon fi_ax) inj lhs rhs
+        unused_inj_tvs  = unusedInjTvsInRHS fam_tc inj lhs rhs
         inj_tvs_unused  = not $ and (isEmptyVarSet <$> unused_inj_tvs)
         tf_headed       = isTFHeaded rhs
         bare_variables  = bareTvInRHSViolated lhs rhs
@@ -740,7 +752,7 @@ makeInjectivityErrors fi_ax axiom inj conflicts
 
         err_builder herald eqns
                         = ( hang herald
-                               2 (vcat (map (pprCoAxBranch fi_ax) eqns))
+                               2 (vcat (map (pprCoAxBranchUser fam_tc) eqns))
                           , coAxBranchSpan (head eqns) )
         errorIf p f     = if p then [f err_builder axiom] else []
      in    errorIf are_conflicts  (conflictInjInstErr     conflicts     )
@@ -763,11 +775,15 @@ unusedInjTvsInRHS :: TyCon -> [Bool] -> [Type] -> Type -> Pair TyVarSet
 unusedInjTvsInRHS tycon injList lhs rhs =
   (`minusVarSet` injRhsVars) <$> injLHSVars
     where
+      inj_pairs :: [(Type, ArgFlag)]
+      -- All the injective arguments, paired with their visiblity
+      inj_pairs = ASSERT2( injList `equalLength` lhs
+                         , ppr tycon $$ ppr injList $$ ppr lhs )
+                  filterByList injList (lhs `zip` tyConArgFlags tycon lhs)
+
       -- set of type and kind variables in which type family is injective
-      (invis_pairs, vis_pairs)
-        = partitionInvisibles tycon snd (zipEqual "unusedInjTvsInRHS" injList lhs)
-      invis_lhs = uncurry filterByList $ unzip invis_pairs
-      vis_lhs   = uncurry filterByList $ unzip vis_pairs
+      invis_lhs, vis_lhs :: [Type]
+      (invis_lhs, vis_lhs) = partitionInvisibles inj_pairs
 
       invis_vars = tyCoVarsOfTypes invis_lhs
       Pair invis_vars' vis_vars = splitVisVarsOfTypes vis_lhs
@@ -788,6 +804,9 @@ injTyVarsOfType :: TcTauType -> TcTyVarSet
 -- E.g.   Suppose F is injective in its second arg, but not its first
 --        then injVarOfType (Either a (F [b] (a,c))) = {a,c}
 --        Determining the overall type determines a,c but not b.
+injTyVarsOfType ty
+  | Just ty' <- coreView ty -- #12430
+  = injTyVarsOfType ty'
 injTyVarsOfType (TyVarTy v)
   = unitVarSet v `unionVarSet` injTyVarsOfType (tyVarKind v)
 injTyVarsOfType (TyConApp tc tys)
@@ -834,16 +853,6 @@ bareTvInRHSViolated pats rhs | isTyVarTy rhs
 bareTvInRHSViolated _ _ = []
 
 
-conflictInstErr :: FamInst -> [FamInstMatch] -> TcRn ()
-conflictInstErr fam_inst conflictingMatch
-  | (FamInstMatch { fim_instance = confInst }) : _ <- conflictingMatch
-  = let (err, span) = makeFamInstsErr
-                            (text "Conflicting family instance declarations:")
-                            [fam_inst, confInst]
-    in setSrcSpan span $ addErr err
-  | otherwise
-  = panic "conflictInstErr"
-
 -- | Type of functions that use error message and a list of axioms to build full
 -- error message (with a source location) for injective type families.
 type InjErrorBuilder = SDoc -> [CoAxBranch] -> (SDoc, SrcSpan)
@@ -878,24 +887,23 @@ conflictInjInstErr conflictingEqns errorBuilder tyfamEqn
 unusedInjectiveVarsErr :: Pair TyVarSet -> InjErrorBuilder -> CoAxBranch
                        -> (SDoc, SrcSpan)
 unusedInjectiveVarsErr (Pair invis_vars vis_vars) errorBuilder tyfamEqn
-  = errorBuilder (injectivityErrorHerald True $$ msg)
-                 [tyfamEqn]
+  = let (doc, loc) = errorBuilder (injectivityErrorHerald True $$ msg)
+                                  [tyfamEqn]
+    in (pprWithExplicitKindsWhen has_kinds doc, loc)
     where
       tvs = invis_vars `unionVarSet` vis_vars
       has_types = not $ isEmptyVarSet vis_vars
       has_kinds = not $ isEmptyVarSet invis_vars
 
       doc = sep [ what <+> text "variable" <>
-                  pluralVarSet tvs <+> pprVarSet tvs (pprQuotedList . toposortTyVars)
+                  pluralVarSet tvs <+> pprVarSet tvs (pprQuotedList . scopedSort)
                 , text "cannot be inferred from the right-hand side." ]
       what = case (has_types, has_kinds) of
                (True, True)   -> text "Type and kind"
                (True, False)  -> text "Type"
                (False, True)  -> text "Kind"
                (False, False) -> pprPanic "mkUnusedInjectiveVarsErr" $ ppr tvs
-      print_kinds_info = ppWhen has_kinds ppSuggestExplicitKinds
-      msg = doc $$ print_kinds_info $$
-            text "In the type family equation:"
+      msg = doc $$ text "In the type family equation:"
 
 -- | Build error message for equation that has a type family call at the top
 -- level of RHS
@@ -918,18 +926,21 @@ bareVariableInRHSErr tys errorBuilder famInst
                   text "variables:" <+> pprQuotedList tys) [famInst]
 
 
-makeFamInstsErr :: SDoc -> [FamInst] -> (SDoc, SrcSpan)
-makeFamInstsErr herald insts
-  = ASSERT( not (null insts) )
-    ( hang herald
-         2 (vcat [ pprCoAxBranchHdr (famInstAxiom fi) 0
-                 | fi <- sorted ])
-    , srcSpan )
+reportConflictInstErr :: FamInst -> [FamInstMatch] -> TcRn ()
+reportConflictInstErr _ []
+  = return ()  -- No conflicts
+reportConflictInstErr fam_inst (match1 : _)
+  | FamInstMatch { fim_instance = conf_inst } <- match1
+  , let sorted  = sortWith getSpan [fam_inst, conf_inst]
+        fi1     = head sorted
+        span    = coAxBranchSpan (coAxiomSingleBranch (famInstAxiom fi1))
+  = setSrcSpan span $ addErr $
+    hang (text "Conflicting family instance declarations:")
+       2 (vcat [ pprCoAxBranchUser (coAxiomTyCon ax) (coAxiomSingleBranch ax)
+               | fi <- sorted
+               , let ax = famInstAxiom fi ])
  where
    getSpan = getSrcLoc . famInstAxiom
-   sorted  = sortWith getSpan insts
-   fi1     = head sorted
-   srcSpan = coAxBranchSpan (coAxiomSingleBranch (famInstAxiom fi1))
    -- The sortWith just arranges that instances are dislayed in order
    -- of source location, which reduced wobbling in error messages,
    -- and is better for users

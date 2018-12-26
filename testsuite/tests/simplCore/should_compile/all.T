@@ -147,12 +147,12 @@ test('T7865', normal, run_command, ['$MAKE -s --no-print-directory T7865'])
 test('T7785', only_ways(['optasm']), compile, ['-ddump-rules'])
 test('T7702',
      [extra_files(['T7702plugin']),
+      only_ways([config.ghc_plugin_way]),
       pre_cmd('$MAKE -s --no-print-directory -C T7702plugin package.T7702 TOP={top}'),
       # we say 18mb peak allocated +/- 70% because other compiler flags have
       # a large effect on allocation which is hard to separate from the
       # allocation done by the plugin... but a regression allocates > 90mb
-      compiler_stats_num_field('peak_megabytes_allocated',
-          [(wordsize(32), 18, 70), (wordsize(64), 18, 70)])
+      collect_compiler_stats('peak_megabytes_allocated',70),
      ],
      compile,
      ['-v0 -package-db T7702plugin/pkg.T7702/local.package.conf -fplugin T7702Plugin -package T7702plugin ' + config.plugin_way_flags])
@@ -318,4 +318,12 @@ test('T15005', normal, compile, ['-O'])
 # we omit profiling because it affects the optimiser and makes the test fail
 test('T15056', [extra_files(['T15056a.hs']), omit_ways(['profasm'])], multimod_compile, ['T15056', '-O -v0 -ddump-rule-firings'])
 test('T15186', normal, multimod_compile, ['T15186', '-v0'])
+test('T15517', normal, compile, ['-O0'])
+test('T15517a', normal, compile, ['-O0'])
 test('T15453', normal, compile, ['-dcore-lint -O1'])
+test('T15445', normal, multimod_compile, ['T15445', '-v0 -O -ddump-rule-firings'])
+test('T15631',
+     normal,
+     run_command,
+     ['$MAKE -s --no-print-directory T15631'])
+test('T15673', normal, compile, ['-O'])

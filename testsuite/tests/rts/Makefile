@@ -190,3 +190,25 @@ T14695:
 InternalCounters:
 	"$(TEST_HC)" +RTS -s --internal-counters -RTS 2>&1 | grep "Internal Counters"
 	-"$(TEST_HC)" +RTS -s -RTS 2>&1 | grep "Internal Counters"
+
+.PHONY: KeepCafsFail
+KeepCafsFail:
+	"$(TEST_HC)" -c -g -v0 KeepCafsBase.hs KeepCafs1.hs KeepCafs2.hs
+	"$(TEST_HC)" -g -v0 KeepCafsMain.hs KeepCafsBase.o -debug -rdynamic -fwhole-archive-hs-libs $(KEEPCAFS)
+	./KeepCafsMain 2>&1 || echo "exit($$?)"
+
+.PHONY: KeepCafs
+KeepCafs:
+	"${MAKE}" KeepCafsFail KEEPCAFS=-fkeep-cafs
+
+.PHONY: EventlogOutput1
+EventlogOutput1:
+	"$(TEST_HC)" -eventlog -v0 EventlogOutput.hs
+	./EventlogOutput +RTS -l -olhello.eventlog
+	ls hello.eventlog >/dev/null
+
+.PHONY: EventlogOutput2
+EventlogOutput2:
+	"$(TEST_HC)" -eventlog -v0 EventlogOutput.hs
+	./EventlogOutput +RTS -l
+	ls EventlogOutput.eventlog >/dev/null

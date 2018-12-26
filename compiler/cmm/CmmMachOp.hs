@@ -2,7 +2,7 @@ module CmmMachOp
     ( MachOp(..)
     , pprMachOp, isCommutableMachOp, isAssociativeMachOp
     , isComparisonMachOp, maybeIntComparison, machOpResultType
-    , machOpArgReps, maybeInvertComparison
+    , machOpArgReps, maybeInvertComparison, isFloatComparison
 
     -- MachOp builders
     , mo_wordAdd, mo_wordSub, mo_wordEq, mo_wordNe,mo_wordMul, mo_wordSQuot
@@ -107,6 +107,14 @@ data MachOp
   | MO_FS_Conv Width Width      -- Float -> Signed int
   | MO_SS_Conv Width Width      -- Signed int -> Signed int
   | MO_UU_Conv Width Width      -- unsigned int -> unsigned int
+  | MO_XX_Conv Width Width      -- int -> int; puts no requirements on the
+                                -- contents of upper bits when extending;
+                                -- narrowing is simply truncation; the only
+                                -- expectation is that we can recover the
+                                -- original value by applying the opposite
+                                -- MO_XX_Conv, e.g.,
+                                --   MO_XX_CONV W64 W8 (MO_XX_CONV W8 W64 x)
+                                -- is equivalent to just x.
   | MO_FF_Conv Width Width      -- Float -> Float
 
   -- Vector element insertion and extraction operations
@@ -314,6 +322,17 @@ maybeIntComparison mop =
     MO_U_Lt w  -> Just w
     _ -> Nothing
 
+isFloatComparison :: MachOp -> Bool
+isFloatComparison mop =
+  case mop of
+    MO_F_Eq {} -> True
+    MO_F_Ne {} -> True
+    MO_F_Ge {} -> True
+    MO_F_Le {} -> True
+    MO_F_Gt {} -> True
+    MO_F_Lt {} -> True
+    _other     -> False
+
 -- -----------------------------------------------------------------------------
 -- Inverting conditions
 
@@ -392,6 +411,7 @@ machOpResultType dflags mop tys =
 
     MO_SS_Conv _ to     -> cmmBits to
     MO_UU_Conv _ to     -> cmmBits to
+    MO_XX_Conv _ to     -> cmmBits to
     MO_FS_Conv _ to     -> cmmBits to
     MO_SF_Conv _ to     -> cmmFloat to
     MO_FF_Conv _ to     -> cmmFloat to
@@ -483,6 +503,7 @@ machOpArgReps dflags op =
 
     MO_SS_Conv from _   -> [from]
     MO_UU_Conv from _   -> [from]
+    MO_XX_Conv from _   -> [from]
     MO_SF_Conv from _   -> [from]
     MO_FS_Conv from _   -> [from]
     MO_FF_Conv from _   -> [from]
@@ -531,6 +552,9 @@ data CallishMachOp
   | MO_F64_Asin
   | MO_F64_Acos
   | MO_F64_Atan
+  | MO_F64_Asinh
+  | MO_F64_Acosh
+  | MO_F64_Atanh
   | MO_F64_Log
   | MO_F64_Exp
   | MO_F64_Fabs
@@ -545,6 +569,9 @@ data CallishMachOp
   | MO_F32_Asin
   | MO_F32_Acos
   | MO_F32_Atan
+  | MO_F32_Asinh
+  | MO_F32_Acosh
+  | MO_F32_Atanh
   | MO_F32_Log
   | MO_F32_Exp
   | MO_F32_Fabs

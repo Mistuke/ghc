@@ -82,13 +82,13 @@ import IdInfo
 import Var
 import VarSet
 import UniqSet          ( nonDetFoldUniqSet )
+import UniqDSet         ( getUniqDSet )
 import VarEnv
 import Literal          ( litIsTrivial )
 import Demand           ( StrictSig, Demand, isStrictDmd, splitStrictSig, increaseStrictSigArity )
 import Name             ( getOccName, mkSystemVarName )
 import OccName          ( occNameString )
-import Type             ( Type, mkLamTypes, splitTyConApp_maybe, tyCoVarsOfType )
-import TyCoRep          ( closeOverKindsDSet )
+import Type             ( Type, mkLamTypes, splitTyConApp_maybe, tyCoVarsOfType, closeOverKindsDSet )
 import BasicTypes       ( Arity, RecFlag(..), isRec )
 import DataCon          ( dataConOrigResTy )
 import TysWiredIn
@@ -167,7 +167,7 @@ out at all.  See notes with lvlMFE below.
 
 But, check this out:
 
--- At one time I tried the effect of not float anything out of an InlineMe,
+-- At one time I tried the effect of not floating anything out of an InlineMe,
 -- but it sometimes works badly.  For example, consider PrelArr.done.  It
 -- has the form         __inline (\d. e)
 -- where e doesn't mention d.  If we float this to
@@ -366,7 +366,7 @@ lvlExpr env expr@(_, AnnLam {})
     (bndrs, body)        = collectAnnBndrs expr
     (env1, bndrs1)       = substBndrsSL NonRecursive env bndrs
     (new_env, new_bndrs) = lvlLamBndrs env1 (le_ctxt_lvl env) bndrs1
-        -- At one time we called a special verion of collectBinders,
+        -- At one time we called a special version of collectBinders,
         -- which ignored coercions, because we don't want to split
         -- a lambda like this (\x -> coerce t (\s -> ...))
         -- This used to happen quite a bit in state-transformer programs,
@@ -403,13 +403,13 @@ lvlApp env orig_expr ((_,AnnVar fn), args)
   , Nothing <- isClassOpId_maybe fn
   =  do { rargs' <- mapM (lvlNonTailMFE env False) rargs
         ; lapp'  <- lvlNonTailMFE env False lapp
-        ; return (foldl App lapp' rargs') }
+        ; return (foldl' App lapp' rargs') }
 
   | otherwise
   = do { (_, args') <- mapAccumLM lvl_arg stricts args
             -- Take account of argument strictness; see
             -- Note [Floating to the top]
-       ; return (foldl App (lookupVar env fn) args') }
+       ; return (foldl' App (lookupVar env fn) args') }
   where
     n_val_args = count (isValArg . deAnnotate) args
     arity      = idArity fn
@@ -450,7 +450,7 @@ lvlApp env _ (fun, args)
      -- arguments and the function.
      do { args' <- mapM (lvlNonTailMFE env False) args
         ; fun'  <- lvlNonTailExpr env fun
-        ; return (foldl App fun' args') }
+        ; return (foldl' App fun' args') }
 
 -------------------------------------------
 lvlCase :: LevelEnv             -- Level of in-scope names/tyvars
@@ -460,13 +460,12 @@ lvlCase :: LevelEnv             -- Level of in-scope names/tyvars
         -> [CoreAltWithFVs]     -- Input alternatives
         -> LvlM LevelledExpr    -- Result expression
 lvlCase env scrut_fvs scrut' case_bndr ty alts
+  -- See Note [Floating single-alternative cases]
   | [(con@(DataAlt {}), bs, body)] <- alts
-  , exprOkForSpeculation (deTagExpr scrut')
-                                  -- See Note [Check the output scrutinee for okForSpec]
+  , exprIsHNF (deTagExpr scrut')  -- See Note [Check the output scrutinee for exprIsHNF]
   , not (isTopLvl dest_lvl)       -- Can't have top-level cases
   , not (floatTopLvlOnly env)     -- Can float anywhere
-  =     -- See Note [Floating cases]
-        -- Always float the case if possible
+  =     -- Always float the case if possible
         -- Unlike lets we don't insist that it escapes a value lambda
     do { (env1, (case_bndr' : bs')) <- cloneCaseBndrs env dest_lvl (case_bndr : bs)
        ; let rhs_env = extendCaseBndrEnv env1 case_bndr scrut'
@@ -492,15 +491,15 @@ lvlCase env scrut_fvs scrut' case_bndr ty alts
       where
         (new_env, bs') = substAndLvlBndrs NonRecursive alts_env incd_lvl bs
 
-{-
-Note [Floating cases]
-~~~~~~~~~~~~~~~~~~~~~
+{- Note [Floating single-alternative cases]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Consider this:
   data T a = MkT !a
   f :: T Int -> blah
   f x vs = case x of { MkT y ->
              let f vs = ...(case y of I# w -> e)...f..
              in f vs
+
 Here we can float the (case y ...) out, because y is sure
 to be evaluated, to give
   f x vs = case x of { MkT y ->
@@ -512,30 +511,49 @@ That saves unboxing it every time round the loop.  It's important in
 some DPH stuff where we really want to avoid that repeated unboxing in
 the inner loop.
 
-Things to note
+Things to note:
+
+ * The test we perform is exprIsHNF, and /not/ exprOkForSpeculation.
+
+     - exrpIsHNF catches the key case of an evaluated variable
+
+     - exprOkForSpeculation is /false/ of an evaluated variable;
+       See Note [exprOkForSpeculation and evaluated variables] in CoreUtils
+       So we'd actually miss the key case!
+
+     - Nothing is gained from the extra generality of exprOkForSpeculation
+       since we only consider floating a case whose single alternative
+       is a DataAlt   K a b -> rhs
+
  * We can't float a case to top level
+
  * It's worth doing this float even if we don't float
    the case outside a value lambda.  Example
      case x of {
        MkT y -> (case y of I# w2 -> ..., case y of I# w2 -> ...)
    If we floated the cases out we could eliminate one of them.
+
  * We only do this with a single-alternative case
 
-Note [Check the output scrutinee for okForSpec]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Note [Check the output scrutinee for exprIsHNF]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Consider this:
   case x of y {
     A -> ....(case y of alts)....
   }
-Because of the binder-swap, the inner case will get substituted to
-(case x of ..).  So when testing whether the scrutinee is
-okForSpeculation we must be careful to test the *result* scrutinee ('x'
-in this case), not the *input* one 'y'.  The latter *is* ok for
-speculation here, but the former is not -- and indeed we can't float
-the inner case out, at least not unless x is also evaluated at its
-binding site.  See Trac #5453.
 
-That's why we apply exprOkForSpeculation to scrut' and not to scrut.
+Because of the binder-swap, the inner case will get substituted to
+(case x of ..).  So when testing whether the scrutinee is in HNF we
+must be careful to test the *result* scrutinee ('x' in this case), not
+the *input* one 'y'.  The latter *is* in HNF here (because y is
+evaluated), but the former is not -- and indeed we can't float the
+inner case out, at least not unless x is also evaluated at its binding
+site.  See Trac #5453.
+
+That's why we apply exprIsHNF to scrut' and not to scrut.
+
+See Note [Floating single-alternative cases] for why
+we use exprIsHNF in the first place.
 -}
 
 lvlNonTailMFE :: LevelEnv             -- Level of in-scope names/tyvars
@@ -980,7 +998,7 @@ It's important to float Integer literals, so that they get shared,
 rather than being allocated every time round the loop.
 Hence the litIsTrivial.
 
-Ditto literal strings (MachStr), which we'd like to float to top
+Ditto literal strings (LitString), which we'd like to float to top
 level, which is now possible.
 
 
@@ -1103,7 +1121,7 @@ lvlBind env (AnnRec pairs)
         -- this, allocation rises significantly on some programs
         --
         -- We could elaborate it for the case where there are several
-        -- mutually functions, but it's quite a bit more complicated
+        -- mutually recursive functions, but it's quite a bit more complicated
         --
         -- This all seems a bit ad hoc -- sigh
     let (rhs_env, abs_vars_w_lvls) = lvlLamBndrs env dest_lvl abs_vars
@@ -1212,7 +1230,7 @@ lvlFloatRhs abs_vars dest_lvl env rec is_bot mb_join_arity rhs
 
 {- Note [Floating from a RHS]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-When float the RHS of a let-binding, we don't always want to apply
+When floating the RHS of a let-binding, we don't always want to apply
 lvlMFE to the body of a lambda, as we usually do, because the entire
 binding body is already going to the right place (dest_lvl).
 
@@ -1270,7 +1288,7 @@ substBndrsSL :: RecFlag -> LevelEnv -> [InVar] -> (LevelEnv, [OutVar])
 -- So named only to avoid the name clash with CoreSubst.substBndrs
 substBndrsSL is_rec env@(LE { le_subst = subst, le_env = id_env }) bndrs
   = ( env { le_subst    = subst'
-          , le_env      = foldl add_id  id_env (bndrs `zip` bndrs') }
+          , le_env      = foldl' add_id  id_env (bndrs `zip` bndrs') }
     , bndrs')
   where
     (subst', bndrs') = case is_rec of
@@ -1405,7 +1423,7 @@ isFunction (_, AnnLam b e) | isId b    = True
 isFunction _                           = False
 
 countFreeIds :: DVarSet -> Int
-countFreeIds = nonDetFoldUDFM add 0
+countFreeIds = nonDetFoldUDFM add 0 . getUniqDSet
   -- It's OK to use nonDetFoldUDFM here because we're just counting things.
   where
     add :: Var -> Int -> Int
@@ -1479,7 +1497,7 @@ addLvl :: Level -> VarEnv Level -> OutVar -> VarEnv Level
 addLvl dest_lvl env v' = extendVarEnv env v' dest_lvl
 
 addLvls :: Level -> VarEnv Level -> [OutVar] -> VarEnv Level
-addLvls dest_lvl env vs = foldl (addLvl dest_lvl) env vs
+addLvls dest_lvl env vs = foldl' (addLvl dest_lvl) env vs
 
 floatLams :: LevelEnv -> Maybe Int
 floatLams le = floatOutLambdas (le_switches le)
@@ -1596,8 +1614,8 @@ newPolyBndrs dest_lvl
       ; let new_bndrs = zipWith mk_poly_bndr bndrs uniqs
             bndr_prs  = bndrs `zip` new_bndrs
             env' = env { le_lvl_env = addLvls dest_lvl lvl_env new_bndrs
-                       , le_subst   = foldl add_subst subst   bndr_prs
-                       , le_env     = foldl add_id    id_env  bndr_prs }
+                       , le_subst   = foldl' add_subst subst   bndr_prs
+                       , le_env     = foldl' add_id    id_env  bndr_prs }
       ; return (env', new_bndrs) }
   where
     add_subst env (v, v') = extendIdSubst env v (mkVarApps (Var v') abs_vars)
@@ -1651,7 +1669,7 @@ cloneCaseBndrs env@(LE { le_subst = subst, le_lvl_env = lvl_env, le_env = id_env
                         , le_join_ceil = new_lvl
                         , le_lvl_env   = addLvls new_lvl lvl_env vs'
                         , le_subst     = subst'
-                        , le_env       = foldl add_id id_env (vs `zip` vs') }
+                        , le_env       = foldl' add_id id_env (vs `zip` vs') }
 
        ; return (env', vs') }
 
@@ -1673,7 +1691,7 @@ cloneLetVars is_rec
              prs  = vs `zip` vs2
              env' = env { le_lvl_env = addLvls dest_lvl lvl_env vs2
                         , le_subst   = subst'
-                        , le_env     = foldl add_id id_env prs }
+                        , le_env     = foldl' add_id id_env prs }
 
        ; return (env', vs2) }
   where
@@ -1682,7 +1700,7 @@ cloneLetVars is_rec
           | otherwise = v
 
     zap_join | isTopLvl dest_lvl = zapJoinId
-             | otherwise         = \v -> v
+             | otherwise         = id
 
 add_id :: IdEnv ([Var], LevelledExpr) -> (Var, Var) -> IdEnv ([Var], LevelledExpr)
 add_id id_env (v, v1)

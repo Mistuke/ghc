@@ -88,21 +88,6 @@ valid_hole_fits.hs:27:5: warning: [-Wtyped-holes (in -Wdefault)]
           (imported from ‘Prelude’ at valid_hole_fits.hs:3:1-40
            (and originally defined in ‘GHC.Base’))
 
-valid_hole_fits.hs:30:5: warning: [-Wdeferred-type-errors (in -Wdefault)]
-    • Ambiguous type variable ‘a1’ arising from a use of ‘show’
-      prevents the constraint ‘(Show a1)’ from being solved.
-      Probable fix: use a type annotation to specify what ‘a1’ should be.
-      These potential instances exist:
-        instance (Show a, Show b) => Show (Either a b)
-          -- Defined in ‘Data.Either’
-        instance Show Ordering -- Defined in ‘GHC.Show’
-        instance Show Integer -- Defined in ‘GHC.Show’
-        ...plus 23 others
-        ...plus 70 instances involving out-of-scope types
-        (use -fprint-potential-instances to see them all)
-    • In the expression: show _
-      In an equation for ‘f’: f = show _
-
 valid_hole_fits.hs:30:10: warning: [-Wtyped-holes (in -Wdefault)]
     • Found hole: _ :: a1
       Where: ‘a1’ is an ambiguous type variable
@@ -124,34 +109,20 @@ valid_hole_fits.hs:30:10: warning: [-Wtyped-holes (in -Wdefault)]
         True :: Bool
           (imported from ‘Prelude’ at valid_hole_fits.hs:3:1-40
            (and originally defined in ‘GHC.Types’))
-        EQ :: Ordering
+        LT :: Ordering
           (imported from ‘Prelude’ at valid_hole_fits.hs:3:1-40
            (and originally defined in ‘GHC.Types’))
-        LT :: Ordering
+        EQ :: Ordering
           (imported from ‘Prelude’ at valid_hole_fits.hs:3:1-40
            (and originally defined in ‘GHC.Types’))
         GT :: Ordering
           (imported from ‘Prelude’ at valid_hole_fits.hs:3:1-40
            (and originally defined in ‘GHC.Types’))
+        () :: () (bound at <wired into compiler>)
         pi :: forall a. Floating a => a
           with pi @Double
           (imported from ‘Prelude’ at valid_hole_fits.hs:3:1-40
            (and originally defined in ‘GHC.Float’))
-
-valid_hole_fits.hs:34:5: warning: [-Wdeferred-type-errors (in -Wdefault)]
-    • Ambiguous type variable ‘a0’ arising from a use of ‘show’
-      prevents the constraint ‘(Show a0)’ from being solved.
-      Probable fix: use a type annotation to specify what ‘a0’ should be.
-      These potential instances exist:
-        instance (Show a, Show b) => Show (Either a b)
-          -- Defined in ‘Data.Either’
-        instance Show Ordering -- Defined in ‘GHC.Show’
-        instance Show Integer -- Defined in ‘GHC.Show’
-        ...plus 23 others
-        ...plus 70 instances involving out-of-scope types
-        (use -fprint-potential-instances to see them all)
-    • In the expression: show (_ (_ :: Bool))
-      In an equation for ‘h’: h = show (_ (_ :: Bool))
 
 valid_hole_fits.hs:34:11: warning: [-Wtyped-holes (in -Wdefault)]
     • Found hole: _ :: Bool -> a0
@@ -224,13 +195,41 @@ valid_hole_fits.hs:34:14: warning: [-Wtyped-holes (in -Wdefault)]
           (imported from ‘Prelude’ at valid_hole_fits.hs:3:1-40
            (and originally defined in ‘GHC.Enum’))
 
-valid_hole_fits.hs:37:8: warning: [-Wtyped-holes (in -Wdefault)]
+valid_hole_fits.hs:38:10: warning: [-Wtyped-holes (in -Wdefault)]
+    • Found hole: _ :: a -> [a] -> [a]
+      Where: ‘a’ is a rigid type variable bound by
+               the type signature for:
+                 myCons :: forall a. a -> [a] -> [a]
+               at valid_hole_fits.hs:37:1-25
+    • In the expression: _
+      In an equation for ‘myCons’: myCons = _
+    • Relevant bindings include
+        myCons :: a -> [a] -> [a] (bound at valid_hole_fits.hs:38:1)
+      Valid hole fits include
+        myCons :: a -> [a] -> [a] (bound at valid_hole_fits.hs:38:1)
+        (:) :: forall a. a -> [a] -> [a]
+          with (:) @a
+          (bound at <wired into compiler>)
+        (<$) :: forall (f :: * -> *) a b. Functor f => a -> f b -> f a
+          with (<$) @[] @a @a
+          (imported from ‘Prelude’ at valid_hole_fits.hs:3:1-40
+           (and originally defined in ‘GHC.Base’))
+        seq :: forall a b. a -> b -> b
+          with seq @a @[a]
+          (imported from ‘Prelude’ at valid_hole_fits.hs:3:1-40
+           (and originally defined in ‘GHC.Prim’))
+        mempty :: forall a. Monoid a => a
+          with mempty @(a -> [a] -> [a])
+          (imported from ‘Prelude’ at valid_hole_fits.hs:3:1-40
+           (and originally defined in ‘GHC.Base’))
+
+valid_hole_fits.hs:41:8: warning: [-Wtyped-holes (in -Wdefault)]
     • Found hole: _ :: [Char] -> IO ()
     • In the expression: _
       In the expression: _ "hello, world"
       In an equation for ‘main’: main = _ "hello, world"
     • Relevant bindings include
-        main :: IO () (bound at valid_hole_fits.hs:37:1)
+        main :: IO () (bound at valid_hole_fits.hs:41:1)
       Valid hole fits include
         ps :: String -> IO () (defined at valid_hole_fits.hs:9:1)
         System.IO.putStr :: String -> IO ()

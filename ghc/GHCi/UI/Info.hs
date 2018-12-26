@@ -2,6 +2,7 @@
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ViewPatterns        #-}
 
 -- | Get information on modules, expressions, and identifiers
 module GHCi.UI.Info
@@ -57,6 +58,7 @@ data ModInfo = ModInfo
       -- ^ Again, useful from GHC for accessing information
       -- (exports, instances, scope) from a module.
     , modinfoLastUpdate :: !UTCTime
+      -- ^ The timestamp of the file used to generate this record.
     }
 
 -- | Type of some span of source code. Most of these fields are
@@ -276,14 +278,23 @@ collectInfo ms loaded = do
     cacheInvalid name = case M.lookup name ms of
         Nothing -> return True
         Just mi -> do
-            let src_fp = ml_hs_file (ms_location (modinfoSummary mi))
-                obj_fp = ml_obj_file (ms_location (modinfoSummary mi))
-                fp     = fromMaybe obj_fp src_fp
+            let fp = srcFilePath (modinfoSummary mi)
                 last' = modinfoLastUpdate mi
+            current <- getModificationTime fp
             exists <- doesFileExist fp
             if exists
-                then (> last') <$> getModificationTime fp
+                then return $ current /= last'
                 else return True
+
+-- | Get the source file path from a ModSummary.
+-- If the .hs file is missing, and the .o file exists,
+-- we return the .o file path.
+srcFilePath :: ModSummary -> FilePath
+srcFilePath modSum = fromMaybe obj_fp src_fp
+    where
+        src_fp = ml_hs_file ms_loc
+        obj_fp = ml_obj_file ms_loc
+        ms_loc = ms_location modSum
 
 -- | Get info about the module: summary, types, etc.
 getModInfo :: (GhcMonad m) => ModuleName -> m ModInfo
@@ -293,8 +304,8 @@ getModInfo name = do
     typechecked <- typecheckModule p
     allTypes <- processAllTypeCheckedModule typechecked
     let i = tm_checked_module_info typechecked
-    now <- liftIO getCurrentTime
-    return (ModInfo m allTypes i now)
+    ts <- liftIO $ getModificationTime $ srcFilePath m
+    return (ModInfo m allTypes i ts)
 
 -- | Get ALL source spans in the module.
 processAllTypeCheckedModule :: forall m . GhcMonad m => TypecheckedModule
@@ -311,7 +322,7 @@ processAllTypeCheckedModule tcm = do
 
     -- | Extract 'Id', 'SrcSpan', and 'Type' for 'LHsBind's
     getTypeLHsBind :: LHsBind GhcTc -> m (Maybe (Maybe Id,SrcSpan,Type))
-    getTypeLHsBind (L _spn FunBind{fun_id = pid,fun_matches = MG _ _ _})
+    getTypeLHsBind (dL->L _spn FunBind{fun_id = pid,fun_matches = MG _ _ _})
         = pure $ Just (Just (unLoc pid),getLoc pid,varType (unLoc pid))
     getTypeLHsBind _ = pure Nothing
 
@@ -323,25 +334,25 @@ processAllTypeCheckedModule tcm = do
         return $ fmap (\expr -> (mid, getLoc e, CoreUtils.exprType expr)) mbe
       where
         mid :: Maybe Id
-        mid | HsVar _ (L _ i) <- unwrapVar (unLoc e) = Just i
-            | otherwise                              = Nothing
+        mid | HsVar _ (dL->L _ i) <- unwrapVar (unLoc e) = Just i
+            | otherwise                                  = Nothing
 
         unwrapVar (HsWrap _ _ var) = var
         unwrapVar e'               = e'
 
     -- | Extract 'Id', 'SrcSpan', and 'Type' for 'LPats's
     getTypeLPat :: LPat GhcTc -> m (Maybe (Maybe Id,SrcSpan,Type))
-    getTypeLPat (L spn pat) =
+    getTypeLPat (dL->L spn pat) =
         pure (Just (getMaybeId pat,spn,hsPatType pat))
       where
-        getMaybeId (VarPat _ (L _ vid)) = Just vid
-        getMaybeId _                    = Nothing
+        getMaybeId (VarPat _ (dL->L _ vid)) = Just vid
+        getMaybeId _                        = Nothing
 
     -- | Get ALL source spans in the source.
-    listifyAllSpans :: Typeable a => TypecheckedSource -> [Located a]
+    listifyAllSpans :: (HasSrcSpan a , Typeable a) => TypecheckedSource -> [a]
     listifyAllSpans = everythingAllSpans (++) [] ([] `mkQ` (\x -> [x | p x]))
       where
-        p (L spn _) = isGoodSrcSpan spn
+        p (dL->L spn _) = isGoodSrcSpan spn
 
     -- | Variant of @syb@'s @everything@ (which summarises all nodes
     -- in top-down, left-to-right order) with a stop-condition on 'NameSet's

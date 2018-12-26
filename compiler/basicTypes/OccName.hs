@@ -842,7 +842,7 @@ emptyTidyOccEnv :: TidyOccEnv
 emptyTidyOccEnv = emptyUFM
 
 initTidyOccEnv :: [OccName] -> TidyOccEnv       -- Initialise with names to avoid!
-initTidyOccEnv = foldl add emptyUFM
+initTidyOccEnv = foldl' add emptyUFM
   where
     add env (OccName _ fs) = addToUFM env fs 1
 
@@ -859,7 +859,10 @@ avoidClashesOccEnv env occs = go env emptyUFM occs
 tidyOccName :: TidyOccEnv -> OccName -> (TidyOccEnv, OccName)
 tidyOccName env occ@(OccName occ_sp fs)
   | not (fs `elemUFM` env)
-  = (addToUFM env fs 1, occ)   -- Desired OccName is free
+  = -- Desired OccName is free, so use it,
+    -- and record in 'env' that it's no longer available
+    (addToUFM env fs 1, occ)
+
   | otherwise
   = case lookupUFM env base1 of
        Nothing -> (addToUFM env base1 2, OccName occ_sp base1)
@@ -884,6 +887,7 @@ tidyOccName env occ@(OccName occ_sp fs)
                      --          new_fs, so that we know it is taken
                      -- If they are the same (n==1), the former wins
                      -- See Note [TidyOccEnv]
+
 
 {-
 ************************************************************************

@@ -132,11 +132,6 @@ AC_ARG_VAR(CC_STAGE0, [C compiler command (bootstrap)])
 if test "$WithGhc" != ""; then
   FPTOOLS_GHC_VERSION([GhcVersion], [GhcMajVersion], [GhcMinVersion], [GhcPatchLevel])dnl
 
-  # See #15281
-  if test "$GhcMajVersion" = "8" && test "$GhcMinVersion" = "2" && test "$GhcPatchLevel" = "1"; then
-     AC_MSG_ERROR([GHC 8.2.1 is known to be buggy and cannot bootstrap this GHC release (See Trac 15281); please use GHC 8.2.2 or later.])
-  fi
-
   if test "$GhcMajVersion" = "unknown" || test "$GhcMinVersion" = "unknown"; then
      AC_MSG_ERROR([Cannot determine the version of $WithGhc.  Is it really GHC?])
   fi
@@ -164,8 +159,8 @@ if test "$WithGhc" = ""
 then
     AC_MSG_ERROR([GHC is required.])
 fi
-FP_COMPARE_VERSIONS([$GhcVersion],[-lt],[8.2],
-    [AC_MSG_ERROR([GHC version 8.2 or later is required to compile GHC.])])
+FP_COMPARE_VERSIONS([$GhcVersion],[-lt],[8.4],
+    [AC_MSG_ERROR([GHC version 8.4 or later is required to compile GHC.])])
 
 if test `expr $GhcMinVersion % 2` = "1"
 then
@@ -648,7 +643,7 @@ AC_SUBST([LibtoolCmd])
 # tools we are looking for. In the past, GHC supported a number of
 # versions of LLVM simultaneously, but that stopped working around
 # 3.5/3.6 release of LLVM.
-LlvmVersion=6.0
+LlvmVersion=7.0
 AC_SUBST([LlvmVersion])
 sUPPORTED_LLVM_VERSION=$(echo \($LlvmVersion\) | sed 's/\./,/')
 AC_DEFINE_UNQUOTED([sUPPORTED_LLVM_VERSION], ${sUPPORTED_LLVM_VERSION}, [The supported LLVM version number])
@@ -678,11 +673,11 @@ dnl --------------------------------------------------------------
 dnl ** Copy the files from the "fs" utility into the right folders.
 dnl --------------------------------------------------------------
 AC_MSG_NOTICE([Creating links for in-tree file handling routines.])
-ln -f -v utils/fs/fs.* utils/lndir/
-ln -f -v utils/fs/fs.* utils/unlit/
-ln -f -v utils/fs/fs.* rts/
-ln -f -v utils/fs/fs.h libraries/base/include/
-ln -f -v utils/fs/fs.c libraries/base/cbits/
+ln -f utils/fs/fs.* utils/lndir/
+ln -f utils/fs/fs.* utils/unlit/
+ln -f utils/fs/fs.* rts/
+ln -f utils/fs/fs.h libraries/base/include/
+ln -f utils/fs/fs.c libraries/base/cbits/
 AC_MSG_NOTICE([Routines in place. Packages can now be build normally.])
 
 dnl --------------------------------------------------------------
@@ -738,6 +733,11 @@ FP_GCC_VERSION
 
 dnl ** See whether gcc supports -no-pie
 FP_GCC_SUPPORTS_NO_PIE
+
+dnl ** Used to determine how to compile ghc-prim's atomics.c, used by
+dnl    unregisterised, Sparc, and PPC backends.
+FP_GCC_SUPPORTS__ATOMICS
+AC_DEFINE([HAVE_C11_ATOMICS], [$CONF_GCC_SUPPORTS__ATOMICS], [Does GCC support __atomic primitives?])
 
 FP_GCC_EXTRA_FLAGS
 
@@ -1248,7 +1248,9 @@ USE_LIBDW=0
 AC_ARG_ENABLE(dwarf-unwind,
     [AC_HELP_STRING([--enable-dwarf-unwind],
         [Enable DWARF unwinding support in the runtime system via elfutils' libdw [default=no]])],
-    [AC_CHECK_LIB(dw, dwfl_attach_state, [UseLibdw=YES], [UseLibdw=NO])],
+    [AC_CHECK_LIB(dw, dwfl_attach_state,
+      [UseLibdw=YES],
+      [AC_MSG_ERROR([Cannot find system libdw (required by --enable-dwarf-unwind)])])],
     [UseLibdw=NO]
 )
 AC_SUBST(UseLibdw)
@@ -1334,7 +1336,7 @@ checkMake380() {
 checkMake380 make
 checkMake380 gmake
 
-AC_CONFIG_FILES([mk/config.mk mk/install.mk mk/project.mk rts/rts.cabal compiler/ghc.cabal ghc/ghc-bin.cabal utils/runghc/runghc.cabal utils/gen-dll/gen-dll.cabal libraries/ghc-boot/ghc-boot.cabal libraries/ghc-boot-th/ghc-boot-th.cabal libraries/ghci/ghci.cabal libraries/ghc-heap/ghc-heap.cabal settings docs/users_guide/ghc_config.py docs/index.html libraries/prologue.txt distrib/configure.ac])
+AC_CONFIG_FILES([mk/config.mk mk/install.mk mk/project.mk rts/rts.cabal compiler/ghc.cabal ghc/ghc-bin.cabal utils/iserv/iserv.cabal utils/iserv-proxy/iserv-proxy.cabal utils/runghc/runghc.cabal utils/gen-dll/gen-dll.cabal libraries/ghc-boot/ghc-boot.cabal libraries/ghc-boot-th/ghc-boot-th.cabal libraries/ghci/ghci.cabal libraries/ghc-heap/ghc-heap.cabal libraries/libiserv/libiserv.cabal settings docs/users_guide/ghc_config.py docs/index.html libraries/prologue.txt distrib/configure.ac])
 AC_OUTPUT
 [
 if test "$print_make_warning" = "true"; then

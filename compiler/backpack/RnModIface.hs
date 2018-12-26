@@ -138,10 +138,36 @@ rnDepModules sel deps = do
     -- in these dependencies.
     fmap (nubSort . concat) . T.forM (sel deps) $ \mod -> do
         dflags <- getDynFlags
+        -- For holes, its necessary to "see through" the instantiation
+        -- of the hole to get accurate family instance dependencies.
+        -- For example, if B imports <A>, and <A> is instantiated with
+        -- F, we must grab and include all of the dep_finsts from
+        -- F to have an accurate transitive dep_finsts list.
+        --
+        -- However, we MUST NOT do this for regular modules.
+        -- First, for efficiency reasons, doing this
+        -- bloats the the dep_finsts list, because we *already* had
+        -- those modules in the list (it wasn't a hole module, after
+        -- all). But there's a second, more important correctness
+        -- consideration: we perform module renaming when running
+        -- --abi-hash.  In this case, GHC's contract to the user is that
+        -- it will NOT go and read out interfaces of any dependencies
+        -- (https://github.com/haskell/cabal/issues/3633); the point of
+        -- --abi-hash is just to get a hash of the on-disk interfaces
+        -- for this *specific* package.  If we go off and tug on the
+        -- interface for /everything/ in dep_finsts, we're gonna have a
+        -- bad time.  (It's safe to do do this for hole modules, though,
+        -- because the hmap for --abi-hash is always trivial, so the
+        -- interface we request is local.  Though, maybe we ought
+        -- not to do it in this case either...)
+        --
+        -- This mistake was bug #15594.
         let mod' = renameHoleModule dflags hmap mod
-        iface <- liftIO . initIfaceCheck (text "rnDepModule") hsc_env
-                        $ loadSysInterface (text "rnDepModule") mod'
-        return (mod' : sel (mi_deps iface))
+        if isHoleModule mod
+          then do iface <- liftIO . initIfaceCheck (text "rnDepModule") hsc_env
+                                  $ loadSysInterface (text "rnDepModule") mod'
+                  return (mod' : sel (mi_deps iface))
+          else return [mod']
 
 {-
 ************************************************************************
@@ -524,7 +550,7 @@ rnIfaceConDecls IfAbstractTyCon = pure IfAbstractTyCon
 rnIfaceConDecl :: Rename IfaceConDecl
 rnIfaceConDecl d = do
     con_name <- rnIfaceGlobal (ifConName d)
-    con_ex_tvs <- mapM rnIfaceTvBndr (ifConExTvs d)
+    con_ex_tvs <- mapM rnIfaceBndr (ifConExTCvs d)
     con_user_tvbs <- mapM rnIfaceForAllBndr (ifConUserTvBinders d)
     let rnIfConEqSpec (n,t) = (,) n <$> rnIfaceType t
     con_eq_spec <- mapM rnIfConEqSpec (ifConEqSpec d)
@@ -535,7 +561,7 @@ rnIfaceConDecl d = do
         rnIfaceBang bang = pure bang
     con_stricts <- mapM rnIfaceBang (ifConStricts d)
     return d { ifConName = con_name
-             , ifConExTvs = con_ex_tvs
+             , ifConExTCvs = con_ex_tvs
              , ifConUserTvBinders = con_user_tvbs
              , ifConEqSpec = con_eq_spec
              , ifConCtxt = con_ctxt
@@ -624,7 +650,7 @@ rnIfaceTvBndr :: Rename IfaceTvBndr
 rnIfaceTvBndr (fs, kind) = (,) fs <$> rnIfaceType kind
 
 rnIfaceTyConBinder :: Rename IfaceTyConBinder
-rnIfaceTyConBinder (TvBndr tv vis) = TvBndr <$> rnIfaceTvBndr tv <*> pure vis
+rnIfaceTyConBinder (Bndr tv vis) = Bndr <$> rnIfaceBndr tv <*> pure vis
 
 rnIfaceAlt :: Rename IfaceAlt
 rnIfaceAlt (conalt, names, rhs)
@@ -656,7 +682,7 @@ rnIfaceCo (IfaceTyConAppCo role tc cos)
 rnIfaceCo (IfaceAppCo co1 co2)
     = IfaceAppCo <$> rnIfaceCo co1 <*> rnIfaceCo co2
 rnIfaceCo (IfaceForAllCo bndr co1 co2)
-    = IfaceForAllCo <$> rnIfaceTvBndr bndr <*> rnIfaceCo co1 <*> rnIfaceCo co2
+    = IfaceForAllCo <$> rnIfaceBndr bndr <*> rnIfaceCo co1 <*> rnIfaceCo co2
 rnIfaceCo (IfaceFreeCoVar c) = pure (IfaceFreeCoVar c)
 rnIfaceCo (IfaceCoVarCo lcl) = IfaceCoVarCo <$> pure lcl
 rnIfaceCo (IfaceHoleCo lcl)  = IfaceHoleCo  <$> pure lcl
@@ -711,9 +737,9 @@ rnIfaceType (IfaceCastTy ty co)
     = IfaceCastTy <$> rnIfaceType ty <*> rnIfaceCo co
 
 rnIfaceForAllBndr :: Rename IfaceForAllBndr
-rnIfaceForAllBndr (TvBndr tv vis) = TvBndr <$> rnIfaceTvBndr tv <*> pure vis
+rnIfaceForAllBndr (Bndr tv vis) = Bndr <$> rnIfaceBndr tv <*> pure vis
 
 rnIfaceAppArgs :: Rename IfaceAppArgs
-rnIfaceAppArgs (IA_Invis t ts) = IA_Invis <$> rnIfaceType t <*> rnIfaceAppArgs ts
-rnIfaceAppArgs (IA_Vis t ts) = IA_Vis <$> rnIfaceType t <*> rnIfaceAppArgs ts
+rnIfaceAppArgs (IA_Arg t a ts) = IA_Arg <$> rnIfaceType t <*> pure a
+                                        <*> rnIfaceAppArgs ts
 rnIfaceAppArgs IA_Nil = pure IA_Nil
