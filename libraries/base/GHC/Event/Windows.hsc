@@ -692,6 +692,7 @@ processRemoteCompletion = do
     _ <- processCompletion mngr n Nothing
     num_left <- outstandingRequests
     servicedIOEntries num_left
+    setStatus WinIOBlocked
     debugIO "processRemoteCompletion :: done ()"
     return ()
 

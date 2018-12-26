@@ -44,6 +44,10 @@ static void notifyRtsOfFinishedCall (uint32_t num);
 bool startupAsyncWinIO(void)
 {
   running = true;
+  outstanding_service_requests = false;
+  completionPortHandle = INVALID_HANDLE_VALUE;
+  outstanding_requests = 0;
+  completed_requests = 0;
 
   InitializeSRWLock (&lock);
   InitializeConditionVariable (&wakeEvent);
@@ -102,13 +106,13 @@ void registerAlertableWait (HANDLE port, DWORD mssec, uint64_t num_req)
   AcquireSRWLockExclusive (&lock);
 
   /* Decide if we may have to wake up the I/O manager.  */
-  wakeup = outstanding_requests == 0; // && num_req > 0;
+  wakeup = outstanding_requests == 0 && num_req > 0;
 
   outstanding_requests = num_req;
   if (timeout > mssec)
     {
       timeout = mssec;
-      interrupt = outstanding_requests > 1;
+      interrupt = true;
     }
 
   ReleaseSRWLockExclusive (&lock);
@@ -192,6 +196,9 @@ DWORD WINAPI runner (LPVOID lpParam STG_UNUSED)
                                        num_callbacks, &num_removed, timeout,
                                        false))
         {
+          if (outstanding_requests == 0)
+            num_removed = 0;
+
           if (num_removed > 0)
             {
               notifyRtsOfFinishedCall (num_removed);
