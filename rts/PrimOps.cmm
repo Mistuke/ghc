@@ -1410,7 +1410,6 @@ stg_writeTVarzh (P_ tvar,     /* :: TVar a */
     return ();
 }
 
-
 /* -----------------------------------------------------------------------------
  * MVar primitives
  *
@@ -1883,6 +1882,211 @@ stg_tryReadMVarzh ( P_ mvar, /* :: MVar a */ )
 
     unlockClosure(mvar, info);
     return (1, val);
+}
+
+/* -----------------------------------------------------------------------------
+ * IOPort primitives
+ *
+ * readIOPort & writeIOPort work as follows.  Firstly, an important invariant:
+ *
+ *    If the IOPort is full, then the request is silently dropped and the
+ *    message is lost.  If the IOPort is empty then the
+ *    blocking queue contains only the thread blocked on IOPort.  An IOPort only
+ *    supports a single read and a single write to it.
+ *
+ * readIOPort:
+ *    IOPort empty : then add ourselves to the blocking queue
+ *    IOPort full  : remove the value from the IOPort, and
+ *                 blocking queue empty     : return
+ *                 blocking queue non-empty : perform the only blocked
+ *                                            writeIOPort from the queue, and
+ *                                            wake up the thread
+ *                                            (IOPort is now empty)
+ *
+ * writeIOPort is just the dual of the above algorithm.
+ *
+ * How do we "perform a writeIOPort"?  Well, By storing the value and prt on the
+ * stack, same way we do with MVars.  Semantically the operations mutate the
+ * stack the same way so we will re-use the logic and datastructure for MVars
+ * for IOPort.  See stg_block_putmvar and stg_block_takemvar in HeapStackCheck.c
+ * for the stack layout, and the PerformPut and PerformTake macros below.
+ *
+ * The remaining caveats of MVar thus also apply for an IOPort.  The main
+ * crucial difference between an MVar and IOPort is that the scheduler will not
+ * be allowed to interrupt a blocked IOPort just because it thinks there's a
+ * deadlock.  This is especially crucial for the non-threaded runtime.
+ *
+ * -------------------------------------------------------------------------- */
+
+stg_readIOPortzh ( P_ ioport /* :: MVar a */ )
+{
+    W_ val, info, tso, q;
+
+    LOCK_CLOSURE(ioport, info);
+
+    /* If the IOPort is empty, put ourselves on its blocking queue,
+     * and wait until we're woken up.
+     */
+    if (StgMVar_value(ioport) == stg_END_TSO_QUEUE_closure) {
+        if (info == stg_MVAR_CLEAN_info) {
+            ccall dirty_MVAR(BaseReg "ptr", ioport "ptr");
+        }
+
+        // We want to put the heap check down here in the slow path,
+        // but be careful to unlock the closure before returning to
+        // the RTS if the check fails.
+        ALLOC_PRIM_WITH_CUSTOM_FAILURE
+            (SIZEOF_StgMVarTSOQueue,
+             unlockClosure(ioport, stg_MVAR_DIRTY_info);
+             GC_PRIM_P(stg_readIOPortzh, ioport));
+
+        q = Hp - SIZEOF_StgMVarTSOQueue + WDS(1);
+
+        SET_HDR(q, stg_MVAR_TSO_QUEUE_info, CCS_SYSTEM);
+        StgMVarTSOQueue_link(q) = END_TSO_QUEUE;
+        StgMVarTSOQueue_tso(q)  = CurrentTSO;
+
+        if (StgMVar_head(ioport) == stg_END_TSO_QUEUE_closure) {
+            StgMVar_head(ioport) = q;
+        } else {
+            /* If there is already a waiting read in the queue, then silently
+               ignore the second put.  TODO: Correct usages of IOPort should
+               never have a second read, so perhaps raise an error instead, but
+               I have no idea how to do this safely and correctly at this
+               point.  */
+            unlockClosure(ioport, info);
+            return (val);
+        }
+        StgTSO__link(CurrentTSO)       = q;
+        StgTSO_block_info(CurrentTSO)  = ioport;
+        StgTSO_why_blocked(CurrentTSO) = BlockedOnIOCompletion::I16;
+        StgMVar_tail(ioport)           = q;
+
+        jump stg_block_takemvar(ioport);
+    }
+
+    /* we got the value... */
+    val = StgMVar_value(ioport);
+
+    q = StgMVar_head(ioport);
+loop:
+    if (q == stg_END_TSO_QUEUE_closure) {
+        /* No further writeIOPort, IOPort is now empty */
+        StgMVar_value(ioport) = stg_END_TSO_QUEUE_closure;
+        // If the IOPort is not already dirty, then we don't need to make
+        // it dirty, as it is empty with nothing blocking on it.
+        unlockClosure(ioport, info);
+        return (val);
+    }
+    if (StgHeader_info(q) == stg_IND_info ||
+        StgHeader_info(q) == stg_MSG_NULL_info) {
+        q = StgInd_indirectee(q);
+        goto loop;
+    }
+
+    // There are writeIOPort(s) waiting... wake up the first thread on the queue
+
+    if (info == stg_MVAR_CLEAN_info) {
+        ccall dirty_MVAR(BaseReg "ptr", ioport "ptr");
+    }
+
+    tso = StgMVarTSOQueue_tso(q);
+    StgMVar_head(ioport) = StgMVarTSOQueue_link(q);
+    if (StgMVar_head(ioport) == stg_END_TSO_QUEUE_closure) {
+        StgMVar_tail(ioport) = stg_END_TSO_QUEUE_closure;
+    }
+
+    ASSERT(StgTSO_why_blocked(tso) == BlockedOnIOCompletion::I16);
+    ASSERT(StgTSO_block_info(tso) == ioport);
+
+    // actually perform the writeIOPort for the thread that we just woke up
+    W_ stack;
+    stack = StgTSO_stackobj(tso);
+    PerformPut(stack, StgMVar_value(ioport));
+
+    // indicate that the IOPort operation has now completed.
+    StgTSO__link(tso) = stg_END_TSO_QUEUE_closure;
+
+    // no need to mark the TSO dirty, we have only written END_TSO_QUEUE.
+
+    ccall tryWakeupThread(MyCapability() "ptr", tso);
+
+    unlockClosure(ioport, stg_MVAR_DIRTY_info);
+    return (val);
+}
+
+stg_writeIOPortzh ( P_ ioport, /* :: MVar a */
+                    P_ val,  /* :: a */ )
+{
+    W_ info, tso, q;
+
+    LOCK_CLOSURE(ioport, info);
+
+    /* If there is already a value in the queue, then silently ignore the
+       second put.  TODO: Correct usages of IOPort should never have a second
+       put, so perhaps raise an error instead, but I have no idea how to do this
+       safely and correctly at this point.  */
+    if (StgMVar_value(ioport) != stg_END_TSO_QUEUE_closure) {
+        unlockClosure(ioport, info);
+        return (0);
+    }
+
+    q = StgMVar_head(ioport);
+loop:
+    if (q == stg_END_TSO_QUEUE_closure) {
+        /* No further takes, the IOPort is now full. */
+        if (info == stg_MVAR_CLEAN_info) {
+            ccall dirty_MVAR(BaseReg "ptr", ioport "ptr");
+        }
+        StgMVar_value(ioport) = val;
+        unlockClosure(ioport, stg_MVAR_DIRTY_info);
+        return (1);
+    }
+    if (StgHeader_info(q) == stg_IND_info ||
+        StgHeader_info(q) == stg_MSG_NULL_info) {
+        q = StgInd_indirectee(q);
+        goto loop;
+    }
+
+    // There are readIOPort(s) waiting: wake up the first one
+
+    tso = StgMVarTSOQueue_tso(q);
+    StgMVar_head(ioport) = StgMVarTSOQueue_link(q);
+    if (StgMVar_head(ioport) == stg_END_TSO_QUEUE_closure) {
+        StgMVar_tail(ioport) = stg_END_TSO_QUEUE_closure;
+    }
+
+    ASSERT(StgTSO_block_info(tso) == ioport);
+    // save why_blocked here, because waking up the thread destroys
+    // this information
+    W_ why_blocked;
+    why_blocked = TO_W_(StgTSO_why_blocked(tso));
+
+    // actually perform the takeMVar
+    W_ stack;
+    stack = StgTSO_stackobj(tso);
+    PerformTake(stack, val);
+
+    // indicate that the MVar operation has now completed.
+    StgTSO__link(tso) = stg_END_TSO_QUEUE_closure;
+
+    if (TO_W_(StgStack_dirty(stack)) == 0) {
+        ccall dirty_STACK(MyCapability() "ptr", stack "ptr");
+    }
+
+    ccall tryWakeupThread(MyCapability() "ptr", tso);
+
+    // If it was a readIOPort, then we can still do work,
+    // so loop back. (XXX: This could take a while)
+    if (why_blocked == BlockedOnIOCompletion) {
+        q = StgMVarTSOQueue_link(q);
+        goto loop;
+    }
+
+    ASSERT(why_blocked == BlockedOnIOCompletion);
+
+    unlockClosure(ioport, info);
+    return (1);
 }
 
 /* -----------------------------------------------------------------------------

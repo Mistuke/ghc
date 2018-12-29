@@ -101,6 +101,7 @@ import GHC.List (replicate, length)
 import GHC.Event.Unique
 import GHC.Event.TimeOut
 import GHC.Event.Windows.ConsoleEvent
+import GHC.IOPort
 import GHC.Num
 import GHC.Real
 import GHC.Read
@@ -391,12 +392,12 @@ withOverlappedEx :: Manager
                  -> CompletionCallback (IOResult a)
                  -> IO (IOResult a)
 withOverlappedEx mgr fname h offset startCB completionCB = do
-    signal <- newEmptyMVar :: IO (MVar (IOResult a))
+    signal <- newIOPort :: IO (IOPort (IOResult a))
     let dbg s = s ++ " (" ++ show h ++ ":" ++ show offset ++ ")"
     let signalReturn a = failIfFalse_ (dbg "signalReturn") $
-                            tryPutMVar signal (IOSuccess a)
+                            writeIOPort signal (IOSuccess a)
         signalThrow ex = failIfFalse_ (dbg "signalThrow") $
-                            tryPutMVar signal (IOFailed ex)
+                            writeIOPort signal (IOFailed ex)
     mask_ $ do
         let completionCB' e b = completionCB e b >>= \result ->
                                   case result of
@@ -476,7 +477,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                              servicedIOEntries num_remaining
                         return $ IOFailed Nothing
         let runner = do debugIO $ (dbg ":: waiting ") ++ " | "  ++ show lpol
-                        res <- takeMVar signal `catch` cancel
+                        res <- readIOPort signal `catch` cancel
                         debugIO $ dbg ":: signaled "
                         case res of
                           IOFailed err -> FFI.throwWinErr fname (maybe 0 fromIntegral err)

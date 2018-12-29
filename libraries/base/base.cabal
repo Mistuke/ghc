@@ -335,6 +335,7 @@ Library
         Foreign.ForeignPtr.Imp
         GHC.StaticPtr.Internal
         GHC.Event.Internal.Types
+        GHC.IOPort
         System.Environment.ExecutablePath
         System.CPUTime.Utils
 
