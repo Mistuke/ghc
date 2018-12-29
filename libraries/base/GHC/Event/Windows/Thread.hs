@@ -11,6 +11,7 @@ import GHC.Conc.Sync
 import GHC.Base
 import GHC.IO
 import GHC.MVar
+import GHC.IOPort
 import GHC.Real
 
 import GHC.Event.Windows.Clock
@@ -24,10 +25,10 @@ interruptIOManager = interruptSystemManager
 
 threadDelay :: Int -> IO ()
 threadDelay usecs = mask_ $ do
-    m <- newEmptyMVar
+    m <- newEmptyIOPort
     mgr <- getSystemManager
-    reg <- registerTimeout mgr secs $ putMVar m ()
-    takeMVar m `onException` unregisterTimeout mgr reg
+    reg <- registerTimeout mgr secs $ writeIOPort m ()
+    readIOPort m `onException` unregisterTimeout mgr reg
   where
     secs = microsecondsToSeconds usecs
 
