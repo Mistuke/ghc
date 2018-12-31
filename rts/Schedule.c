@@ -904,7 +904,7 @@ scheduleDetectDeadlock (Capability **pcap, Task *task)
      */
     if ( emptyThreadQueues(cap) )
     {
-#if defined(THREADED_RTS)
+#if 1 // defined(THREADED_RTS)
         /*
          * In the threaded RTS, we only check for deadlock if there
          * has been no activity in a complete timeslice.  This means
@@ -913,6 +913,7 @@ scheduleDetectDeadlock (Capability **pcap, Task *task)
          */
         if (recent_activity != ACTIVITY_INACTIVE) return;
 #endif
+        if (task->incall->tso == BlockedOnIOCompletion) return;
 
         debugTrace(DEBUG_sched, "deadlocked, forcing major GC...");
 
@@ -964,6 +965,10 @@ scheduleDetectDeadlock (Capability **pcap, Task *task)
             case BlockedOnMVarRead:
                 throwToSingleThreaded(cap, task->incall->tso,
                                       (StgClosure *)nonTermination_closure);
+                return;
+            case BlockedOnIOCompletion:
+                /* We're blocked waiting for an external I/O call, let's just
+                   chill for a bit.  */
                 return;
             default:
                 barf("deadlock: main thread blocked in a strange way");

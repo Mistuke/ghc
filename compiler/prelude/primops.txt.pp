@@ -2771,7 +2771,7 @@ primop  WriteIOPortOp "writeIOPort#" GenPrimOp
    out_of_line      = True
    has_side_effects = True
 
-primop  SameIOPortrOp "sameIOPort#" GenPrimOp
+primop  SameIOPortOp "sameIOPort#" GenPrimOp
    IOPort# s a -> IOPort# s a -> Int#
 
 

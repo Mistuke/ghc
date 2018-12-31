@@ -27,7 +27,7 @@ threadDelay :: Int -> IO ()
 threadDelay usecs = mask_ $ do
     m <- newEmptyIOPort
     mgr <- getSystemManager
-    reg <- registerTimeout mgr secs $ writeIOPort m ()
+    reg <- registerTimeout mgr secs $ writeIOPort m () >> return ()
     readIOPort m `onException` unregisterTimeout mgr reg
   where
     secs = microsecondsToSeconds usecs

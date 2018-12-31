@@ -1907,9 +1907,10 @@ stg_tryReadMVarzh ( P_ mvar, /* :: MVar a */ )
  *
  * How do we "perform a writeIOPort"?  Well, By storing the value and prt on the
  * stack, same way we do with MVars.  Semantically the operations mutate the
- * stack the same way so we will re-use the logic and datastructure for MVars
+ * stack the same way so we will re-use the logic and datastructures for MVars
  * for IOPort.  See stg_block_putmvar and stg_block_takemvar in HeapStackCheck.c
- * for the stack layout, and the PerformPut and PerformTake macros below.
+ * for the stack layout, and the PerformPut and PerformTake macros below.  We
+ * also re-use the closure types MVAR_CLEAN/_DIRTY for IOPort.
  *
  * The remaining caveats of MVar thus also apply for an IOPort.  The main
  * crucial difference between an MVar and IOPort is that the scheduler will not
@@ -1918,7 +1919,7 @@ stg_tryReadMVarzh ( P_ mvar, /* :: MVar a */ )
  *
  * -------------------------------------------------------------------------- */
 
-stg_readIOPortzh ( P_ ioport /* :: MVar a */ )
+stg_readIOPortzh ( P_ ioport /* :: IOPort a */ )
 {
     W_ val, info, tso, q;
 
@@ -1955,7 +1956,7 @@ stg_readIOPortzh ( P_ ioport /* :: MVar a */ )
                I have no idea how to do this safely and correctly at this
                point.  */
             unlockClosure(ioport, info);
-            return (val);
+            return (NULL);
         }
         StgTSO__link(CurrentTSO)       = q;
         StgTSO_block_info(CurrentTSO)  = ioport;
@@ -2015,7 +2016,7 @@ loop:
     return (val);
 }
 
-stg_writeIOPortzh ( P_ ioport, /* :: MVar a */
+stg_writeIOPortzh ( P_ ioport, /* :: IOPort a */
                     P_ val,  /* :: a */ )
 {
     W_ info, tso, q;
@@ -2087,6 +2088,24 @@ loop:
 
     unlockClosure(ioport, info);
     return (1);
+}
+/* -----------------------------------------------------------------------------
+   IOPort primitives
+   -------------------------------------------------------------------------- */
+
+stg_newIOPortzh ( gcptr init )
+{
+    W_ ioport;
+
+    ALLOC_PRIM_ (SIZEOF_StgMVar, stg_newIOPortzh);
+
+    ioport = Hp - SIZEOF_StgMVar + WDS(1);
+    SET_HDR(ioport, stg_MVAR_DIRTY_info,CCCS);
+        // MVARs start dirty: generation 0 has no mutable list
+    StgMVar_head(ioport)  = stg_END_TSO_QUEUE_closure;
+    StgMVar_tail(ioport)  = stg_END_TSO_QUEUE_closure;
+    StgMVar_value(ioport) = stg_END_TSO_QUEUE_closure;
+    return (ioport);
 }
 
 /* -----------------------------------------------------------------------------

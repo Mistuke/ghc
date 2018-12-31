@@ -392,7 +392,7 @@ withOverlappedEx :: Manager
                  -> CompletionCallback (IOResult a)
                  -> IO (IOResult a)
 withOverlappedEx mgr fname h offset startCB completionCB = do
-    signal <- newIOPort :: IO (IOPort (IOResult a))
+    signal <- newEmptyIOPort :: IO (IOPort (IOResult a))
     let dbg s = s ++ " (" ++ show h ++ ":" ++ show offset ++ ")"
     let signalReturn a = failIfFalse_ (dbg "signalReturn") $
                             writeIOPort signal (IOSuccess a)
