@@ -15,7 +15,6 @@
 
 #if defined(mingw32_HOST_OS)
 
-/* must agree with values in GHC.Conc:.  */
 #define IO_MANAGER_WAKEUP 0xffffffff
 #define IO_MANAGER_DIE    0xfffffffe
 /* spurious wakeups are returned as zero.  */

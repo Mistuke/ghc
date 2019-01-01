@@ -69,6 +69,7 @@ module GHC.Event.Windows (
 ##include "windows_cconv.h"
 #include <windows.h>
 #include <ntstatus.h>
+#include <rts/IOManager.h>
 
 import GHC.Event.Windows.Clock   (Clock, Seconds, getClock, getTime)
 import GHC.Event.Windows.FFI     (OVERLAPPED, LPOVERLAPPED, OVERLAPPED_ENTRY(..))
@@ -728,11 +729,9 @@ io_mngr_loop event mgr = go False
                _ | more -> go False
                _        -> go True
 
--- TODO: Do some refactoring to share this between here and GHC.Conc.POSIX
--- must agree with rts/win32/ThrIOManager.c
 io_MANAGER_WAKEUP, io_MANAGER_DIE :: Word32
-io_MANAGER_WAKEUP = 0xffffffff
-io_MANAGER_DIE    = 0xfffffffe
+io_MANAGER_WAKEUP = #{const IO_MANAGER_WAKEUP}
+io_MANAGER_DIE    = #{const IO_MANAGER_DIE}
 
 wakeupIOManager :: IO ()
 wakeupIOManager
