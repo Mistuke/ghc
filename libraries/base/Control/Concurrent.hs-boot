@@ -4,7 +4,7 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Control.Concurrent
--- Copyright   :  (c) The University of Glasgow 2001
+-- Copyright   :  (c) The University of Glasgow 2018-2019
 -- License     :  BSD-style (see the file libraries/base/LICENSE)
 --
 -- Maintainer  :  libraries@haskell.org

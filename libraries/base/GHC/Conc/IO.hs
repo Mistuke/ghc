@@ -78,9 +78,13 @@ ensureIOManagerIsRunning = Event.ensureIOManagerIsRunning
 ensureIOManagerIsRunning = Windows.ensureIOManagerIsRunning
 #endif
 
+-- | Interrupts the current wait of the I/O manager if it is currently blocked.
+-- This instructs it to re-read how much it should wait and to process any
+-- pending events.
+-- @since <basever>
 interruptIOManager :: IO ()
 #if !defined(mingw32_HOST_OS)
-interruptIOManager = Event.interruptIOManager
+interruptIOManager = return ()
 #else
 interruptIOManager = Windows.interruptIOManager
 #endif

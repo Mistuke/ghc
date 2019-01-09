@@ -202,7 +202,7 @@ typedef struct _MISC_FLAGS {
     bool internalCounters;       /* See Note [Internal Counter Stats] */
     StgWord linkerMemBase;       /* address to ask the OS for memory
                                   * for the linker, NULL ==> off */
-    IO_MANAGER ioManager;   /* The I/O manager to use.  */
+    IO_MANAGER ioManager;        /* The I/O manager to use.  */
 } MISC_FLAGS;
 
 /* See Note [Synchronization of flags and base APIs] */

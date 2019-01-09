@@ -89,6 +89,9 @@ EXTERN_INLINE int TRY_ACQUIRE_LOCK(pthread_mutex_t *mutex)
 #include <windows.h>
 #include <synchapi.h>
 
+/* Use native conditional variables coupled with SRW locks, these are more
+   efficient and occur a smaller overhead then emulating them with events.
+   See Note [SRW locks].  */
 typedef CONDITION_VARIABLE Condition;
 typedef DWORD OSThreadId;
 // don't be tempted to use HANDLE as the OSThreadId: there can be
@@ -99,13 +102,14 @@ typedef DWORD ThreadLocalKey;
 
 #define INIT_COND_VAR  0
 
-/* We have a choice for implementing Mutexes on Windows.  Standard
+/* Note [SRW locks]
+   We have a choice for implementing Mutexes on Windows.  Standard
    Mutexes are kernel objects that require kernel calls to
    acquire/release, whereas CriticalSections are spin-locks that block
    in the kernel after spinning for a configurable number of times.
    CriticalSections are *much* faster, however not as fast as slim reader/writer
    locks.  CriticalSections also require a 48 byte structure to provide
-   reentrancy.  We don't need that so SRW's 8 byte size is much more
+   re-entrancy.  We don't need that so SRW's 8 byte size is much more
    appropriate.  With an 8 byte payload there's a higher chance of it being in
    your cache line.  They're also a lot faster than CriticalSections when
    multiple threads are involved.  */

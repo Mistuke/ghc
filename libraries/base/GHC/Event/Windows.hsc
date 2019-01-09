@@ -118,6 +118,101 @@ import qualified GHC.Windows as Win32
 c_DEBUG_DUMP :: IO Bool
 c_DEBUG_DUMP = return True -- scheduler `fmap` getDebugFlags
 
+-- Note [WINIO Manager design]
+-- This file contains the Windows I//O manager. Windows's IO subsystem is by
+-- design fully asynchronous, however there are multiple ways and interfaces
+-- to the async methods.
+--
+-- See https://docs.microsoft.com/en-us/windows-hardware/drivers/kernel/overview-of-the-windows-i-o-model
+-- and https://www.microsoftpressstore.com/articles/article.aspx?p=2201309&seqNum=3
+--
+-- In order to understand this file, here is what you should know:
+-- We're using relatively new APIs that allow us to service multiple requests at
+-- the same time using one OS thread.  This happens using so called Completion
+-- ports.  All I/O actions get associated with one and the same completion port.
+--
+-- The I/O manager itself has two mode of operation:
+-- 1) Threaded: We have a dedicated OS thread in the Haskell world that service
+--    completion requests.  Everything is Handled 100% in view of the runtime.
+-- 2) Non-threaded: We don't have any dedicated Haskell threads at servicing
+--    I/O Requests. Instead we have an OS thread inside the RTS that gets
+--    notified of new requests and does the servicing.  When a request completes
+--    a Haskell thread is scheduled to run to finish off the processing of any
+--    completed requests. See Note [Non-Threaded WINIO design].
+--
+-- These two modes of operations share the majority of the code and so they both
+-- support the same operations and fixing one will fix the other. (See the step
+-- function.)
+-- Unlike MIO, we don't threat network I/O any differently than file I/O. Hence
+-- any network specific code is now only in the network package.
+--
+-- Note [Threaded WINIO design]
+-- The threaded WiNIO is designed around a simple blocking call that's called in
+-- a service loop in a dedicated thread: `GetQueuedCompletionStatusEx`.
+-- as such the loop is reasonably simple.  We're either servicing finished
+-- requests or blocking in `getQueuedCompletionStatusEx` waiting for new
+-- requests to arrive.
+--
+-- Each time a Handle is made three important things happen that affect the I/O
+-- manager design:
+-- 1) Files are opened with the `FILE_FLAG_OVERLAPPED` flag, which instructs the
+--    OS that we will be doing purely asynchronous requests. See
+--    `GHC.IO.Windows.Handle.openFile`.  They are also opened with
+--    `FILE_FLAG_SEQUENTIAL_SCAN` to indicate to the OS that we want to optimize
+--    the access of the file for sequential access. (e.g. equivalent to MADVISE)
+-- 2) The created handle is associated with the I/O manager's completion port.
+--    This allows the I/O manager to be able to service I/O events from this
+--    handle.  See `associateHandle`.
+-- 3) File handles are additionally modified with two optimization flags:
+--
+--    FILE_SKIP_COMPLETION_PORT_ON_SUCCESS: If the request can be serviced
+--    immediately, then do not queue the IRP (IO Request Packet) into the I/O
+--    manager waiting for us to service it later.  Instead service it
+--    immediately in the same call.  This is beneficial for two reasons:
+--    1) We don't have to block in the Haskell RTS.
+--    2) We save a bunch of work in the OS's I/O subsystem.
+--    The downside is though that we have to do a bunch of work to handle these
+--    cases.  This is abstracted away from the user by the `withOverlapped`
+--    function.
+--    This together with the buffering strategy mentioned above means we
+--    actually skip the I/O manager on quite a lot of I/O requests due to the
+--    value being in the cache.  Because of the Lazy I/O in Haskell, the time
+--    to read and decode the buffer of bytes is usually longer than the OS needs
+--    to read the next chunk, so we hit the FAST_IO IRP quite often.
+--
+--    FILE_SKIP_SET_EVENT_ON_HANDLE: Since we will not be using an event object
+--    to monitor asynchronous completions, don't bother updating or checking for
+--    one.  This saves some precious cycles, especially on operations with very
+--    high number of I/O operations (e.g. servers.)
+--
+-- So what does servicing a request actually mean.  As mentioned before the
+-- I/O manager will be blocked or servicing a request. In reality it doesn't
+-- always block till an I/O request has completed.  In cases where we have event
+-- timers, we block till the next timer's timeout.  This allows us to also
+-- service timers in the same loop.  The side effect of this is that we will
+-- exit the I/O wait sometimes without any completions.  Not really a problem
+-- but it's an important design decision.
+--
+-- Every time we wait, we give a pre-allocated buffer of `n`
+-- `OVERLAPPED_ENTRIES` to the OS.  This means that in a single call we can
+-- service up to `n` I/O requests at a time.  The size of `n` is not fixed,
+-- anytime we dequeue `n` I/O requests in a single operation we double the
+-- buffer size, allowing the I/O manager to be able to scale up depending
+-- on the workload.  This buffer is kept alive throughout the lifetime of the
+-- program and is never freed until the I/O manager is shutting down.
+--
+-- One very important property of the I/O subsystem is that each I/O request
+-- now requires an `OVERLAPPED` structure be given to the I/O manager.  See
+-- `withOverlappedEx`.  This buffer is used by the OS to fill in various state
+-- information by the OS. Throughout the duration of I/O call, this buffer MUST
+-- remain live.  The address is pinned by the kernel, which means that the
+-- pointer must remain accessible until `GetQueuedCompletionStatusEx` returns
+-- the completion associated with the handle and not just until the call to what
+-- ever I/O operation was used to initialize the I/O request returns.
+-- The only exception to this is when the request has hit the FAST_IO path, in
+-- which case it has skipped the I/O queue and so can be freed immediately after
+-- reading the results from it.
+--
 
 -- ---------------------------------------------------------------------------
 -- I/O manager resume/suspend code
@@ -130,6 +225,9 @@ ioManagerThread = unsafePerformIO $ do
 
 foreign import ccall unsafe "getOrSetGHCConcWindowsIOManagerThreadStore"
   getOrSetGHCConcWindowsIOManagerThreadStore :: Ptr a -> IO (Ptr a)
+
+-- ---------------------------------------------------------------------------
+-- Non-threaded I/O manager callback hooks. See `ASyncWinIO.c`
 
 foreign import ccall safe "registerNewIOCPHandle"
   registerNewIOCPHandle :: FFI.IOCP -> IO ()
@@ -144,10 +242,14 @@ foreign import ccall safe "servicedIOEntries"
   servicedIOEntries :: Word64 -> IO ()
 
 ------------------------------------------------------------------------
--- Manager
+-- Manager structures
 
+-- | Callback type that will be called when an I/O operation completes.
 type IOCallback = CompletionCallback ()
 
+-- | Structure that the I/O managed uses to to associate callbacks with
+-- it's additional payload such as it's OVERLAPPED structure and Win32 handle
+-- etc.
 data CompletionData = CompletionData {-# UNPACK #-} !(ForeignPtr OVERLAPPED)
                                      !HANDLE !IOCallback
 
@@ -168,6 +270,8 @@ data IOResult a
   = IOSuccess { ioValue :: a }
   | IOFailed  { ioErrCode :: Maybe Int }
 
+-- | The state object for the I/O manager.  This structure is available for both
+-- the threaded and the non-threaded RTS.
 data Manager = Manager
     { mgrIOCP         :: {-# UNPACK #-} !FFI.IOCP
     , mgrClock        ::                !Clock
@@ -181,8 +285,14 @@ data Manager = Manager
                       :: {-#UNPACK #-} !(A.Array OVERLAPPED_ENTRY)
     }
 
--- This needs to finish without making any calls to anything requiring the I/O
--- manager otherwise we'll get into some weird synchronization issues.
+-- | Create a new I/O manager. In the Threaded I/O manager this call doesn't
+-- have any side effects, but in the Non-Threaded I/O manager the newly
+-- created IOCP handle will be registered with the RTS.  Users should never
+-- call this.
+--
+-- NOTE: This needs to finish without making any calls to anything requiring the
+-- I/O manager otherwise we'll get into some weird synchronization issues.
+-- Essentially this means avoid using long running operations here.
 new :: IO Manager
 new = do
     debugIO "Starting io-manager..."
@@ -202,6 +312,10 @@ new = do
         replicateM n x = sequence (replicate n x)
 
 {-# INLINE startIOManagerThread #-}
+-- | Starts a new I/O manager thread.
+-- For the threaded runtime it creates a new OS thread which stays alive until
+-- it is instructed to die. For the non-threaded runtime it creates a Haskell
+-- thread which only does one step and terminates.
 startIOManagerThread :: IO () -> IO ()
 startIOManagerThread loop = do
   modifyMVar_ ioManagerThread $ \old -> do
@@ -236,12 +350,18 @@ startIOManagerThread loop = do
                                     interruptSystemManager
                                return (Just t)
 
+-- | The various states the I/O manager can be in. Used mostly for internal
+-- bookkeeping and to make certain operations idempotent.
 data WinIOStatus
-  = WinIORunning
-  | WinIOScanning
-  | WinIOWaiting
-  | WinIOBlocked
-  | WinIODone
+  = WinIORunning  -- ^ I/O manager is running and doing something.
+  | WinIOScanning -- ^ The I/O manager has been interrupted without servicing
+                  -- a request. Likely due to a timer elapsing.
+  | WinIOWaiting  -- ^ I/O manager is blocked on an alertable wait for I/O
+                  -- completions.
+  | WinIOBlocked  -- ^ I/O manager is not servicing any I/O requests but the
+                  -- thread is still alive.  This is usually the result of
+                  -- a user requested event.
+  | WinIODone     -- The I/O manager was requested to terminate and has done so.
   deriving Eq
 
 
@@ -273,6 +393,9 @@ managerRef :: MVar Manager
 managerRef = unsafePerformIO $ new >>= newMVar
 {-# NOINLINE managerRef #-}
 
+-- | Interrupts an I/O manager Wait.  This will force the I/O manager to process
+-- any outstanding events and timers.  Also called when console events such as
+-- ctrl+c are used to break abort an I/O request.
 interruptSystemManager :: IO ()
 interruptSystemManager = do
   mgr <- getSystemManager
@@ -620,7 +743,7 @@ step maxDelay mgr@Manager{..} = do
                    else fromTimeout delay
     debugIO $ "next timeout: " ++ show delay
     debugIO $ "next timer: " ++ show timer -- todo: print as hex
-    -- The getQueuedCompletionStatusEx call will remove entries queud by the OS
+    -- The getQueuedCompletionStatusEx call will remove entries queued by the OS
     -- and returns the finished ones in mgrOverlappedEntries and the number of
     -- entries removed.
     case (maxDelay, delay) of
