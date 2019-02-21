@@ -183,6 +183,7 @@ schedule (Capability *initialCapability, Task *task)
   bool ready_to_gc;
 
   cap = initialCapability;
+  t = NULL;
 
   // Pre-condition: this task owns initialCapability.
   // The sched_mutex is *NOT* held
@@ -295,9 +296,20 @@ schedule (Capability *initialCapability, Task *task)
     if (emptyRunQueue(cap)) continue; // look for work again
 #endif
 
-#if !defined(THREADED_RTS) && !defined(mingw32_HOST_OS)
+#if !defined(THREADED_RTS)
     if ( emptyRunQueue(cap) ) {
+#if defined(mingw32_HOST_OS)
+  /* On the non-threaded RTS if the queue is empty and the last action was
+     blocked on an I/O completion port, then just wait till we're woken up by
+     the RTS with more work.  */
+  //if (t && t->why_blocked == BlockedOnIOCompletion)
+    {
+      SwitchToThread ();
+      continue;
+    }
+#else
         ASSERT(sched_state >= SCHED_INTERRUPTING);
+#endif
     }
 #endif
 
@@ -913,7 +925,7 @@ scheduleDetectDeadlock (Capability **pcap, Task *task)
          */
         if (recent_activity != ACTIVITY_INACTIVE) return;
 #endif
-        if (task->incall->tso == BlockedOnIOCompletion) return;
+        if (task->incall->tso->why_blocked == BlockedOnIOCompletion) return;
 
         debugTrace(DEBUG_sched, "deadlocked, forcing major GC...");
 
@@ -3043,6 +3055,11 @@ resurrectThreads (StgTSO *threads)
             throwToSingleThreaded(cap, tso,
                                   (StgClosure *)blockedIndefinitelyOnSTM_closure);
             break;
+        case BlockedOnIOCompletion:
+            /* I/O Ports may not be reachable by the GC as they may be getting
+             * notified by the RTS.  As such this call should be treated as if
+             * it is masking the exception.  */
+            continue;
         case NotBlocked:
             /* This might happen if the thread was blocked on a black hole
              * belonging to a thread that we've just woken up (raiseAsync

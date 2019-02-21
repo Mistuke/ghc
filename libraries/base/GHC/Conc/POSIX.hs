@@ -39,12 +39,12 @@ module GHC.Conc.POSIX
        ) where
 
 
-##include "windows_cconv.h"
-#include <rts/IOManager.h>
+#include "windows_cconv.h"
 
 import Data.Bits (shiftR)
 import GHC.Base
 import GHC.Conc.Sync
+import GHC.Conc.POSIX.Const
 import GHC.Enum (Enum)
 import GHC.Event.Windows.ConsoleEvent
 import GHC.IO (unsafePerformIO)
@@ -262,10 +262,6 @@ service_cont :: HANDLE -> [DelayReq] -> IO ()
 service_cont wakeup delays = do
   _ <- atomicSwapIORef prodding False
   service_loop wakeup delays
-
-io_MANAGER_WAKEUP, io_MANAGER_DIE :: Word32
-io_MANAGER_WAKEUP = #{const IO_MANAGER_WAKEUP}
-io_MANAGER_DIE    = #{const IO_MANAGER_DIE}
 
 wakeupIOManager :: IO ()
 wakeupIOManager = c_sendIOManagerEvent io_MANAGER_WAKEUP

@@ -69,7 +69,7 @@ module GHC.Event.Windows (
 ##include "windows_cconv.h"
 #include <windows.h>
 #include <ntstatus.h>
-#include <rts/IOManager.h>
+#include <Rts.h>
 
 import GHC.Event.Windows.Clock   (Clock, Seconds, getClock, getTime)
 import GHC.Event.Windows.FFI     (OVERLAPPED, LPOVERLAPPED, OVERLAPPED_ENTRY(..))
@@ -538,9 +538,9 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
           success <- FFI.overlappedIOStatus lpol
           err     <- fmap fromIntegral getErrorCode
           -- Determine if the caller has done any checking.  If not then check
-          -- to see if the request was completed on synchronously.  We have to
-          -- in order to prevent deadlocks as if it has completed synchronously
-          -- the completion wouldn't have been queued.
+          -- to see if the request was completed synchronously.  We have to
+          -- in order to prevent deadlocks since if it has completed
+          -- synchronously we've requested to not have the completion queued.
           let result' =
                 case result of
                   CbNone ret | success == #{const ERROR_SUCCESS}       -> CbDone Nothing

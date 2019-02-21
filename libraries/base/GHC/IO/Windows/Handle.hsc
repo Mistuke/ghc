@@ -100,7 +100,7 @@ data ConsoleHandle
 -- | Bit of a Hack, but we don't want every handle to have a cooked entry
 --   but all copies of the handles for which we do want one need to share
 --   the same value.
---   We can't store it seperately because we don't know when the handle will
+--   We can't store it separately because we don't know when the handle will
 --   be destroyed or invalidated.
 data IoHandle a where
   NativeHandle  :: { getNativeHandle  :: HANDLE } -> IoHandle NativeHandle

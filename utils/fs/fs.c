@@ -58,7 +58,22 @@ wchar_t* FS (create_device_name) (const wchar_t* filename) {
     }
 
   /* Now resolve any . and .. in the path or subsequent API calls may fail since
-     Win32 will no longer resolve them.  */
+     Win32 will no longer resolve them.  The documentation for this function
+     on MSDN is a bit misleading as it's a boilerplate copy-paste.  But this
+     function is a thin wrapper around the RtlGetFullPathName_U API which does
+     not perform any validation on the path, including length checks.  This
+     means that this function is able to handle > MAX_PATH even without the
+     \\?\ prefix, which will allow us to resolve relative paths that on their
+     own are already > MAX_PATH.  Remember MAX_PATH is a usermode API limit and
+     not a system or kernel one.
+     What happens when you specify \\?\ to most other functions is that the
+     calls to these NTDLL functions require a buffer to be given to hold the
+     results. Without \\?\ prefix this internal buffer will be MAX_PATH.  WIth
+     the prefix this buffer is dynamic, however the structure that holds the
+     string information stores the length as a 16 bit number.  It stores this
+     as a character count and not a byte count.  Because Windows Unicode chars
+     are stored as wide chars you require 2 bytes.  This is why the limit is
+     (2^16) / 2 - 1 characters. */
   DWORD nResult = GetFullPathNameW (result, 0, NULL, NULL) + 1;
   wchar_t *temp = _wcsdup (result);
   result = malloc (nResult * sizeof (wchar_t));

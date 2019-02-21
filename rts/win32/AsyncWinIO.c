@@ -297,7 +297,7 @@ DWORD WINAPI runner (LPVOID lpParam STG_UNUSED)
       AcquireSRWLockExclusive (&lock);
 
       lastEvent = readIOManagerEvent ();
-      /* Unalertable wait.  While here we can't server any I/O requests so we
+      /* Non-alertable wait.  While here we can't server any I/O requests so we
          would ideally like to spent as little time here as possible.  As such
          there are only 3 reasons to enter this state:
 

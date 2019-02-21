@@ -834,6 +834,7 @@ printThreadBlockage(StgTSO *tso)
     debugBelch("is blocked until %ld", (long)(tso->block_info.target));
     break;
 #endif
+    break;
   case BlockedOnMVar:
     debugBelch("is blocked on an MVar @ %p", tso->block_info.closure);
     break;

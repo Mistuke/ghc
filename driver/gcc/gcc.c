@@ -10,6 +10,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <windows.h>
 
 int main(int argc, char** argv) {
     char *binDir;
@@ -32,14 +33,14 @@ int main(int argc, char** argv) {
     if (!oldPath) {
         die("Couldn't read PATH\n");
     }
-    n = snprintf(NULL, 0, "PATH=%s;%s", binDir, oldPath);
+    n = snprintf(NULL, 0, "%s;%s", binDir, oldPath);
     n++;
     newPath = malloc(n);
     if (!newPath) {
         die("Couldn't allocate space for PATH\n");
     }
-    snprintf(newPath, n, "PATH=%s;%s", binDir, oldPath);
-    n = putenv(newPath);
+    snprintf(newPath, n, "%s;%s", binDir, oldPath);
+    n = _putenv_s("PATH", newPath);
     if (n) {
         die("putenv failed\n");
     }
@@ -61,6 +62,14 @@ int main(int argc, char** argv) {
     preArgv[2] = mkString("-B%s/../lib/gcc/%s/%s"    , binDir, base, version);
     preArgv[3] = mkString("-B%s/../libexec/gcc/%s/%s", binDir, base, version);
 
+    size_t size = strlen(binDir) + 1;
+    wchar_t* s_binDir = calloc (size, sizeof (wchar_t));
+
+    size_t outSize;
+    mbstowcs_s(&outSize, s_binDir, size, binDir, size - 1);
+
+    DLL_DIRECTORY_COOKIE cookie = AddDllDirectory (binDir);
     run(exePath, 4, preArgv, argc - 1, argv + 1, NULL);
+    RemoveDllDirectory (cookie);
 }
 
