@@ -916,7 +916,7 @@ scheduleDetectDeadlock (Capability **pcap, Task *task)
      */
     if ( emptyThreadQueues(cap) )
     {
-#if 1 // defined(THREADED_RTS)
+#if defined(THREADED_RTS)
         /*
          * In the threaded RTS, we only check for deadlock if there
          * has been no activity in a complete timeslice.  This means

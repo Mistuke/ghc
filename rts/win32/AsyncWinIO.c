@@ -320,6 +320,7 @@ DWORD WINAPI runner (LPVOID lpParam STG_UNUSED)
       fprintf (stderr, "$ runner:GetQueuedCompletionStatusEx\n");
 
       ULONG num_removed = -1;
+      ZeroMemory (entries, sizeof (entries[0]) * num_callbacks);
       if (GetQueuedCompletionStatusEx (completionPortHandle, entries,
                                        num_callbacks, &num_removed, timeout,
                                        false))

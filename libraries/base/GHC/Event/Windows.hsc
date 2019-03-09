@@ -615,6 +615,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
             debugIO $ dbg $ ":: done " ++ show lpol ++ " - " ++ show rdata
             bytes <- if isJust rdata
                         then return rdata
+                        -- Make sure it's safe to free the OVERLAPPED buffer
                         else FFI.getOverlappedResult h lpol False
             case bytes of
               Just res -> completionCB 0 res
