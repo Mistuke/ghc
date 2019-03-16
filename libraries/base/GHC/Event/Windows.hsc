@@ -51,7 +51,7 @@ module GHC.Event.Windows (
     withException,
     ioSuccess,
     ioFailed,
-    getErrorCode,
+    getLastError,
 
     -- * I/O Result type
     IOResult(..),
@@ -382,6 +382,7 @@ outstandingRequests = withMVar requests return
 getSystemManager :: IO Manager
 getSystemManager = readMVar managerRef
 
+-- | Mutable reference to the IO manager
 managerRef :: MVar Manager
 managerRef = unsafePerformIO $ new >>= newMVar
 {-# NOINLINE managerRef #-}
@@ -401,10 +402,14 @@ interruptSystemManager = do
                    ++ "Try wakeupIOManager instead."
 
 
--- must be power of 2
+-- | The initial number of I/O requests we can service at the same time.
+-- Must be power of 2.  This number is used as the starting point to scale
+-- the number of concurrent requests.  It will be doubled everytime we are
+-- saturated.
 callbackArraySize :: Int
 callbackArraySize = 32
 
+-- | Convert an OVERLAPPED* to an Int representing a intptr_t
 lpoverlappedToInt :: LPOVERLAPPED -> Int
 lpoverlappedToInt lpol = fromIntegral (ptrToIntPtr lpol)
 {-# INLINE lpoverlappedToInt #-}
@@ -413,6 +418,7 @@ lpoverlappedToInt lpol = fromIntegral (ptrToIntPtr lpol)
 -- hashOverlapped lpol = (lpoverlappedToInt lpol) .&. (callbackArraySize - 1)
 -- {-# INLINE hashOverlapped #-}
 
+-- | Accessor for the callback structure inside the I/O Manager
 callbackTableVar :: Manager -> MVar (IT.IntTable CompletionData)
 callbackTableVar = mgrCallbacks
 {-# INLINE callbackTableVar #-}
@@ -442,17 +448,20 @@ type StartIOCallback a = StartCallback (CbResult a)
 
 -- | CallBack result type to disambiguate between the different states
 -- an I/O Completion call could be in.
-data CbResult a = CbDone (Maybe DWORD) -- ^ Request was handled immediately, no queue.
-                | CbPending            -- ^ Queued and handled by I/O manager
-                | CbError a            -- ^ I/O request abort, return failure immediately
-                | CbNone Bool          -- ^ The caller did not do any checking, the I/O
-                                       --   manager will perform additional checks.
+data CbResult a
+  = CbDone (Maybe DWORD) -- ^ Request was handled immediately, no queue.
+  | CbPending            -- ^ Queued and handled by I/O manager
+  | CbError a            -- ^ I/O request abort, return failure immediately
+  | CbNone Bool          -- ^ The caller did not do any checking, the I/O
+                         --   manager will perform additional checks.
 
 -- | Called when the completion is delivered.
 type CompletionCallback a = ErrCode   -- ^ 0 indicates success
                           -> DWORD     -- ^ Number of bytes transferred
                           -> IO a
 
+-- | Associate a 'HANDLE' with the current I/O manager's completion port.
+-- This must be done before using the handle with 'withOverlapped'.
 associateHandle' :: HANDLE -> IO ()
 associateHandle' hwnd
   = do mngr <- getSystemManager
@@ -464,34 +473,6 @@ associateHandle :: Manager -> HANDLE -> IO ()
 associateHandle Manager{..} h =
     -- Use as completion key the file handle itself, so we can track completion
     FFI.associateHandleWithIOCP mgrIOCP h (fromIntegral $ ptrToWordPtr h)
-
--- Note [RTS Scheduler error propagation]
---
--- The RTS scheduler will save and restore Last Error across Haskell threads
--- when it suspends or resumes threads.  This is normally fine since the errors
--- are mostly informative.  The problem starts with I/O CP calls, where in
--- particular ERROR_IO_PENDING is a dangerous one.  During long running threads
--- the scheduler will incorrectly restore this error, which indicates there are
--- still pending I/O operations.  If we're doing lazy reads then this tricks
--- the I/O manager into thinking we still have things we need to read, while
--- there is none.  So it just keeps looping.  Coincidentally it also tricks
--- itself into not resuming the main thread, as that also thinks events are
--- pending.
---
--- To mitigate this, we purge the error immediately after making the any I/O
--- call that may result in pending I/O operations.
---
--- Crude but effective, however since this is still Haskell code, need to
--- figure out a more thread-safe way.  Perhaps I should just prevent this code
--- from being saved/restored.  But that may break an I/O read that was in
--- progress.. Grrr
-
-getErrorCode :: IO ErrCode
-getErrorCode = do
-    err <- getLastError
-    -- See Note [RTS Scheduler error propagation]
-    -- when (err /= 0) $ FFI.setLastError 0
-    return err
 
 -- | Start an overlapped I/O operation, and wait for its completion.  If
 -- 'withOverlapped' is interrupted by an asynchronous exception, the operation
@@ -529,7 +510,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
           -- non-overlapping handle or was completed immediately.
           -- e.g. stdio redirection or data in cache, FAST I/O.
           success <- FFI.overlappedIOStatus lpol
-          err     <- fmap fromIntegral getErrorCode
+          err     <- fmap fromIntegral getLastError
           -- Determine if the caller has done any checking.  If not then check
           -- to see if the request was completed synchronously.  We have to
           -- in order to prevent deadlocks since if it has completed
@@ -588,7 +569,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                           Just (CompletionData _fptr _hwnd cb) -> do
                             reqs <- removeRequest
                             debugIO $ "-1.. " ++ show reqs ++ " requests queued after error."
-                            status <- fmap fromIntegral getErrorCode
+                            status <- fmap fromIntegral getLastError
                             cb status 0
                         when (not threaded) $
                           do num_remaining <- outstandingRequests
@@ -634,6 +615,8 @@ withOverlapped fname h offset startCB completionCB = do
 ------------------------------------------------------------------------
 -- I/O Utilities
 
+-- | Process an IOResult and throw an exception back to the user if the action
+-- has failed, or return the result.
 withException :: String -> IO (IOResult a) -> IO a
 withException name fn
  = do res <- fn
@@ -642,9 +625,11 @@ withException name fn
        IOFailed (Just err) -> FFI.throwWinErr name $ fromIntegral err
        IOFailed Nothing    -> FFI.throwWinErr name 0
 
+-- | Signal that the I/O action was successful.
 ioSuccess :: a -> IO (IOResult a)
 ioSuccess = return . IOSuccess
 
+-- | Signal that the I/O action has failed with the given reason.
 ioFailed :: Integral a => a -> IO (IOResult a)
 ioFailed = return . IOFailed . Just . fromIntegral
 
@@ -684,6 +669,8 @@ unregisterTimeout :: Manager -> TimeoutKey -> IO ()
 unregisterTimeout mgr (TK key) = do
     editTimeouts mgr (Q.delete key)
 
+-- | Modify an existing timeout.  This isn't thread safe and so if the time to
+-- elapse the timer was close it may fire anyway.
 editTimeouts :: Manager -> TimeoutEdit -> IO ()
 editTimeouts mgr g = do
   atomicModifyIORef' (mgrTimeouts mgr) $ \tq -> (g tq, ())
@@ -730,8 +717,17 @@ fromTimeout (Just sec) | sec > 120  = 120000
                        | sec > 0    = ceiling (sec * 1000)
                        | otherwise  = 0
 
+-- | Perform one full evaluation step of the I/O manager's service loop.
+-- This means process timeouts and completed completions and calculate the time
+-- for the next timeout.
+--
+-- The I/O manager is then notified of how long it should block again based on
+-- the queued I/O requests and timers.  If the I/O manager was given a command
+-- to block, shutdown or suspend than that request is honored at the end of the
+-- loop.
 step :: Bool -> Manager -> IO (Bool, Maybe Seconds)
 step maxDelay mgr@Manager{..} = do
+    -- Determine how long to wait the next time we block in an alertable state.
     delay <- runExpiredTimeouts mgr
     let timer = if maxDelay && delay == Nothing
                    then #{const INFINITE}
@@ -756,6 +752,16 @@ step maxDelay mgr@Manager{..} = do
     setStatus WinIORunning
     processCompletion mgr n delay
 
+-- | Process the results at the end of an evaluation loop.  This function will
+-- read all the completions, wake up all the Haskell threads, clean up the book
+-- keeping of the I/O manager and return whether there are outstanding work to
+-- be done and how long it expects to have to wait till it can take action
+-- again.
+--
+-- Note that this method can do less work than there are entries in the
+-- completion table.  This is because some completion entries may have been
+-- created due to calls to interruptIOManager which will enqueue a faux
+-- completion.
 processCompletion :: Manager -> Int -> Maybe Seconds -> IO (Bool, Maybe Seconds)
 processCompletion mgr@Manager{..} n delay = do
     debugIO $ "completed completions: " ++ show n
@@ -799,23 +805,32 @@ processCompletion mgr@Manager{..} n delay = do
     debugIO $ "has more: " ++ show more ++ " - removed: " ++  show n
     return (more || (isJust delay && threaded), delay)
 
+-- | Entry point for the non-threaded I/O manager to be able to process
+-- completed completions.  It is mostly a wrapper around processCompletion.
 processRemoteCompletion :: IO ()
 processRemoteCompletion = do
   alloca $ \ptr_n -> do
     debugIO "processRemoteCompletion :: start ()"
+    -- First figure out how much work we have to do.
     entries <- getOverlappedEntries ptr_n
     n <- fromIntegral `fmap` peek ptr_n
+    -- This call will unmarshal data from the C buffer but pointers inside of
+    -- this have not been read yet.
     _ <- peekArray n entries
     mngr <- getSystemManager
     let arr = mgrOverlappedEntries mngr
     A.unsafeSplat arr entries n
     _ <- processCompletion mngr n Nothing
     num_left <- outstandingRequests
+    -- This call will unblock the non-threaded I/O manager.  After this it is no
+    -- longer safe to use `entries` nor `completed`.
     servicedIOEntries num_left
     setStatus WinIOBlocked
     debugIO "processRemoteCompletion :: done ()"
     return ()
 
+-- | Even loop for the Threaded I/O manager.  The one for the non-threaded
+-- I/O manager is in AsyncWinIO.c in the rts.
 io_mngr_loop :: HANDLE -> Manager -> IO ()
 io_mngr_loop _event mgr = go False
     where

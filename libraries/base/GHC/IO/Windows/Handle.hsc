@@ -411,7 +411,7 @@ type LPSECURITY_ATTRIBUTES = LPVOID
 
 -- For this to actually block, the file handle must have
 -- been created with FILE_FLAG_OVERLAPPED not set. As an implementation note I
--- choosing never to let this block. But this can be easily accomplished by
+-- am choosing never to let this block. But this can be easily accomplished by
 -- a getOverlappedResult call with True
 hwndRead :: Io NativeHandle -> Ptr Word8 -> Word64 -> Int -> IO Int
 hwndRead hwnd ptr offset bytes
@@ -431,9 +431,10 @@ hwndRead hwnd ptr offset bytes
       | err == #{const ERROR_MORE_DATA}    = Mgr.ioSuccess $ fromIntegral dwBytes
       | otherwise                          = Mgr.ioFailed err
 
--- There's no non-blocking file I/O on Windows I think..
--- But sockets etc should be possible.
--- Revisit this when implementing sockets and pipes.
+-- In WinIO we'll never block in the FFI call, so this call is equivalent to
+-- hwndRead,  Though we may revisit this when implementing sockets and pipes.
+-- It still won't block, but may set up extra book keeping so threadWait and
+-- threadWrite may work.
 hwndReadNonBlocking :: Io NativeHandle -> Ptr Word8 -> Word64 -> Int
                     -> IO (Maybe Int)
 hwndReadNonBlocking hwnd ptr offset bytes
@@ -717,7 +718,7 @@ handle_get_console_size hwnd =
 -- -----------------------------------------------------------------------------
 -- opening files
 
--- | Open a file and make an 'FD' for it.  Truncates the file to zero
+-- | Open a file and make an 'NativeHandle' for it.  Truncates the file to zero
 -- size when the `IOMode` is `WriteMode`.
 openFile
   :: FilePath -- ^ file to open
@@ -758,7 +759,7 @@ openFile filepath iomode non_blocking =
       return (hwnd, _type)
         where
           -- We have to use in-process locking (e.g. use the locking mechanism
-          -- in the rts) so we're consistent with the linux behaviour and the
+          -- in the rts) so we're consistent with the linux behavior and the
           -- rts knows about the lock.  See #4363 for more.
           file_share_mode =  #{const FILE_SHARE_READ}
                          .|. #{const FILE_SHARE_WRITE}
@@ -804,6 +805,8 @@ openFile filepath iomode non_blocking =
                                       file_create_flags
                                       nullPtr
 
+          -- Tell the OS that we support skipping the request Queue if the
+          -- IRQ can be handled immediately, e.g. if the data is in the cache.
           optimizeFileAccess handle =
               failIfFalse_ "SetFileCompletionNotificationModes"  $
                 c_SetFileCompletionNotificationModes handle

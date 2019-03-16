@@ -37,6 +37,9 @@ import GHC.RTS.Flags
 
 infixl 7 <!>
 
+-- | Conditionally execute an action depending on the configured I/O subsystem.
+-- If POSIX then execute first action, if Windows then execute second.
+-- On POSIX systems but NATIVE and POSIX will execute the first action.
 conditional :: a -> a -> a
 conditional posix windows = withIoSubSystem' sub
   where
@@ -48,6 +51,7 @@ conditional posix windows = withIoSubSystem' sub
                   IoNative -> posix
 #endif
 
+-- | Infix version of `conditional`.
 (<!>) :: a -> a -> a
 (<!>) = conditional
 

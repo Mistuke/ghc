@@ -188,10 +188,11 @@ charSize = 4
 --
 -- On Posix systems the I/O manager has an implicit reliance on doing a file
 -- read moving the file pointer.  However on Windows async operations this
--- assumption is quite false.  OVERLAPPED operations don't respect the global
+-- assumption is quite false.  OVERLAPPED operations don't respect the C runtime
 -- file offset as their intention is to support arbitrary async reads to
--- anywhere.  As such we should explicitly keep track of the intended read
--- target in the buffer.  Any operation to seek should also update this entry.
+-- anywhere at a much lower level.  As such we should explicitly keep track of
+-- the file offsets of the target in the buffer.  Any operation to seek should
+-- also update this entry.
 data Buffer e
   = Buffer {
         bufRaw    :: !(RawBuffer e),
