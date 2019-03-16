@@ -64,7 +64,9 @@ module GHC.IO.Buffer (
     charSize,
  ) where
 
+#if defined(CHARBUF_UTF16)
 import Data.Word (Word64)
+#endif
 
 import GHC.Base
 -- import GHC.IO

@@ -57,7 +57,7 @@ module GHC.Event.Windows (
     IOResult(..),
 
     -- * I/O Event notifications
-    HandleData,
+    HandleData (..), -- seal for release
     HandleKey (handleValue),
     registerHandle,
     unregisterHandle,
@@ -83,35 +83,30 @@ import {-# SOURCE #-} Control.Concurrent
 import Control.Concurrent.MVar
 import Control.Exception as E
 import Data.IORef
-import Data.Foldable (mapM_)
+import Data.Foldable (mapM_, length)
 import Data.Maybe
 import Data.Word
 import Data.Semigroup.Internal (stimesMonoid)
 import Data.OldList (deleteBy)
 import Foreign       hiding (new)
 import Foreign.C
-import Foreign.Ptr (ptrToIntPtr)
 import Foreign.ForeignPtr.Unsafe
 import qualified GHC.Event.Array    as A
-import GHC.Arr (Array, (!), listArray, numElements)
 import GHC.Base
-import {-# SOURCE #-} GHC.Conc.Sync (forkIO, myThreadId, showThreadId,
-                                     ThreadId(..), ThreadStatus(..),
-                                     threadStatus, sharedCAF)
-import GHC.List (replicate, length)
+import GHC.Conc.Sync (forkIO, myThreadId, showThreadId,
+                      ThreadId(..), ThreadStatus(..),
+                      threadStatus, sharedCAF)
 import GHC.Event.Unique
 import GHC.Event.TimeOut
 import GHC.Event.Windows.ConsoleEvent
 import GHC.IOPort
 import GHC.Num
 import GHC.Real
-import GHC.Read
-import GHC.Enum (Enum)
 import GHC.Windows
 import System.IO.Unsafe     (unsafePerformIO)
 import Text.Show
 import System.Posix.Internals (c_write)
-import GHC.RTS.Flags
+-- import GHC.RTS.Flags
 
 import qualified GHC.Windows as Win32
 
@@ -259,11 +254,11 @@ data EventData = EventData { evtTopLevel :: !Event, evtElems :: !EventElements }
 
 instance Monoid EventData where
   mempty  = EventData evtNothing []
-  mappend = \a b -> EventData (evtTopLevel a <> evtTopLevel b)
-                              (evtElems a ++ evtElems b)
+  mappend = (<>)
 
 instance Semigroup EventData where
-  (<>)   = mappend
+  (<>)   = \a b -> EventData (evtTopLevel a <> evtTopLevel b)
+                             (evtElems a ++ evtElems b)
   stimes = stimesMonoid
 
 data IOResult a
@@ -308,8 +303,6 @@ new = do
     mgrEvntHandlers <- newMVar =<< IT.new callbackArraySize
     let !mgr = Manager{..}
     return mgr
-      where
-        replicateM n x = sequence (replicate n x)
 
 {-# INLINE startIOManagerThread #-}
 -- | Starts a new I/O manager thread.
@@ -369,7 +362,7 @@ statusWinIO :: MVar WinIOStatus
 statusWinIO = unsafePerformIO $ newMVar WinIODone
 
 setStatus :: WinIOStatus -> IO ()
-setStatus val = modifyMVar_ statusWinIO (\a -> return val)
+setStatus val = modifyMVar_ statusWinIO (\_ -> return val)
 
 getStatus :: IO WinIOStatus
 getStatus = readMVar statusWinIO
@@ -416,9 +409,9 @@ lpoverlappedToInt :: LPOVERLAPPED -> Int
 lpoverlappedToInt lpol = fromIntegral (ptrToIntPtr lpol)
 {-# INLINE lpoverlappedToInt #-}
 
-hashOverlapped :: LPOVERLAPPED -> Int
-hashOverlapped lpol = (lpoverlappedToInt lpol) .&. (callbackArraySize - 1)
-{-# INLINE hashOverlapped #-}
+-- hashOverlapped :: LPOVERLAPPED -> Int
+-- hashOverlapped lpol = (lpoverlappedToInt lpol) .&. (callbackArraySize - 1)
+-- {-# INLINE hashOverlapped #-}
 
 callbackTableVar :: Manager -> MVar (IT.IntTable CompletionData)
 callbackTableVar = mgrCallbacks
@@ -544,7 +537,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
           let result' =
                 case result of
                   CbNone ret | success == #{const ERROR_SUCCESS}       -> CbDone Nothing
-                             | success == #{const STATUS_END_OF_FILE}  -> CbDone Nothing
+                             | err     == #{const STATUS_END_OF_FILE}  -> CbDone Nothing
                              | err     == #{const ERROR_IO_PENDING}    -> CbPending
                              | err     == #{const ERROR_IO_INCOMPLETE} -> CbPending
                              | err     == #{const ERROR_HANDLE_EOF}    -> CbDone Nothing
@@ -554,14 +547,15 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
           case result' of
             CbNone    _ -> error "shouldn't happen."
             CbPending   -> do
-              -- | Before we enqueue check to see if operation finished in the
+              -- Before we enqueue check to see if operation finished in the
               -- mean time, since caller may not have done this.
               finished <- FFI.getOverlappedResult h lpol False
               debugIO $ "== " ++ show (finished)
               status <- FFI.overlappedIOStatus lpol
               debugIO $ "== >< " ++ show (status)
+              lasterr <- fmap fromIntegral getErrorCode :: IO Int
               let done_early =  status == #{const ERROR_SUCCESS}
-                             || status == #{const STATUS_END_OF_FILE}
+                             || lasterr == #{const STATUS_END_OF_FILE}
 
               debugIO $ "== >*< " ++ show (finished, done_early)
               case (finished, done_early) of
@@ -576,7 +570,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                 _                -> do
                   debugIO "request handled immediately (o/b), not queued."
                   return $ CbDone Nothing
-            CbError err -> signalThrow (Just err) >> return result'
+            CbError err' -> signalThrow (Just err') >> return result'
             CbDone  _   -> debugIO "request handled immediately (o), not queued." >> return result'
 
         let cancel e = do
@@ -586,7 +580,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                         -- we need to wait for the cancellation before removing
                         -- the pointer.
                         debugIO $ "## Waiting for cancellation record... "
-                        FFI.getOverlappedResult h lpol True
+                        _ <- FFI.getOverlappedResult h lpol True
                         mCD <- withMVar (callbackTableVar mgr) $
                                 IT.delete (lpoverlappedToInt lpol)
                         case mCD of
@@ -811,7 +805,7 @@ processRemoteCompletion = do
     debugIO "processRemoteCompletion :: start ()"
     entries <- getOverlappedEntries ptr_n
     n <- fromIntegral `fmap` peek ptr_n
-    completed <- peekArray n entries
+    _ <- peekArray n entries
     mngr <- getSystemManager
     let arr = mgrOverlappedEntries mngr
     A.unsafeSplat arr entries n
@@ -823,7 +817,7 @@ processRemoteCompletion = do
     return ()
 
 io_mngr_loop :: HANDLE -> Manager -> IO ()
-io_mngr_loop event mgr = go False
+io_mngr_loop _event mgr = go False
     where
       go maxDelay =
           do setStatus WinIORunning
@@ -875,9 +869,6 @@ foreign import ccall unsafe "readIOManagerEvent" -- in the RTS (ThrIOManager.c)
 foreign import ccall unsafe "sendIOManagerEvent" -- in the RTS (ThrIOManager.c)
   c_sendIOManagerEvent :: Word32 -> IO ()
 
-foreign import WINDOWS_CCONV "WaitForSingleObject"
-   c_WaitForSingleObject :: HANDLE -> DWORD -> IO DWORD
-
 foreign import ccall unsafe "rtsSupportsBoundThreads" threaded :: Bool
 
 
@@ -904,7 +895,7 @@ type EventCallback = HandleKey -> Event -> IO ()
 
 registerHandle :: Manager -> EventCallback -> HANDLE -> Event -> Lifetime
                -> IO HandleKey
-registerHandle mgr@(Manager{..}) cb hwnd evs lt = do
+registerHandle (Manager{..}) cb hwnd evs lt = do
   u <- newUnique mgrUniqueSource
   let reg   = HandleKey hwnd u
       hwnd' = fromIntegral $ ptrToIntPtr hwnd
@@ -917,7 +908,7 @@ registerHandle mgr@(Manager{..}) cb hwnd evs lt = do
   return reg
 
 unregisterHandle :: Manager -> HandleKey -> IO ()
-unregisterHandle mgr@(Manager{..}) key@HandleKey{..} = do
+unregisterHandle (Manager{..}) key@HandleKey{..} = do
   withMVar mgrEvntHandlers $ \evts -> do
     let hwnd' = fromIntegral $ ptrToIntPtr handleValue
     val <- IT.lookup hwnd' evts

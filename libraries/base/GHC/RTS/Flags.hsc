@@ -40,8 +40,7 @@ module GHC.RTS.Flags
 #include "Rts.h"
 #include "rts/Flags.h"
 
-import Control.Applicative
-import Control.Monad
+import Data.Functor ((<$>))
 
 import Foreign
 import Foreign.C

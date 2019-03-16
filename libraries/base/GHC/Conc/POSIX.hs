@@ -45,16 +45,13 @@ import Data.Bits (shiftR)
 import GHC.Base
 import GHC.Conc.Sync
 import GHC.Conc.POSIX.Const
-import GHC.Enum (Enum)
 import GHC.Event.Windows.ConsoleEvent
 import GHC.IO (unsafePerformIO)
 import GHC.IORef
 import GHC.MVar
 import GHC.Num (Num(..))
 import GHC.Ptr
-import GHC.Read (Read)
 import GHC.Real (div, fromIntegral)
-import GHC.Show (Show)
 import GHC.Word (Word32, Word64)
 import GHC.Windows
 

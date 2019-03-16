@@ -32,7 +32,6 @@ module GHC.IO.Handle.Text (
     ) where
 
 import GHC.IO
-import GHC.IO.SmartHandles
 import GHC.IO.Buffer
 import qualified GHC.IO.BufferedIO as Buffered
 import GHC.IO.Exception
@@ -46,7 +45,6 @@ import Foreign
 import Foreign.C
 
 import qualified Control.Exception as Exception
-import Data.Typeable
 import System.IO.Error
 import Data.Maybe
 

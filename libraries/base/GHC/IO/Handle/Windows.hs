@@ -23,10 +23,8 @@ module GHC.IO.Handle.Windows (
 
 import Data.Maybe
 import Data.Typeable
-import Foreign.C.Types
 
 import GHC.Base
-import GHC.Show
 import GHC.MVar
 import GHC.IO
 import GHC.IO.BufferedIO hiding (flushWriteBuffer)

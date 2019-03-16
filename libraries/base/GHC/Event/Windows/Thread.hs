@@ -6,11 +6,9 @@ module GHC.Event.Windows.Thread (
     registerDelay,
 ) where
 
-import Data.Maybe
 import GHC.Conc.Sync
 import GHC.Base
 import GHC.IO
-import GHC.MVar
 import GHC.IOPort
 import GHC.Real
 

@@ -44,13 +44,8 @@ Note: this #include is inside a Haskell comment
 import GHC.Base
 import Foreign
 import Foreign.C
-import GHC.IO.FD
-import GHC.IO.Exception
-import GHC.IO.Handle.Types
-import GHC.IO.Handle.Internals
 import GHC.Conc
 import Control.Concurrent.MVar
-import Data.Typeable
 
 data Handler
  = Default

@@ -20,7 +20,6 @@ import GHC.Base
 import GHC.Num
 import GHC.Real
 
-import Foreign.C.Types (CIntPtr)
 import Foreign.Ptr (IntPtr, intPtrToPtr)
 import qualified System.Posix.Types as POSIX
 import qualified GHC.Windows as WIN32

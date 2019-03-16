@@ -617,7 +617,7 @@ flushByteReadBuffer h_@Handle__{..} = do
   -- win-io doesn't need this, but it allows us to error out on invalid offsets
   let winIOSeek = IODevice.seek haDevice AbsoluteSeek (fromIntegral offset)
 
-  mIOSeek <!> winIOSeek  -- execute one of these two seek functions
+  _ <- mIOSeek <!> winIOSeek  -- execute one of these two seek functions
 
   writeIORef haByteBuffer bbuf{ bufL=0, bufR=0, bufOffset=offset }
 

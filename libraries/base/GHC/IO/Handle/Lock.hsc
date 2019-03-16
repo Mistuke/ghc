@@ -37,14 +37,11 @@ import Foreign.C.Types
 import Foreign.Marshal.Alloc
 import Foreign.Marshal.Utils
 import qualified GHC.Event.Windows as Mgr
-import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
-import GHC.Event.Windows.FFI (overlappedIOStatus)
+import GHC.Event.Windows (LPOVERLAPPED, withOverlapped)
 import GHC.IO.FD
 import GHC.IO.Handle.FD
 import GHC.IO.Handle.Windows (handleToHANDLE)
 import GHC.IO.SubSystem
-import GHC.Real
-import GHC.Ptr
 import GHC.Windows
 
 
@@ -230,7 +227,7 @@ lockImplWinIO h ctx mode block = do
                             lpOverlapped
         return $ Mgr.CbNone ret
 
-      completionCB err dwBytes
+      completionCB err _dwBytes
         | err == #{const ERROR_SUCCESS} = Mgr.ioSuccess 0
         | otherwise                     = Mgr.ioFailed err
 
@@ -275,7 +272,7 @@ unlockImplWinIO h = do
                               lpOverlapped
         return $ Mgr.CbNone ret
 
-      completionCB err dwBytes
+      completionCB err _dwBytes
         | err == #{const ERROR_SUCCESS} = Mgr.ioSuccess 0
         | otherwise                     = Mgr.ioFailed err
 

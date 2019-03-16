@@ -34,7 +34,7 @@ import GHC.Base ( Monad, NonEmpty(..), errorWithoutStackTrace, (.) )
 import GHC.Generics
 import GHC.List ( head, tail )
 import Control.Monad.ST.Imp
-import GHC.IO
+import System.IO
 
 -- | Monads having fixed points with a \'knot-tying\' semantics.
 -- Instances of 'MonadFix' should satisfy the following laws:

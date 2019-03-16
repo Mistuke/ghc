@@ -16,7 +16,6 @@
 module GHC.Event.TimeOut where
 
 import GHC.IO
-import GHC.Num
 import GHC.Base
 
 import qualified GHC.Event.PSQ as Q

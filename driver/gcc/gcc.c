@@ -12,6 +12,9 @@
 #include <stdlib.h>
 #include <windows.h>
 
+typedef DLL_DIRECTORY_COOKIE(WINAPI *LPAddDLLDirectory)(PCWSTR NewDirectory);
+typedef WINBOOL(WINAPI *LPRemoveDLLDirectory)(DLL_DIRECTORY_COOKIE Cookie);
+
 int main(int argc, char** argv) {
     char *binDir;
     char *exePath;
@@ -62,14 +65,27 @@ int main(int argc, char** argv) {
     preArgv[2] = mkString("-B%s/../lib/gcc/%s/%s"    , binDir, base, version);
     preArgv[3] = mkString("-B%s/../libexec/gcc/%s/%s", binDir, base, version);
 
-    size_t size = strlen(binDir) + 1;
-    wchar_t* s_binDir = calloc (size, sizeof (wchar_t));
+    HINSTANCE hDLL = LoadLibraryW(L"Kernel32.DLL");
+    LPAddDLLDirectory AddDllDirectory
+      = (LPAddDLLDirectory)GetProcAddress((HMODULE)hDLL, "AddDllDirectory");
+    LPRemoveDLLDirectory RemoveDllDirectory
+      = (LPRemoveDLLDirectory)GetProcAddress((HMODULE)hDLL, "RemoveDllDirectory");
+    DLL_DIRECTORY_COOKIE cookie;
 
-    size_t outSize;
-    mbstowcs_s(&outSize, s_binDir, size, binDir, size - 1);
+    if (AddDllDirectory && RemoveDllDirectory)
+      {
+        size_t size = strlen(binDir) + 1;
+        wchar_t* s_binDir = calloc (size, sizeof (wchar_t));
 
-    DLL_DIRECTORY_COOKIE cookie = AddDllDirectory (binDir);
+        size_t outSize;
+        mbstowcs_s(&outSize, s_binDir, size, binDir, size - 1);
+
+        cookie = AddDllDirectory (s_binDir);
+    }
+
     run(exePath, 4, preArgv, argc - 1, argv + 1, NULL);
-    RemoveDllDirectory (cookie);
+
+    if (AddDllDirectory && RemoveDllDirectory)
+      RemoveDllDirectory (cookie);
 }
 

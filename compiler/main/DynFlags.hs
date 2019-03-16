@@ -1286,12 +1286,6 @@ type LlvmTargets = [(String, LlvmTarget)]
 type LlvmPasses = [(Int, String)]
 type LlvmConfig = (LlvmTargets, LlvmPasses)
 
-data IoSubSystem
-  = IoPOSIX   -- ^ Use a POSIX I/O Sub-System
-  | IoNative  -- ^ Use platform native Sub-System. For unix OSes this is the
-              --   same as IoPOSIX, but on Windows this means use the Windows
-              --   native APIs for I/O, including IOCP and RIO.
-
 data Settings = Settings {
   sTargetPlatform        :: Platform,       -- Filled in by SysTools
   sGhcUsagePath          :: FilePath,       -- ditto

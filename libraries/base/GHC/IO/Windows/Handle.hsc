@@ -66,19 +66,14 @@ import GHC.IO.BufferedIO
 import qualified GHC.IO.Device
 import GHC.IO.Device (SeekMode(..), IODeviceType(..), IODevice(), devType, setSize)
 import GHC.IO.Exception
-import GHC.IO.Unsafe
 import GHC.IO.IOMode
 import GHC.IO.Windows.Encoding (withGhcInternalToUTF16, withUTF16ToGhcInternal)
 import GHC.IO.Windows.Paths (getDevicePath)
 import GHC.IO.Handle.Internals (debugIO)
 import GHC.IORef
-import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..),
-                          getErrorCode)
-import GHC.Event.Windows.FFI (overlappedIOStatus)
+import GHC.Event.Windows (LPOVERLAPPED, withOverlapped, IOResult(..))
 import Foreign.Ptr
 import Foreign.C
-import Foreign.C.Types
-import Foreign.C.String
 import Foreign.Marshal.Array (pokeArray)
 import Foreign.Marshal.Alloc (alloca, allocaBytes)
 import Foreign.Marshal.Utils (with, fromBool)
@@ -86,9 +81,8 @@ import Foreign.Storable (Storable (..))
 import qualified GHC.Event.Windows as Mgr
 
 import GHC.Windows (LPVOID, LPDWORD, DWORD, HANDLE, BOOL, LPCTSTR, ULONG, WORD,
-                    UCHAR, failIf, iNVALID_HANDLE_VALUE, failIf_, failWith,
+                    UCHAR, failIf, iNVALID_HANDLE_VALUE, failWith,
                     failIfFalse_, getLastError)
-import qualified GHC.Windows as Win32
 import Text.Show
 
 -- -----------------------------------------------------------------------------
@@ -266,12 +260,15 @@ mkConsoleHandle hwnd
 
 -- ASCII Ctrl+D (EOT) character.  Typically used by Unix consoles.
 -- use for cross platform compatibility and to adhere to the ASCII standard.
+acCtrlD :: Int
 acCtrlD = 0x04
 -- ASCII Ctrl+Z (SUB) character. Typically used by Windows consoles to denote
 -- EOT.  Use for compatibility with user expectations.
+acCtrlZ :: Int
 acCtrlZ = 0x1A
 
 -- Mask to use to trigger ReadConsole input processing end.
+acEotMask :: ULONG
 acEotMask = (1 `shiftL` acCtrlD) .|. (1 `shiftL` acCtrlZ)
 
 -- Structure to hold the control character masks
@@ -578,7 +575,7 @@ consoleRead hwnd ptr _offset bytes
             do eventType <- peekByteOff p_inputs 0 :: IO WORD
                debugIO $ "cobble: Length=" ++ show n
                debugIO $ "cobble: Type=" ++ show eventType
-               let ni_offset      = fromIntegral (#size INPUT_RECORD)
+               let ni_offset      = #size INPUT_RECORD
                let event          = #{const __builtin_offsetof (INPUT_RECORD, Event)}
                let char_offset    = event + #{const __builtin_offsetof (KEY_EVENT_RECORD, uChar)}
                let btnDown_offset = event + #{const __builtin_offsetof (KEY_EVENT_RECORD, bKeyDown)}
@@ -680,7 +677,7 @@ handle_duplicate hwnd = alloca $ \ptr -> do
   fromHANDLE <$> peek ptr
 
 console_set_buffering :: Io ConsoleHandle -> Bool -> IO ()
-console_set_buffering hwnd value = writeIORef (cookedHandle hwnd) value
+console_set_buffering hwnd value = setCooked hwnd value >> return ()
 
 handle_set_buffering :: RawHandle a => a -> Bool -> IO ()
 handle_set_buffering hwnd value =

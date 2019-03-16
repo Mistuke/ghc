@@ -48,12 +48,10 @@ module GHC.Event.Windows.FFI (
 
 ##include "windows_cconv.h"
 
-import {-# SOURCE #-} Control.Concurrent
 import Data.Maybe
 import Foreign
 import Foreign.C.Types
 import GHC.Base
-import GHC.Enum (fromEnum)
 import GHC.Num ((*))
 import GHC.Real (fromIntegral)
 import GHC.Show

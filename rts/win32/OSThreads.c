@@ -46,7 +46,7 @@ initCondition( Condition* pCond )
 }
 
 void
-closeCondition( Condition* pCond )
+closeCondition( Condition* pCond STG_UNUSED)
 {
   return;
 }

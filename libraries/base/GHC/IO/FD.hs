@@ -29,8 +29,6 @@ module GHC.IO.FD (
         stdin, stdout, stderr
     ) where
 
-import Data.Word (Word64)
-
 import GHC.Base
 import GHC.Num
 import GHC.Real

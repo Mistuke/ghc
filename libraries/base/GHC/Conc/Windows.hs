@@ -43,12 +43,11 @@ module GHC.Conc.Windows
 #include "windows_cconv.h"
 
 import GHC.Base
-import GHC.IO
 import GHC.Conc.Sync
 import qualified GHC.Conc.POSIX as POSIX
 import qualified GHC.Conc.IOCP as WINIO
 import GHC.Event.Windows.ConsoleEvent
-import GHC.IO.SubSystem (isWindowsNativeIO, (<!>))
+import GHC.IO.SubSystem ((<!>))
 import GHC.Ptr
 
 -- ----------------------------------------------------------------------------
@@ -105,8 +104,6 @@ threadDelay = POSIX.threadDelay <!> WINIO.threadDelay
 --
 registerDelay :: Int -> IO (TVar Bool)
 registerDelay = POSIX.registerDelay <!> WINIO.registerDelay
-
-foreign import ccall unsafe "rtsSupportsBoundThreads" threaded :: Bool
 
 ensureIOManagerIsRunning :: IO ()
 ensureIOManagerIsRunning =  POSIX.ensureIOManagerIsRunning

@@ -143,10 +143,10 @@ unsafeLoad (Array ref) load = do
 unsafeSplat :: Array a -> Ptr a -> Int -> IO ()
 unsafeSplat (Array ref) ptr n = do
     AC es _ cap <- readIORef ref
-    assert (n <= cap) $ do
-      withForeignPtr es $ \p -> do
-        _ <- memcpy p ptr (fromIntegral n)
-        writeIORef ref (AC es n cap)
+    when (n > cap) $ errorWithoutStackTrace "unsafeSplat: bad offsets or lengths"
+    withForeignPtr es $ \p -> do
+      _ <- memcpy p ptr (fromIntegral n)
+      writeIORef ref (AC es n cap)
 
 ensureCapacity :: Storable a => Array a -> Int -> IO ()
 ensureCapacity (Array ref) c = do

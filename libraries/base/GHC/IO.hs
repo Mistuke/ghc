@@ -27,7 +27,7 @@ module GHC.IO (
         IO(..), unIO, failIO, liftIO, mplusIO,
         unsafePerformIO, unsafeInterleaveIO,
         unsafeDupablePerformIO, unsafeDupableInterleaveIO,
-        noDuplicate, fixIO,
+        noDuplicate,
 
         -- To and from from ST
         stToIO, ioToST, unsafeIOToST, unsafeSTToIO,
@@ -46,7 +46,6 @@ import GHC.ST
 import GHC.Exception
 import GHC.Show
 import GHC.IO.Unsafe
-import GHC.MVar
 
 import {-# SOURCE #-} GHC.IO.Exception ( userError, IOError )
 
@@ -112,17 +111,6 @@ unsafeIOToST (IO io) = ST $ \ s -> (unsafeCoerce# io) s
 -- https://mail.haskell.org/pipermail/haskell-cafe/2009-April/060719.html
 unsafeSTToIO :: ST s a -> IO a
 unsafeSTToIO (ST m) = IO (unsafeCoerce# m)
-
--- ---------------------------------------------------------------------------
--- fixIO
-
-fixIO :: (a -> IO a) -> IO a
-fixIO k = do
-    m <- newEmptyMVar
-    ans <- unsafeDupableInterleaveIO (readMVar m)
-    result <- k ans
-    putMVar m result
-    return result
 
 -- -----------------------------------------------------------------------------
 -- | File and directory names are values of type 'String', whose precise

@@ -122,7 +122,7 @@ indexOf k IT{..} = k .&. (Arr.size tabArr - 1)
 -- | Get number of elements in the table
 size :: IntTable a -> IO Int
 size (IntTable ref) = do
-  it@IT{..} <- readIORef ref
+  IT{..} <- readIORef ref
   withForeignPtr tabSize peek
 
 -- | Remove the given key from the table and return its associated value.

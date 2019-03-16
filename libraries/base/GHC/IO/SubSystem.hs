@@ -32,11 +32,8 @@ module GHC.IO.SubSystem (
 import GHC.Base
 
 import GHC.IO.Unsafe
-import GHC.IO
 import GHC.IORef
 import GHC.RTS.Flags
-
-import Control.Monad
 
 infixl 7 <!>
 

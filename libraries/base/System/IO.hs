@@ -19,7 +19,7 @@ module System.IO (
     -- * The IO monad
 
     IO,
-    GHC.IO.fixIO,
+    fixIO,
 
     -- * Files and handles
 

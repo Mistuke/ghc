@@ -27,10 +27,8 @@ import GHC.Base
 import GHC.Conc.Sync
 import GHC.Enum (Enum)
 import GHC.IO (unsafePerformIO)
-import GHC.IORef
 import GHC.MVar
 import GHC.Num (Num(..))
-import GHC.Ptr
 import GHC.Read (Read)
 import GHC.Word (Word32)
 import GHC.Show (Show)
