@@ -539,7 +539,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
               debugIO $ "== " ++ show (finished)
               status <- FFI.overlappedIOStatus lpol
               debugIO $ "== >< " ++ show (status)
-              lasterr <- fmap fromIntegral getErrorCode :: IO Int
+              lasterr <- fmap fromIntegral getLastError :: IO Int
               let done_early =  status == #{const ERROR_SUCCESS}
                              || lasterr == #{const STATUS_END_OF_FILE}
 
