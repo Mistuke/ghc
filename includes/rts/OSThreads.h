@@ -107,12 +107,16 @@ typedef DWORD ThreadLocalKey;
    Mutexes are kernel objects that require kernel calls to
    acquire/release, whereas CriticalSections are spin-locks that block
    in the kernel after spinning for a configurable number of times.
-   CriticalSections are *much* faster, however not as fast as slim reader/writer
-   locks.  CriticalSections also require a 48 byte structure to provide
-   re-entrancy.  We don't need that so SRW's 8 byte size is much more
-   appropriate.  With an 8 byte payload there's a higher chance of it being in
-   your cache line.  They're also a lot faster than CriticalSections when
-   multiple threads are involved.  */
+   CriticalSections are *much* faster than Mutexes, however not as fast as
+   slim reader/writer locks.  CriticalSections also require a 48 byte structure
+   to provide lock re-entrancy.  We don't need that because the other primitives
+   used for other platforms don't have this, as such locks are used defensively
+   in the RTS in a way that we don't need re-entrancy.  This means that SRW's
+   8 byte size is much more appropriate.  With an 8 byte payload there's a
+   higher chance of it being in your cache line.  They're also a lot faster than
+   CriticalSections when multiple threads are involved.  CS requires setup and
+   teardown via kernel calls while SRWL is zero-initialized via
+   SRWLOCK_INIT assignment. */
 
 typedef SRWLOCK Mutex;
 

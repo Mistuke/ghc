@@ -69,6 +69,17 @@ newtype IOCP = IOCP HANDLE
 
 type CompletionKey = ULONG_PTR
 
+-- | This function has two distinct purposes depending on the value of
+-- The completion port handle:
+--
+--  - When the IOCP port is NULL then the function creates a new I/O completion
+--    port.  See `newIOCP`.
+--
+--  - When The port contains a valid handle then the given handle is
+--    associated with he given completion port handle.  Once associated it
+--    cannot be easily changed.  Associating a Handle with a Completion Port
+--    allows the I/O manager's worker threads to handle requests to the given
+--    handle.
 foreign import WINDOWS_CCONV unsafe "windows.h CreateIoCompletionPort"
     c_CreateIoCompletionPort :: HANDLE -> IOCP -> ULONG_PTR -> DWORD
                              -> IO IOCP
@@ -101,6 +112,40 @@ foreign import WINDOWS_CCONV safe "windows.h GetQueuedCompletionStatusEx"
     c_GetQueuedCompletionStatusEx :: IOCP -> LPOVERLAPPED_ENTRY -> Word32
                                   -> Ptr ULONG -> DWORD -> BOOL -> IO BOOL
 
+-- | Note [Completion Ports]
+-- When an I/O operation has been queued by an operation
+-- (ReadFile/WriteFile/etc) it is placed in a queue that the driver uses when
+-- servicing IRQs.  This queue has some important properties:
+--
+-- 1.) It is not an ordered queue.  Requests may be performed out of order as
+--     as the OS's native I/O manager may try to re-order requests such that as
+--     few random seeks as possible are needed to complete the pending
+--     operations.  As such do not assume a fixed order between something being
+--     queued and dequeued.
+--
+-- 2.) Operations may skip the queue entirely.  In which case they do not end in
+--     in this function. (This is an optimization flag we have turned on. See
+--     `openFile`.)
+--
+-- 3.) Across this call the specified OVERLAPPED_ENTRY buffer MUST remain live,
+--     and the buffer for an I/O operation cannot be freed or moved until
+--     `getOverlappedResult` says it's done.  The reason is the kernel may not
+--     have fully released the buffer, or finished writing to it when this
+--     operation returns.  Failure to adhere to this will cause your IRQs to be
+--     silently dropped and your program will never receive a completion for it.
+--     This means that the OVERLAPPED buffer must also remain valid for the
+--     duration of the call and as such must be allocated on the unmanaged heap.
+--
+-- 4.) When a thread calls this method it is associated with the I/O manager's
+--     worker threads pool.  You should always use dedicated threads for this
+--     since the OS I/O manager will now monitor the threads.  If the thread
+--     becomes blocked for whatever reason, the I/O manager will wake up
+--     another threads from it's pool to service the remaining results.
+--     A new thread will also be woken up from the pool when the previous thread
+--     is busy servicing requests and new requests have finished.  For this
+--     reason the I/O manager multiplexes I/O operations from N haskell threads
+--     into 1 completion port, which is serviced by M native threads in an
+--     asynchronous method.  This allows it to scale efficiently.
 getQueuedCompletionStatusEx :: IOCP
                             -> A.Array OVERLAPPED_ENTRY
                             -> DWORD  -- ^ Timeout in milliseconds (or
@@ -139,6 +184,8 @@ foreign import WINDOWS_CCONV unsafe "windows.h PostQueuedCompletionStatus"
     c_PostQueuedCompletionStatus :: IOCP -> DWORD -> ULONG_PTR -> LPOVERLAPPED
                                  -> IO BOOL
 
+-- | Manually post a completion to the specified I/O port.  This will wake up
+-- a thread waiting `GetQueuedCompletionStatusEx`.
 postQueuedCompletionStatus :: IOCP -> DWORD -> CompletionKey -> LPOVERLAPPED
                            -> IO ()
 postQueuedCompletionStatus iocp numBytes completionKey lpol =
@@ -185,7 +232,9 @@ instance Storable OVERLAPPED_ENTRY where
 
 -- | Allocate a new
 -- <http://msdn.microsoft.com/en-us/library/windows/desktop/ms684342%28v=vs.85%29.aspx
--- OVERLAPPED> structure.
+-- OVERLAPPED> structure on the unmanaged heap. This also zeros the memory to
+-- prevent the values inside the struct to be incorrectlt interpreted as data
+-- payload.
 allocOverlapped :: Word64 -- ^ Offset/OffsetHigh
                 -> IO (ForeignPtr OVERLAPPED)
 allocOverlapped offset = do
@@ -217,7 +266,9 @@ foreign import WINDOWS_CCONV unsafe "windows.h CancelIoEx"
     c_CancelIoEx :: HANDLE -> LPOVERLAPPED -> IO BOOL
 
 -- | Cancel all pending overlapped I/O for the given file that was initiated by
--- the current OS thread.
+-- the current OS thread.  Cancelling is just a request for cancellation and
+-- before the OVERLAPPED struct is freed we must make sure that the IRQ has been
+-- removed from the queue.  See `getOverlappedResult`.
 cancelIoEx :: HANDLE -> LPOVERLAPPED -> IO ()
 cancelIoEx h o = failIfFalse_ "CancelIoEx" . c_CancelIoEx h $ o
 

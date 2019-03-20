@@ -118,6 +118,11 @@ c_DEBUG_DUMP = return True -- scheduler `fmap` getDebugFlags
 -- design fully asynchronous, however there are multiple ways and interfaces
 -- to the async methods.
 --
+-- The chosen Async interface for this implementation is using Completion Ports
+-- See also Note [Completion Ports]. The I/O manager uses a new interface added
+-- in Windows Vista called `GetQueuedCompletionStatusEx` which allows us to
+-- service multiple requests in one go.
+--
 -- See https://docs.microsoft.com/en-us/windows-hardware/drivers/kernel/overview-of-the-windows-i-o-model
 -- and https://www.microsoftpressstore.com/articles/article.aspx?p=2201309&seqNum=3
 --
@@ -745,6 +750,44 @@ step maxDelay mgr@Manager{..} = do
       (True , Nothing) -> do setStatus WinIOBlocked
                              debugIO "I/O manager deep sleep."
     n <- if threaded
+    -- To quote Matt Godbolts:
+    -- There are some unusual edge cases you need to deal with. The
+    -- GetQueuedCompletionStatus function blocks a thread until there's
+    -- work for it to do. Based on the return value, the number of bytes
+    -- and the overlapped structure, there’s a lot of possible "reasons"
+    -- for the function to have returned. Deciphering all the possible
+    -- cases:
+    --
+    -- ------------------------------------------------------------------------
+    -- Ret value | OVERLAPPED | # of bytes | Description
+    -- ------------------------------------------------------------------------
+    -- zero      | NULL       | n/a        | Call to GetQueuedCompletionStatus
+    --   failed, and no data was dequeued from the IO port. This usually
+    --   indicates an error in the parameters to GetQueuedCompletionStatus.
+    --
+    -- zero      | non-NULL   | n/a        | Call to GetQueuedCompletionStatus
+    --   failed, but data was read or written. The thread must deal with the
+    --   data (possibly freeing any associated buffers), but there is an error
+    --   condition on the underlying HANDLE. Usually seen when the other end of
+    --   a network connection has been forcibly closed but there's still data in
+    --   the send or receive queue.
+    --
+    -- non-zero  | NULL       | n/a        | This condition doesn't happen due
+    --   to IO requests, but is useful to use in combination with
+    --   PostQueuedCompletionStatus as a way of indicating to threads that they
+    --   should terminate.
+    --
+    -- non-zero  | non-NULL   | zero       | End of file for a file HANDLE, or
+    --   the connection has been gracefully closed (for network connections).
+    --   The OVERLAPPED buffer has still been used; and must be deallocated if
+    --   necessary.
+    --
+    -- non-zero  | non-NULL   | non-zero   | "num bytes" of data have been
+    --    transferred into the block pointed by the OVERLAPPED structure. The
+    --    direction of the transfer is dependant on the call made to the IO
+    --    port, it's up to the user to remember if it was a read or a write
+    --    (usually by stashing extra data in the OVERLAPPED structure). The
+    --    thread must deallocate the structure as necessary.
             then FFI.getQueuedCompletionStatusEx mgrIOCP mgrOverlappedEntries timer
             else do num_req <- outstandingRequests
                     registerAlertableWait mgrIOCP timer num_req
@@ -866,6 +909,9 @@ io_MANAGER_WAKEUP, io_MANAGER_DIE :: Word32
 io_MANAGER_WAKEUP = #{const IO_MANAGER_WAKEUP}
 io_MANAGER_DIE    = #{const IO_MANAGER_DIE}
 
+-- | Wake up a single thread from the I/O Manager's worker queue.  This will
+-- unblock a thread blocked in `processCompletion` and allows the I/O manager to
+-- react accordingly to changes in timers or to process console signals.
 wakeupIOManager :: IO ()
 wakeupIOManager
   = do mngr <- getSystemManager

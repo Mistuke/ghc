@@ -420,6 +420,7 @@ hwndRead hwnd ptr offset bytes
   where
     startCB outBuf lpOverlapped = do
       debugIO ":: hwndRead"
+      -- See Note [ReadFile/WriteFile].
       ret <- c_ReadFile (toHANDLE hwnd) (castPtr outBuf)
                         (fromIntegral bytes) nullPtr lpOverlapped
       return $ Mgr.CbNone ret
@@ -444,6 +445,7 @@ hwndReadNonBlocking hwnd ptr offset bytes
   where
     startCB inputBuf lpOverlapped = do
       debugIO ":: hwndReadNonBlocking"
+      -- See Note [ReadFile/WriteFile].
       ret <- c_ReadFile (toHANDLE hwnd) (castPtr inputBuf)
                         (fromIntegral bytes) nullPtr lpOverlapped
       return $ Mgr.CbNone ret
@@ -463,6 +465,7 @@ hwndWrite hwnd ptr offset bytes
   where
     startCB outBuf lpOverlapped = do
       debugIO ":: hwndWrite"
+      -- See Note [ReadFile/WriteFile].
       ret <- c_WriteFile (toHANDLE hwnd) (castPtr outBuf)
                          (fromIntegral bytes) nullPtr lpOverlapped
       return $ Mgr.CbNone ret
@@ -480,6 +483,7 @@ hwndWriteNonBlocking hwnd ptr offset bytes
   where
     startCB outBuf lpOverlapped = do
       debugIO ":: hwndWriteNonBlocking"
+      -- See Note [ReadFile/WriteFile].
       ret <- c_WriteFile (toHANDLE hwnd) (castPtr outBuf)
                          (fromIntegral bytes) nullPtr lpOverlapped
       return $ Mgr.CbNone ret
@@ -488,6 +492,27 @@ hwndWriteNonBlocking hwnd ptr offset bytes
         | err == #{const ERROR_SUCCESS}    = Mgr.ioSuccess $ fromIntegral dwBytes
         | err == #{const ERROR_HANDLE_EOF} = Mgr.ioSuccess $ fromIntegral dwBytes
         | otherwise                        = Mgr.ioFailed err
+
+-- Note [ReadFile/WriteFile]
+-- The results of these functions are somewhat different when working in an
+-- asynchronous manner. The returning bool has two meaning.
+--
+-- True: The operation is done and was completed synchronously.  This is
+--       possible because of the optimization flags we enable.  In this case
+--       there won't be a completion event for this call and so we shouldn't
+--       queue one up. If we do this request will never terminate.  It's also
+--       safe to free the OVERLAPPED structure immediately.
+--
+-- False: Only indicates that the operation was not completed synchronously, a
+--        call to GetLastError () is needed to find out the actual status. If
+--        the result is ERROR_IO_PENDING then the operation has been queued on
+--        the completion port and we should proceed asynchronously.  Any other
+--        state is usually an indication that the call failed.
+--
+-- NB. reading an EOF will result in ERROR_HANDLE_EOF or STATUS_END_OF_FILE
+-- during the checking of the completion results.  We need to check for these
+-- so we don't incorrectly fail.
+
 
 consoleWrite :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int -> IO ()
 consoleWrite hwnd ptr _offset bytes
@@ -500,7 +525,7 @@ consoleWrite hwnd ptr _offset bytes
               if not success
                  then return False
                  else do val <- fromIntegral <$> peek res
-                         return $ val==w_len
+                         return $ val == w_len
 
 consoleWriteNonBlocking :: Io ConsoleHandle -> Ptr Word8 -> Word64 -> Int -> IO Int
 consoleWriteNonBlocking hwnd ptr _offset bytes
@@ -518,6 +543,19 @@ consoleRead hwnd ptr _offset bytes
   = withUTF16ToGhcInternal ptr bytes $ \reqBytes w_ptr ->
       alloca $ \res -> do
        cooked <- isCooked hwnd
+       -- Cooked input must be handled differently when the STD handles are
+       -- attached to a real console handle.  For File based handles we can't do
+       -- proper cooked inputs, but since the actions are async you would get
+       -- results as soon as available.
+       --
+       -- For console handles We have to use a lower level API then ReadConsole,
+       -- namely we must use ReadConsoleInput which requires us to process
+       -- all console message manually.
+       --
+       -- Do note that MSYS2 shells such as bash don't attach to a real handle,
+       -- and instead have by default a pipe/file based std handles.  Which
+       -- means the cooked behaviour is best when used in a native Windows
+       -- terminal such as cmd, powershell or ConEmu.
        case cooked of
         False -> do
           debugIO "consoleRead :: un-cooked I/O read."
@@ -569,6 +607,10 @@ consoleRead hwnd ptr _offset bytes
                then return $ fromIntegral read
                else readEvent p_inputs entries res w_ptr
 
+          -- Dereference and read console input records.  We only read the bare
+          -- minimum required to know which key/sequences were pressed.  To do
+          -- this and prevent having to fully port the PINPUT_RECORD structure
+          -- in Haskell we use some GCC builtins to find the correct offsets.
           cobble :: Int -> Ptr Word16 -> PINPUT_RECORD -> IO Int
           cobble 0 _ _ = do debugIO "cobble: done."
                             return 0
@@ -728,6 +770,8 @@ openFile
 openFile filepath iomode non_blocking =
    do devicepath <- getDevicePath filepath
       h <- createFile devicepath
+      -- Attach the handle to the I/O manager's CompletionPort.  This allows the
+      -- I/O manager to service requests for this Handle.
       Mgr.associateHandle' h
       let hwnd = fromHANDLE h
       _type <- devType hwnd
@@ -783,6 +827,15 @@ openFile filepath iomode non_blocking =
 
           file_create_flags =
             if non_blocking
+               -- On Windows, the choice of whether an operation completes
+               -- asynchronously or not depends on how the Handle was created
+               -- and not on the operation called.  As in, the behaviour of
+               -- ReadFile and WriteFile depends on the flags used to open the
+               -- handle.   For WinIO we always use FILE_FLAG_OVERLAPPED, which
+               -- means we always issue asynchronous file operation using an
+               -- OVERLAPPED structure.  All blocking, if required must be done
+               -- on the Haskell side by using existing mechanisms such as MVar
+               -- or IOPorts.
                then #{const FILE_FLAG_OVERLAPPED}
                     -- I beleive most haskell programs do sequential scans, so
                     -- optimize for the common case.  Though ideally, this would

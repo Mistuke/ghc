@@ -1,16 +1,18 @@
 Document tickets fixed
-Document kernel changes vista
-Document FILE_FLAG_OVERLAPPED choice
-Document Console API/cooked etc
-Document SetFilePointerEx
-Document MSYS2 I/O redirection
-Document OVERLAPPED 
-Document Async requests out of order, prevent expensive seeks
-Document ReadFile/WriteFile return status
-Document neither buffer or overlapped allowed to be moved
-Document Completion ports, (we use it over other methods)
-Document COND_VAR and Slim reader write locks
-Document CreateIoCompletionPort
+* Document kernel changes vista
+* Document FILE_FLAG_OVERLAPPED choice
+* Document Console API/cooked etc
+* Document SetFilePointerEx
+* Document MSYS2 I/O redirection
+* Document OVERLAPPED
+* Document Async requests out of order, prevent expensive seeks
+* Document ReadFile/WriteFile return status
+* Document neither buffer or overlapped allowed to be moved
+* Document Completion ports, (we use it over other methods)
+* Document COND_VAR and Slim reader write locks
+* Document CreateIoCompletionPort
+Add startup CP change
+Add io manager threads
 
 
 * Consider extending the OVERLAPPED struct to contain pointers to the completions and events
@@ -18,7 +20,7 @@ Document CreateIoCompletionPort
 * Use multiple threads to handle GetQueuedCompletionStatus calls.
 * cleanup completionCB
 
-* vscode 
+* vscode
 https://marketplace.visualstudio.com/items?itemName=alanz.vscode-hie-server
 https://marketplace.visualstudio.com/items?itemName=justusadam.language-haskell
 https://marketplace.visualstudio.com/items?itemName=phoityne.phoityne-vscode

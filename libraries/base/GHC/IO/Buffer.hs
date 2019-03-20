@@ -97,6 +97,9 @@ import Foreign.Storable
 -- broken.  In particular, the built-in codecs
 -- e.g. GHC.IO.Encoding.UTF{8,16,32} need to use isFullCharBuffer or
 -- similar in place of the ow >= os comparisons.
+--
+-- Tamar: We need to do this eventually for Windows, as we have to re-encode
+-- the text as UTF-16 anyway, so if we can avoid it it would be great.
 
 -- ---------------------------------------------------------------------------
 -- Raw blocks of data
@@ -187,12 +190,13 @@ charSize = 4
 -- of the file.
 --
 -- On Posix systems the I/O manager has an implicit reliance on doing a file
--- read moving the file pointer.  However on Windows async operations this
--- assumption is quite false.  OVERLAPPED operations don't respect the C runtime
--- file offset as their intention is to support arbitrary async reads to
--- anywhere at a much lower level.  As such we should explicitly keep track of
--- the file offsets of the target in the buffer.  Any operation to seek should
--- also update this entry.
+-- read moving the file pointer.  However on Windows async operations the kernel
+-- object representing a file does not use the file pointer offset.  Logically
+-- this makes sense since operations can be performed in any arbitrary order.
+-- OVERLAPPED operations don't respect the file pointer offset as their
+-- intention is to support arbitrary async reads to anywhere at a much lower
+-- level.  As such we should explicitly keep track of the file offsets of the
+-- target in the buffer.  Any operation to seek should also update this entry.
 data Buffer e
   = Buffer {
         bufRaw    :: !(RawBuffer e),
