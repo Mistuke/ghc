@@ -239,6 +239,11 @@ void initRtsFlagsDefaults(void)
     RtsFlags.MiscFlags.internalCounters        = false;
     RtsFlags.MiscFlags.linkerMemBase           = 0;
     RtsFlags.MiscFlags.ioManager               = IO_MNGR_POSIX;
+#if defined(THREADED_RTS) && defined(mingw32_HOST_OS)
+    RtsFlags.MiscFlags.numIoWorkerThreads      = getNumberOfProcessors();
+#else
+    RtsFlags.MiscFlags.numIoWorkerThreads      = 1;
+#endif
 
 #if defined(THREADED_RTS)
     RtsFlags.ParFlags.nCapabilities     = 1;
@@ -459,6 +464,11 @@ usage_text[] = {
 "  --io-manager=<native|posix>",
 "            The I/O manager subsystem to use. (default: posix)",
 #if defined(THREADED_RTS)
+#if defined(mingw32_HOST_OS)
+"  --io-manager-threads=<num>",
+"            The number of worker threads to use in the native I/O manager to",
+"            handle completion events. (defualt: num cores)",
+#endif
 "  -e<n>     Maximum number of outstanding local sparks (default: 4096)",
 #endif
 #if defined(x86_64_HOST_ARCH)
@@ -924,6 +934,31 @@ error = true;
                       stg_exit(0);
                   }
 #if defined(THREADED_RTS)
+#if defined(mingw32_HOST_OS)
+                  else if (!strncmp("io-manager-threads",
+                                &rts_argv[arg][2], 18)) {
+                      OPTION_SAFE;
+                      uint32_t num;
+                      if (rts_argv[arg][20] == '=') {
+                          num = (StgWord)strtol(rts_argv[arg]+21,
+                                                 (char **) NULL, 10);
+                      } else {
+                          errorBelch("%s: Expected number of threads to use.",
+                                     rts_argv[arg]);
+                          error = true;
+                          break;
+                      }
+
+                      if (num < 1) {
+                          errorBelch("%s: Expected number of threads to be at least 1.",
+                                     rts_argv[arg]);
+                          error = true;
+                          break;
+                      }
+
+                      RtsFlags.MiscFlags.numIoWorkerThreads = num;
+                  }
+#endif
                   else if (!strncmp("numa", &rts_argv[arg][2], 4)) {
                       if (!osBuiltWithNumaSupport()) {
                           errorBelch("%s: This GHC build was compiled without NUMA support.",

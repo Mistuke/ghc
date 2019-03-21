@@ -168,6 +168,7 @@ data MiscFlags = MiscFlags
     , linkerMemBase         :: Word
       -- ^ address to ask the OS for memory for the linker, 0 ==> off
     , ioManager             :: IoSubSystem
+    , numIoWorkerThreads    :: Word32
     } deriving ( Show -- ^ @since 4.8.0.0
                )
 
@@ -472,7 +473,10 @@ getMiscFlags = do
             <*> (toBool <$>
                   (#{peek MISC_FLAGS, internalCounters} ptr :: IO CBool))
             <*> #{peek MISC_FLAGS, linkerMemBase} ptr
-            <*> #{peek MISC_FLAGS, ioManager} ptr
+            <*> (toEnum . fromIntegral
+                 <$> (#{peek MISC_FLAGS, ioManager} ptr :: IO Word32))
+            <*> (fromIntegral
+                 <$> (#{peek MISC_FLAGS, numIoWorkerThreads} ptr :: IO Word32))
 
 getDebugFlags :: IO DebugFlags
 getDebugFlags = do

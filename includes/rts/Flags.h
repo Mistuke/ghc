@@ -203,6 +203,7 @@ typedef struct _MISC_FLAGS {
     StgWord linkerMemBase;       /* address to ask the OS for memory
                                   * for the linker, NULL ==> off */
     IO_MANAGER ioManager;        /* The I/O manager to use.  */
+    uint32_t numIoWorkerThreads; /* Number of I/O worker threads to use.  */
 } MISC_FLAGS;
 
 /* See Note [Synchronization of flags and base APIs] */
