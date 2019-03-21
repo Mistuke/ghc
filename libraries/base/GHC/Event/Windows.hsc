@@ -132,8 +132,25 @@ c_DEBUG_DUMP = return True -- scheduler `fmap` getDebugFlags
 -- ports.  All I/O actions get associated with one and the same completion port.
 --
 -- The I/O manager itself has two mode of operation:
--- 1) Threaded: We have a dedicated OS thread in the Haskell world that service
+-- 1) Threaded: We have N dedicated OS threads in the Haskell world that service
 --    completion requests.  Everything is Handled 100% in view of the runtime.
+--    Whenever the OS has completions that need to be serviced it wakes up one
+--    one of the OS threads that are blocked in GetQueuedCompletionStatusEx and
+--    lets it proceed  with the list of completions that are finished. If more
+--    completions finish before the first list is done being processed then
+--    another thread is woken up.  These threads are associated with the I/O
+--    manager through the completion port.  If it blocks for any reason the
+--    I/O manager will wake up another thread from the pool to finish processing
+--    the remaining entries.  This worker threads must be able to handle the
+--    fact that something else has finished the remainder of their queue or must
+--    have a guarantee to never block.  In this implementation we strive to
+--    never block.   This is achieved by not having the worker threads call out
+--    to any user code, and to have the IOPort synchronization primitive never
+--    block.   This means if the port is full the message is lost, however we
+--    have an invariant that the port can never be full and have a waiting
+--    receiver.  As such, dropping the message does not change anything as there
+--    will never be anyone to receive it. e.g. it is an impossible situation to
+--    land in.
 -- 2) Non-threaded: We don't have any dedicated Haskell threads at servicing
 --    I/O Requests. Instead we have an OS thread inside the RTS that gets
 --    notified of new requests and does the servicing.  When a request completes
