@@ -3,20 +3,30 @@ module Settings.Builders.Ghc (ghcBuilderArgs, haddockGhcArgs) where
 import Hadrian.Haskell.Cabal
 import Hadrian.Haskell.Cabal.Type
 
-import Flavour
 import Packages
 import Settings.Builders.Common
 import Settings.Warnings
 import qualified Context as Context
+import Rules.Libffi (libffiName)
 
 ghcBuilderArgs :: Args
-ghcBuilderArgs = mconcat [compileAndLinkHs, compileC, findHsDependencies]
+ghcBuilderArgs = mconcat [ compileAndLinkHs, compileC, findHsDependencies
+                         , toolArgs]
+
+toolArgs :: Args
+toolArgs = do
+  builder (Ghc ToolArgs) ? mconcat
+              [ packageGhcArgs
+              , includeGhcArgs
+              , map ("-optc" ++) <$> getStagedSettingList ConfCcArgs
+              , map ("-optP" ++) <$> getStagedSettingList ConfCppArgs
+              , map ("-optP" ++) <$> getContextData cppOpts
+              ]
 
 compileAndLinkHs :: Args
 compileAndLinkHs = (builder (Ghc CompileHs) ||^ builder (Ghc LinkHs)) ? do
     mconcat [ arg "-Wall"
             , commonGhcArgs
-            , splitObjects <$> flavour ? arg "-split-objs"
             , ghcLinkArgs
             , defaultGhcWarningsArgs
             , builder (Ghc CompileHs) ? arg "-c"
@@ -43,33 +53,64 @@ compileC = builder (Ghc CompileCWithGhc) ? do
 ghcLinkArgs :: Args
 ghcLinkArgs = builder (Ghc LinkHs) ? do
     pkg     <- getPackage
-    libs    <- pkg == hp2ps ? pure ["m"]
-    intLib  <- getIntegerPackage
-    gmpLibs <- notStage0 ? intLib == integerGmp ? pure ["gmp"]
-    dynamic <- requiresDynamic
+    libs    <- getContextData extraLibs
+    libDirs <- getContextData extraLibDirs
+    fmwks   <- getContextData frameworks
+    darwin  <- expr osxHost
+    way     <- getWay
 
     -- Relative path from the output (rpath $ORIGIN).
     originPath <- dropFileName <$> getOutput
     context <- getContext
     libPath' <- expr (libPath context)
-    distDir <- expr Context.distDir
+    st <- getStage
+    distDir <- expr (Context.distDir st)
+
+    useSystemFfi <- expr (flag UseSystemFfi)
+    buildPath <- getBuildPath
+    libffiName' <- libffiName
+
     let
+        dynamic = Dynamic `wayUnit` way
         distPath = libPath' -/- distDir
         originToLibsDir = makeRelativeNoSysLink originPath distPath
+        rpath
+            -- Programs will end up in the bin dir ($ORIGIN) and will link to
+            -- libraries in the lib dir.
+            | isProgram pkg = metaOrigin -/- originToLibsDir
+            -- libraries will all end up in the lib dir, so just use $ORIGIN
+            | otherwise     = metaOrigin
+            where
+                metaOrigin | darwin    = "@loader_path"
+                           | otherwise = "$ORIGIN"
+
+        -- TODO: an alternative would be to generalize by linking with extra
+        -- bundled libraries, but currently the rts is the only use case. It is
+        -- a special case when `useSystemFfi == True`: the ffi library files
+        -- are not actually bundled with the rts. Perhaps ffi should be part of
+        -- rts's extra libraries instead of extra bundled libraries in that
+        -- case. Care should be take as to not break the make build.
+        rtsFfiArg = package rts ? not useSystemFfi ? mconcat
+            [ arg ("-L" ++ buildPath)
+            , arg ("-l" ++ libffiName')
+            ]
 
     mconcat [ dynamic ? mconcat
                 [ arg "-dynamic"
-                -- TODO what about windows / OSX?
-                , notStage0 ? pure
-                    [ "-optl-Wl,-rpath"
-                    , "-optl-Wl," ++ ("$ORIGIN" -/- originToLibsDir) ]
+                -- TODO what about windows?
+                , isLibrary pkg ? pure [ "-shared", "-dynload", "deploy" ]
+                , hostSupportsRPaths ? pure
+                    [ "-optl-Wl,-rpath," ++ rpath
+                    , "-optl-Wl,-zorigin"
+                    ]
                 ]
-            , (dynamic && isLibrary pkg) ?
-                pure [ "-shared", "-dynload", "deploy" ]
             , arg "-no-auto-link-packages"
             ,      nonHsMainPackage pkg  ? arg "-no-hs-main"
             , not (nonHsMainPackage pkg) ? arg "-rtsopts"
-            , pure [ "-optl-l" ++           lib | lib <- libs ++ gmpLibs ]
+            , pure [ "-l" ++ lib    | lib    <- libs    ]
+            , pure [ "-L" ++ libDir | libDir <- libDirs ]
+            , rtsFfiArg
+            , darwin ? pure (concat [ ["-framework", fmwk] | fmwk <- fmwks ])
             ]
 
 findHsDependencies :: Args
@@ -83,7 +124,9 @@ findHsDependencies = builder (Ghc FindHsDependencies) ? do
             , getInputs ]
 
 haddockGhcArgs :: Args
-haddockGhcArgs = mconcat [ commonGhcArgs, getContextData hcOpts ]
+haddockGhcArgs = mconcat [ commonGhcArgs
+                         , getContextData hcOpts
+                         , ghcWarningsArgs ]
 
 -- | Common GHC command line arguments used in 'ghcBuilderArgs',
 -- 'ghcCBuilderArgs', 'ghcMBuilderArgs' and 'haddockGhcArgs'.
@@ -112,8 +155,7 @@ commonGhcArgs = do
 wayGhcArgs :: Args
 wayGhcArgs = do
     way <- getWay
-    dynamic <- requiresDynamic
-    mconcat [ if dynamic
+    mconcat [ if Dynamic `wayUnit` way
                 then pure ["-fPIC", "-dynamic"]
                 else arg "-static"
             , (Threaded  `wayUnit` way) ? arg "-optc-DTHREADED_RTS"
@@ -141,6 +183,8 @@ includeGhcArgs = do
     context <- getContext
     srcDirs <- getContextData srcDirs
     autogen <- expr $ autogenPath context
+    let cabalMacros = autogen -/- "cabal_macros.h"
+    expr $ need [cabalMacros]
     mconcat [ arg "-i"
             , arg $ "-i" ++ path
             , arg $ "-i" ++ autogen
@@ -148,21 +192,4 @@ includeGhcArgs = do
             , cIncludeArgs
             , arg $      "-I" ++ root -/- generatedDir
             , arg $ "-optc-I" ++ root -/- generatedDir
-            , pure ["-optP-include", "-optP" ++ autogen -/- "cabal_macros.h"] ]
-
--- Check if building dynamically is required. GHC is a special case that needs
--- to be built dynamically if any of the RTS ways is dynamic.
-requiresDynamic :: Expr Bool
-requiresDynamic = wayUnit Dynamic <$> getWay
-    -- TODO This logic has been reverted as the dynamic build is broken.
-    --      See #15837.
-    --
-    -- pkg <- getPackage
-    -- way <- getWay
-    -- rtsWays <- getRtsWays
-    -- let
-    --     dynRts = any (Dynamic `wayUnit`) rtsWays
-    --     dynWay = Dynamic `wayUnit` way
-    -- return $ if pkg == ghc
-    --             then dynRts || dynWay
-    --             else dynWay
+            , pure ["-optP-include", "-optP" ++ cabalMacros] ]

@@ -1,6 +1,6 @@
 module Settings.Default (
     -- * Packages that are build by default and for the testsuite
-    defaultPackages, testsuitePackages, getPackageByPath,
+    defaultPackages, testsuitePackages,
 
     -- * Default build ways
     defaultLibraryWays, defaultRtsWays,
@@ -10,7 +10,7 @@ module Settings.Default (
     defaultArgs,
 
     -- * Default build flavour
-    defaultFlavour, defaultSplitObjects
+    defaultFlavour
     ) where
 
 import qualified Hadrian.Builder.Ar
@@ -100,6 +100,7 @@ stage1Packages = do
              , ghcPkg
              , ghcPrim
              , haskeline
+             , hp2ps
              , hsc2hs
              , intLib
              , pretty
@@ -108,7 +109,9 @@ stage1Packages = do
              , stm
              , time
              , unlit
-             , xhtml                         ]
+             , xhtml
+             ]
+          ++ [ haddock | not cross           ]
           ++ [ hpcBin   | not cross          ]
           ++ [ iserv    | not win, not cross ]
           ++ [ libiserv | not win, not cross ]
@@ -119,10 +122,7 @@ stage1Packages = do
 
 -- | Packages built in 'Stage2' by default. You can change this in "UserSettings".
 stage2Packages :: Action [Package]
-stage2Packages = do
-    cross <- flag CrossCompiling
-    return $ [ ghcTags             ]
-          ++ [ haddock | not cross ]
+stage2Packages = stage1Packages
 
 -- | Packages that are built only for the testsuite.
 testsuitePackages :: Action [Package]
@@ -133,20 +133,12 @@ testsuitePackages = do
              , ghci
              , ghcCompact
              , ghcPkg
-             , hp2ps
+             , hpcBin
              , hsc2hs
              , iserv
-             , parallel
              , runGhc
              , unlit         ] ++
              [ timeout | win ]
-
-getPackageByPath :: FilePath -> Action Package
-getPackageByPath pkgpath = do
-  case filter (\p -> pkgPath p == pkgpath) knownPackages of
-    (p:_) -> return p
-    _     -> error $
-      "getPackageByPath: couldn't find a package with path: " ++ pkgpath
 
 -- | Default build ways for library packages:
 -- * We always build 'vanilla' way.
@@ -219,11 +211,11 @@ defaultFlavour = Flavour
     , integerLibrary     = (\x -> if x then integerSimple else integerGmp) <$> cmdIntegerSimple
     , libraryWays        = defaultLibraryWays
     , rtsWays            = defaultRtsWays
-    , splitObjects       = defaultSplitObjects
     , dynamicGhcPrograms = defaultDynamicGhcPrograms
     , ghciWithDebugger   = False
     , ghcProfiled        = False
-    , ghcDebugged        = False }
+    , ghcDebugged        = False
+    , ghcDocs            = cmdDocsArgs }
 
 -- | Default logic for determining whether to build
 --   dynamic GHC programs.
@@ -235,16 +227,6 @@ defaultDynamicGhcPrograms = do
   win <- windowsHost
   supportsShared <- platformSupportsSharedLibs
   return (not win && supportsShared)
-
--- | Default condition for building split objects.
-defaultSplitObjects :: Predicate
-defaultSplitObjects = do
-    goodStage <- notStage0 -- We don't split bootstrap (stage 0) packages
-    pkg       <- getPackage
-    supported <- expr supportsSplitObjects
-    split     <- expr cmdSplitObjects
-    let goodPackage = isLibrary pkg && pkg /= compiler && pkg /= rts
-    return $ split && goodStage && goodPackage && supported
 
 -- | All 'Builder'-dependent command line arguments.
 defaultBuilderArgs :: Args
@@ -278,4 +260,5 @@ defaultBuilderArgs = mconcat
 
 -- | All 'Package'-dependent command line arguments.
 defaultPackageArgs :: Args
-defaultPackageArgs = mconcat [ packageArgs, warningArgs ]
+defaultPackageArgs = mconcat [ packageArgs
+                             , builder Ghc ? ghcWarningsArgs ]

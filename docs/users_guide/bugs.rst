@@ -42,6 +42,13 @@ Lexical syntax
    as a single qualified operator rather than the two lexemes ``M`` and
    ``.\``.
 
+-  ``forall`` is always a reserved keyword at the type level, contrary
+   to the Haskell Report, which allows type variables to be named ``forall``.
+   Note that this does not imply that GHC always enables the
+   :ghc-flag:`-XExplicitForAll` extension. Even without this extension enabled,
+   reserving ``forall`` as a keyword has significance. For instance, GHC will
+   not parse the type signature ``foo :: forall x``.
+
 .. _infelicities-syntax:
 
 Context-free syntax
@@ -480,7 +487,7 @@ Known bugs or infelicities
 --------------------------
 
 The bug tracker lists bugs that have been reported in GHC but not yet
-fixed: see the `GHC Trac <http://ghc.haskell.org/trac/ghc/>`__. In
+fixed: see the `GHC issue tracker <https://gitlab.haskell.org/ghc/ghc/issues>`__. In
 addition to those, GHC also has the following known bugs or
 infelicities. These bugs are more permanent; it is unlikely that any of
 them will be fixed in the short term.

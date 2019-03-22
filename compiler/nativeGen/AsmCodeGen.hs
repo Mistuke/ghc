@@ -335,7 +335,7 @@ finishNativeGen :: Instruction instr
 finishNativeGen dflags modLoc bufh@(BufHandle _ _ h) us ngs
  = do
         -- Write debug data and finish
-        let emitDw = debugLevel dflags > 0 && not (gopt Opt_SplitObjs dflags)
+        let emitDw = debugLevel dflags > 0
         us' <- if not emitDw then return us else do
           (dwarf, us') <- dwarfGen dflags modLoc us (ngs_debug ngs)
           emitNativeCode dflags bufh dwarf
@@ -406,14 +406,9 @@ cmmNativeGenStream dflags this_mod modLoc ncgImpl h us cmm_stream ngs
                      | otherwise = []
               dbgMap = debugToMap ndbgs
 
-          -- Insert split marker, generate native code
-          let splitObjs = gopt Opt_SplitObjs dflags
-              split_marker = CmmProc mapEmpty mkSplitMarkerLabel [] $
-                             ofBlockList (panic "split_marker_entry") []
-              cmms' | splitObjs  = split_marker : cmms
-                    | otherwise  = cmms
+          -- Generate native code
           (ngs',us') <- cmmNativeGens dflags this_mod modLoc ncgImpl h
-                                             dbgMap us cmms' ngs 0
+                                             dbgMap us cmms ngs 0
 
           -- Link native code information into debug blocks
           -- See Note [What is this unwinding business?] in Debug.
@@ -421,23 +416,10 @@ cmmNativeGenStream dflags this_mod modLoc ncgImpl h us cmm_stream ngs
           dumpIfSet_dyn dflags Opt_D_dump_debug "Debug Infos"
             (vcat $ map ppr ldbgs)
 
-          -- Emit & clear DWARF information when generating split
-          -- object files, as we need it to land in the same object file
-          -- When using split sections, note that we do not split the debug
-          -- info but emit all the info at once in finishNativeGen.
-          (ngs'', us'') <-
-            if debugFlag && splitObjs
-            then do (dwarf, us'') <- dwarfGen dflags modLoc us ldbgs
-                    emitNativeCode dflags h dwarf
-                    return (ngs' { ngs_debug = []
-                                 , ngs_dwarfFiles = emptyUFM
-                                 , ngs_labels = [] },
-                            us'')
-            else return (ngs' { ngs_debug  = ngs_debug ngs' ++ ldbgs
-                              , ngs_labels = [] },
-                         us')
+          -- Accumulate debug information for emission in finishNativeGen.
+          let ngs'' = ngs' { ngs_debug = ngs_debug ngs' ++ ldbgs, ngs_labels = [] }
 
-          cmmNativeGenStream dflags this_mod modLoc ncgImpl h us''
+          cmmNativeGenStream dflags this_mod modLoc ncgImpl h us'
               cmm_stream' ngs''
 
 -- | Do native code generation on all these cmms.
@@ -479,7 +461,7 @@ cmmNativeGens dflags this_mod modLoc ncgImpl h dbgMap = go
                          nonDetEltsUFM $ fileIds' `minusUFM` fileIds
             -- See Note [Unique Determinism and code generation]
             pprDecl (f,n) = text "\t.file " <> ppr n <+>
-                            doubleQuotes (ftext f)
+                            pprFilePathString (unpackFS f)
 
         emitNativeCode dflags h $ vcat $
           map pprDecl newFileIds ++
@@ -587,9 +569,7 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds dbgMap cmm count
         let (withLiveness, usLive) =
                 {-# SCC "regLiveness" #-}
                 initUs usGen
-                        $ mapM (regLiveness platform)
-                        -- TODO: Only use CFG for x86
-                        $ map (natCmmTopToLive livenessCfg) native
+                        $ mapM (cmmTopLiveness livenessCfg platform) native
 
         dumpIfSet_dyn dflags
                 Opt_D_dump_asm_liveness "Liveness annotations added"
@@ -608,14 +588,26 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds dbgMap cmm count
                         $ allocatableRegs ncgImpl
 
                 -- do the graph coloring register allocation
-                let ((alloced, regAllocStats), usAlloc)
+                let ((alloced, maybe_more_stack, regAllocStats), usAlloc)
                         = {-# SCC "RegAlloc-color" #-}
                           initUs usLive
                           $ Color.regAlloc
                                 dflags
                                 alloc_regs
                                 (mkUniqSet [0 .. maxSpillSlots ncgImpl])
+                                (maxSpillSlots ncgImpl)
                                 withLiveness
+                                livenessCfg
+
+                let ((alloced', stack_updt_blks), usAlloc')
+                        = initUs usAlloc $
+                                case maybe_more_stack of
+                                Nothing     -> return (alloced, [])
+                                Just amount -> do
+                                    (alloced',stack_updt_blks) <- unzip <$>
+                                                (mapM ((ncgAllocMoreStack ncgImpl) amount) alloced)
+                                    return (alloced', concat stack_updt_blks )
+
 
                 -- dump out what happened during register allocation
                 dumpIfSet_dyn dflags
@@ -637,10 +629,10 @@ cmmNativeGen dflags this_mod modLoc ncgImpl us fileIds dbgMap cmm count
                 -- force evaluation of the Maybe to avoid space leak
                 mPprStats `seq` return ()
 
-                return  ( alloced, usAlloc
+                return  ( alloced', usAlloc'
                         , mPprStats
                         , Nothing
-                        , [], [])
+                        , [], stack_updt_blks)
 
           else do
                 -- do linear register allocation

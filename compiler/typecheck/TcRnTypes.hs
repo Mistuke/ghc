@@ -1020,8 +1020,8 @@ splice. In particular it is not set when the splice is renamed or typechecked.
 'RunSplice' is needed to provide a reference where 'addModFinalizer' can insert
 the finalizer (see Note [Delaying modFinalizers in untyped splices]), and
 'addModFinalizer' runs when doing Q things. Therefore, It doesn't make sense to
-set 'RunSplice' when renaming or typechecking the splice, where 'Splice', 'Brak'
-or 'Comp' are used instead.
+set 'RunSplice' when renaming or typechecking the splice, where 'Splice', 
+'Brack' or 'Comp' are used instead.
 
 -}
 
@@ -1106,9 +1106,6 @@ data PromotionErr
                      --           non-equality contexts] in TcHsType
   | PatSynPE         -- Pattern synonyms
                      -- See Note [Don't promote pattern synonyms] in TcEnv
-
-  | PatSynExPE       -- Pattern synonym existential type variable
-                     -- See Note [Pattern synonym existentials do not scope] in TcPatSyn
 
   | RecDataConPE     -- Data constructor in a recursive loop
                      -- See Note [Recursion and promoting data constructors] in TcTyClsDecls
@@ -1303,7 +1300,6 @@ instance Outputable PromotionErr where
   ppr ClassPE                     = text "ClassPE"
   ppr TyConPE                     = text "TyConPE"
   ppr PatSynPE                    = text "PatSynPE"
-  ppr PatSynExPE                  = text "PatSynExPE"
   ppr FamDataConPE                = text "FamDataConPE"
   ppr (ConstrainedDataConPE pred) = text "ConstrainedDataConPE"
                                       <+> parens (ppr pred)
@@ -1322,7 +1318,6 @@ pprPECategory :: PromotionErr -> SDoc
 pprPECategory ClassPE                = text "Class"
 pprPECategory TyConPE                = text "Type constructor"
 pprPECategory PatSynPE               = text "Pattern synonym"
-pprPECategory PatSynExPE             = text "Pattern synonym existential"
 pprPECategory FamDataConPE           = text "Data constructor"
 pprPECategory ConstrainedDataConPE{} = text "Data constructor"
 pprPECategory RecDataConPE           = text "Data constructor"
@@ -2026,7 +2021,7 @@ dropDerivedCt ct
 When we discard Derived constraints, in dropDerivedSimples, we must
 set the cc_pend_sc flag to True, so that if we re-process this
 CDictCan we will re-generate its derived superclasses. Otherwise
-we might miss some fundeps.  Trac #13662 showed this up.
+we might miss some fundeps.  #13662 showed this up.
 
 See Note [The superclass story] in TcCanonical.
 -}
@@ -2113,15 +2108,15 @@ But (tiresomely) we do keep *some* Derived constraints:
 
         Others not-definitely-insoluble ones like [D] a ~ Int do not
         reflect unreachable code; indeed if fundeps generated proofs, it'd
-        be a useful equality.  See Trac #14763.   So we discard them.
+        be a useful equality.  See #14763.   So we discard them.
 
       - Given/Wanted interacGiven or Wanted interacting with an
         instance declaration (FunDepOrigin2)
 
-      - Given/Wanted interactions (FunDepOrigin1); see Trac #9612
+      - Given/Wanted interactions (FunDepOrigin1); see #9612
 
       - But for Wanted/Wanted interactions we do /not/ want to report an
-        error (Trac #13506).  Consider [W] C Int Int, [W] C Int Bool, with
+        error (#13506).  Consider [W] C Int Int, [W] C Int Bool, with
         a fundep on class C.  We don't want to report an insoluble Int~Bool;
         c.f. "wanteds do not rewrite wanteds".
 
@@ -2307,7 +2302,7 @@ Note that
   * Superclasses help only for Wanted constraints.  Derived constraints
     are not really "unsolved" and we certainly don't want them to
     trigger superclass expansion. This was a good part of the loop
-    in  Trac #11523
+    in  #11523
 
   * Even for Wanted constraints, we say "no" for implicit parameters.
     we have [W] ?x::ty, expanding superclasses won't help:
@@ -2320,7 +2315,7 @@ Note that
     is low because the unsolved set is usually empty anyway (errors
     aside), and the first non-imlicit-parameter will terminate the search.
 
-    The special case is worth it (Trac #11480, comment:2) because it
+    The special case is worth it (#11480, comment:2) because it
     applies to CallStack constraints, which aren't type errors. If we have
        f :: (C a) => blah
        f x = ...undefined...
@@ -2497,7 +2492,7 @@ ppr_bag doc bag
 
 {- Note [Given insolubles]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
-Consider (Trac #14325, comment:)
+Consider (#14325, comment:)
     class (a~b) => C a b
 
     foo :: C a c => a -> c
@@ -2521,7 +2516,7 @@ The same applies to Derived constraints that /arise from/ Givens.
 E.g.   f :: (C Int [a]) => blah
 where a fundep means we get
        [D] Int ~ [a]
-By the same reasoning we must not suppress other errors (Trac #15767)
+By the same reasoning we must not suppress other errors (#15767)
 
 Bottom line: insolubleWC (called in TcSimplify.setImplicationStatus)
              should ignore givens even if they are insoluble.
@@ -2772,7 +2767,7 @@ wrapTypeWithImplication ty impl = wrapType ty mentioned_skols givens
           mentioned_skols = filter (`elemVarSet` freeVars) skols
 
 wrapType :: Type -> [TyVar] -> [PredType] -> Type
-wrapType ty skols givens = mkSpecForAllTys skols $ mkFunTys givens ty
+wrapType ty skols givens = mkSpecForAllTys skols $ mkPhiTy givens ty
 
 
 {-
@@ -3020,7 +3015,7 @@ a representational equality to rewrite a nominal one.
 Note [Wanteds do not rewrite Wanteds]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 We don't allow Wanteds to rewrite Wanteds, because that can give rise
-to very confusing type error messages.  A good example is Trac #8450.
+to very confusing type error messages.  A good example is #8450.
 Here's another
    f :: a -> Bool
    f x = ( [x,'c'], [x,True] ) `seq` True
@@ -3664,8 +3659,6 @@ exprCtOrigin (HsTcBracketOut {})= panic "exprCtOrigin HsTcBracketOut"
 exprCtOrigin (HsSpliceE {})      = Shouldn'tHappenOrigin "TH splice"
 exprCtOrigin (HsProc {})         = Shouldn'tHappenOrigin "proc"
 exprCtOrigin (HsStatic {})       = Shouldn'tHappenOrigin "static expression"
-exprCtOrigin (HsArrApp {})       = panic "exprCtOrigin HsArrApp"
-exprCtOrigin (HsArrForm {})      = panic "exprCtOrigin HsArrForm"
 exprCtOrigin (HsTick _ _ e)           = lexprCtOrigin e
 exprCtOrigin (HsBinTick _ _ _ e)      = lexprCtOrigin e
 exprCtOrigin (HsTickPragma _ _ _ _ e) = lexprCtOrigin e
@@ -3844,7 +3837,9 @@ instance Applicative TcPluginM where
   (<*>) = ap
 
 instance Monad TcPluginM where
+#if !MIN_VERSION_base(4,13,0)
   fail = MonadFail.fail
+#endif
   TcPluginM m >>= k =
     TcPluginM (\ ev -> do a <- m ev
                           runTcPluginM (k a) ev)

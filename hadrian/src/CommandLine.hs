@@ -1,18 +1,21 @@
 module CommandLine (
     optDescrs, cmdLineArgsMap, cmdFlavour, lookupFreeze1, cmdIntegerSimple,
-    cmdProgressColour, cmdProgressInfo, cmdConfigure, cmdSplitObjects,
-    lookupBuildRoot, TestArgs(..), TestSpeed(..), defaultTestArgs
+    cmdProgressColour, cmdProgressInfo, cmdConfigure,
+    cmdDocsArgs, lookupBuildRoot, TestArgs(..), TestSpeed(..), defaultTestArgs
     ) where
 
 import Data.Either
 import qualified Data.HashMap.Strict as Map
 import Data.List.Extra
 import Development.Shake hiding (Normal)
+import Flavour (DocTargets, DocTarget(..))
 import Hadrian.Utilities hiding (buildRoot)
 import System.Console.GetOpt
 import System.Environment
 
-data TestSpeed = Slow | Average | Fast deriving (Show, Eq)
+import qualified Data.Set as Set
+
+data TestSpeed = TestSlow | TestNormal | TestFast deriving (Show, Eq)
 
 -- | All arguments that can be passed to Hadrian via the command line.
 data CommandLineArgs = CommandLineArgs
@@ -22,9 +25,9 @@ data CommandLineArgs = CommandLineArgs
     , integerSimple  :: Bool
     , progressColour :: UseColour
     , progressInfo   :: ProgressInfo
-    , splitObjects   :: Bool
     , buildRoot      :: BuildRoot
-    , testArgs       :: TestArgs }
+    , testArgs       :: TestArgs
+    , docTargets     :: DocTargets }
     deriving (Eq, Show)
 
 -- | Default values for 'CommandLineArgs'.
@@ -36,13 +39,14 @@ defaultCommandLineArgs = CommandLineArgs
     , integerSimple  = False
     , progressColour = Auto
     , progressInfo   = Brief
-    , splitObjects   = False
     , buildRoot      = BuildRoot "_build"
-    , testArgs       = defaultTestArgs }
+    , testArgs       = defaultTestArgs
+    , docTargets     = Set.fromList [minBound..maxBound] }
 
 -- | These arguments are used by the `test` target.
 data TestArgs = TestArgs
-    { testCompiler   :: String
+    { testKeepFiles  :: Bool
+    , testCompiler   :: String
     , testConfigFile :: String
     , testConfigs    :: [String]
     , testJUnit      :: Maybe FilePath
@@ -58,14 +62,15 @@ data TestArgs = TestArgs
 -- | Default value for `TestArgs`.
 defaultTestArgs :: TestArgs
 defaultTestArgs = TestArgs
-    { testCompiler   = "stage2"
+    { testKeepFiles  = False
+    , testCompiler   = "stage2"
     , testConfigFile = "testsuite/config/ghc"
     , testConfigs    = []
     , testJUnit      = Nothing
     , testOnly       = []
     , testOnlyPerf   = False
     , testSkipPerf   = False
-    , testSpeed      = Fast
+    , testSpeed      = TestNormal
     , testSummary    = Nothing
     , testVerbosity  = Nothing
     , testWays       = [] }
@@ -116,8 +121,8 @@ readProgressInfo ms =
     set :: ProgressInfo -> CommandLineArgs -> CommandLineArgs
     set flag flags = flags { progressInfo = flag }
 
-readSplitObjects :: Either String (CommandLineArgs -> CommandLineArgs)
-readSplitObjects = Right $ \flags -> flags { splitObjects = True }
+readTestKeepFiles :: Either String (CommandLineArgs -> CommandLineArgs)
+readTestKeepFiles = Right $ \flags -> flags { testArgs = (testArgs flags) { testKeepFiles = True } }
 
 readTestCompiler :: Maybe String -> Either String (CommandLineArgs -> CommandLineArgs)
 readTestCompiler compiler = maybe (Left "Cannot parse compiler") (Right . set) compiler
@@ -158,9 +163,9 @@ readTestSpeed ms =
     maybe (Left "Cannot parse test-speed") (Right . set) (go =<< lower <$> ms)
   where
     go :: String -> Maybe TestSpeed
-    go "fast"    = Just Fast
-    go "slow"    = Just Slow
-    go "average" = Just Average
+    go "fast"    = Just TestFast
+    go "slow"    = Just TestSlow
+    go "normal"  = Just TestNormal
     go _         = Nothing
     set :: TestSpeed -> CommandLineArgs -> CommandLineArgs
     set flag flags = flags { testArgs = (testArgs flags) {testSpeed = flag} }
@@ -179,6 +184,25 @@ readTestWay way =
             let newWays = way : testWays (testArgs flags)
             in flags { testArgs = (testArgs flags) {testWays = newWays} }
 
+readDocsArg :: Maybe String -> Either String (CommandLineArgs -> CommandLineArgs)
+readDocsArg ms = maybe (Left "Cannot parse docs argument") (Right . set) (go =<< ms)
+
+  where
+    go :: String -> Maybe (DocTargets -> DocTargets)
+    go "none"           = Just (const Set.empty)
+    go "no-haddocks"    = Just (Set.delete Haddocks)
+    go "no-sphinx-html" = Just (Set.delete SphinxHTML)
+    go "no-sphinx-pdfs" = Just (Set.delete SphinxPDFs)
+    go "no-sphinx-man"  = Just (Set.delete SphinxMan)
+    go "no-sphinx"      = Just (Set.delete SphinxHTML
+                              . Set.delete SphinxPDFs
+                              . Set.delete SphinxMan)
+    go _                = Nothing
+
+    set :: (DocTargets -> DocTargets) -> CommandLineArgs -> CommandLineArgs
+    set tweakTargets flags = flags
+      { docTargets = tweakTargets (docTargets flags) }
+
 -- | Standard 'OptDescr' descriptions of Hadrian's command line arguments.
 optDescrs :: [OptDescr (Either String (CommandLineArgs -> CommandLineArgs))]
 optDescrs =
@@ -196,8 +220,10 @@ optDescrs =
       "Use colours in progress info (Never, Auto or Always)."
     , Option [] ["progress-info"] (OptArg readProgressInfo "STYLE")
       "Progress info style (None, Brief, Normal or Unicorn)."
-    , Option [] ["split-objects"] (NoArg readSplitObjects)
-      "Generate split objects (requires a full clean rebuild)."
+    , Option [] ["docs"] (OptArg readDocsArg "TARGET")
+      "Strip down docs targets (none, no-haddocks, no-sphinx[-{html, pdfs, man}]."
+    , Option ['k'] ["keep-test-files"] (NoArg readTestKeepFiles)
+      "Keep all the files generated when running the testsuite."
     , Option [] ["test-compiler"] (OptArg readTestCompiler "TEST_COMPILER")
       "Use given compiler [Default=stage2]."
     , Option [] ["test-config-file"] (OptArg readTestConfigFile "CONFIG_FILE")
@@ -257,5 +283,5 @@ cmdProgressColour = progressColour <$> cmdLineArgs
 cmdProgressInfo :: Action ProgressInfo
 cmdProgressInfo = progressInfo <$> cmdLineArgs
 
-cmdSplitObjects :: Action Bool
-cmdSplitObjects = splitObjects <$> cmdLineArgs
+cmdDocsArgs :: Action DocTargets
+cmdDocsArgs = docTargets <$> cmdLineArgs

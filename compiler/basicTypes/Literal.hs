@@ -114,7 +114,7 @@ data Literal
 
   | LitString  ByteString       -- ^ A string-literal: stored and emitted
                                 -- UTF-8 encoded, we'll arrange to decode it
-                                -- at runtime.  Also emitted with a @'\0'@
+                                -- at runtime.  Also emitted with a @\'\\0\'@
                                 -- terminator. Create with 'mkLitString'
 
   | LitNullAddr                 -- ^ The @NULL@ pointer, the only pointer value
@@ -187,6 +187,20 @@ in TcIface.
 Note [Natural literals]
 ~~~~~~~~~~~~~~~~~~~~~~~
 Similar to Integer literals.
+
+Note [String literals]
+~~~~~~~~~~~~~~~~~~~~~~
+
+String literals are UTF-8 encoded and stored into ByteStrings in the following
+ASTs: Haskell, Core, Stg, Cmm. TH can also emit ByteString based string literals
+with the BytesPrimL constructor (see #14741).
+
+It wasn't true before as [Word8] was used in Cmm AST and in TH which was quite
+bad for performance with large strings (see #16198 and #14741).
+
+To include string literals into output objects, the assembler code generator has
+to embed the UTF-8 encoded binary blob. See Note [Embedding large binary blobs]
+for more details.
 
 -}
 
@@ -418,7 +432,7 @@ mkLitChar = LitChar
 -- e.g. some of the \"error\" functions in GHC.Err such as @GHC.Err.runtimeError@
 mkLitString :: String -> Literal
 -- stored UTF-8 encoded
-mkLitString s = LitString (fastStringToByteString $ mkFastString s)
+mkLitString s = LitString (bytesFS $ mkFastString s)
 
 mkLitInteger :: Integer -> Type -> Literal
 mkLitInteger x ty = LitNumber LitNumInteger x ty

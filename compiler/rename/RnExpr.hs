@@ -35,7 +35,8 @@ import RnFixity
 import RnUtils          ( HsDocContext(..), bindLocalNamesFV, checkDupNames
                         , bindLocalNames
                         , mapMaybeFvRn, mapFvRn
-                        , warnUnusedLocalBinds )
+                        , warnUnusedLocalBinds, typeAppErr
+                        , checkUnusedRecordWildcard )
 import RnUnbound        ( reportUnboundName )
 import RnSplice         ( rnBracket, rnSpliceExpr, checkThLocalName )
 import RnTypes
@@ -171,7 +172,9 @@ rnExpr (HsApp x fun arg)
        ; return (HsApp x fun' arg', fvFun `plusFV` fvArg) }
 
 rnExpr (HsAppType x fun arg)
-  = do { (fun',fvFun) <- rnLExpr fun
+  = do { type_app <- xoptM LangExt.TypeApplications
+       ; unless type_app $ addErr $ typeAppErr "type" $ hswc_body arg
+       ; (fun',fvFun) <- rnLExpr fun
        ; (arg',fvArg) <- rnHsWcType HsTypeCtx arg
        ; return (HsAppType x fun' arg', fvFun `plusFV` fvArg) }
 
@@ -409,23 +412,11 @@ rnExpr (HsProc x pat body)
       { (body',fvBody) <- rnCmdTop body
       ; return (HsProc x pat' body', fvBody) }
 
--- Ideally, these would be done in parsing, but to keep parsing simple, we do it here.
-rnExpr e@(HsArrApp {})  = arrowFail e
-rnExpr e@(HsArrForm {}) = arrowFail e
-
 rnExpr other = pprPanic "rnExpr: unexpected expression" (ppr other)
         -- HsWrap
 
 hsHoleExpr :: HsExpr (GhcPass id)
 hsHoleExpr = HsUnboundVar noExt (TrueExprHole (mkVarOcc "_"))
-
-arrowFail :: HsExpr GhcPs -> RnM (HsExpr GhcRn, FreeVars)
-arrowFail e
-  = do { addErr (vcat [ text "Arrow command found where an expression was expected:"
-                      , nest 2 (ppr e) ])
-         -- Return a place-holder hole, so that we can carry on
-         -- to report other errors
-       ; return (hsHoleExpr, emptyFVs) }
 
 ----------------------
 -- See Note [Parsing sections] in Parser.y
@@ -835,7 +826,7 @@ rnStmt ctxt rnBody (L loc (LastStmt _ body noret _)) thing_inside
                             -- The 'return' in a LastStmt is used only
                             -- for MonadComp; and we don't want to report
                             -- "non in scope: return" in other cases
-                            -- Trac #15607
+                            -- #15607
 
         ; (thing,  fvs3) <- thing_inside []
         ; return (([(L loc (LastStmt noExt body' noret ret_op), fv_expr)]
@@ -1087,13 +1078,16 @@ rnRecStmtsAndThen rnBody s cont
           --    ...bring them and their fixities into scope
         ; let bound_names = collectLStmtsBinders (map fst new_lhs_and_fv)
               -- Fake uses of variables introduced implicitly (warning suppression, see #4404)
-              implicit_uses = lStmtsImplicits (map fst new_lhs_and_fv)
+              rec_uses = lStmtsImplicits (map fst new_lhs_and_fv)
+              implicit_uses = mkNameSet $ concatMap snd $ rec_uses
         ; bindLocalNamesFV bound_names $
           addLocalFixities fix_env bound_names $ do
 
           -- (C) do the right-hand-sides and thing-inside
         { segs <- rn_rec_stmts rnBody bound_names new_lhs_and_fv
         ; (res, fvs) <- cont segs
+        ; mapM_ (\(loc, ns) -> checkUnusedRecordWildcard loc fvs (Just ns))
+                rec_uses
         ; warnUnusedLocalBinds bound_names (fvs `unionNameSet` implicit_uses)
         ; return (res, fvs) }}
 
@@ -1311,7 +1305,7 @@ Note [Segmenting mdo]
 ~~~~~~~~~~~~~~~~~~~~~
 NB. June 7 2012: We only glom segments that appear in an explicit mdo;
 and leave those found in "do rec"'s intact.  See
-http://ghc.haskell.org/trac/ghc/ticket/4148 for the discussion
+https://gitlab.haskell.org/ghc/ghc/issues/4148 for the discussion
 leading to this design choice.  Hence the test in segmentRecStmts.
 
 Note [Glomming segments]

@@ -199,7 +199,7 @@ import {-# SOURCE #-} Packages (componentIdString, improveUnitId, PackageConfigM
 --        only ever ComponentIds, and some ComponentIds happen to have
 --        more information (UnitIds).
 --      - Same as Language.Haskell.TH.Syntax:PkgName, see
---          https://ghc.haskell.org/trac/ghc/ticket/10279
+--          https://gitlab.haskell.org/ghc/ghc/issues/10279
 --      - The same as PackageKey in GHC 7.10 (we renamed it because
 --        they don't necessarily identify packages anymore.)
 --      - Same as -this-package-key/-package-name flags
@@ -217,7 +217,7 @@ import {-# SOURCE #-} Packages (componentIdString, improveUnitId, PackageConfigM
 -- PackageName: The "name" field in a Cabal file, something like "lens".
 --      - Same as Distribution.Package.PackageName
 --      - DIFFERENT FROM Language.Haskell.TH.Syntax:PkgName, see
---          https://ghc.haskell.org/trac/ghc/ticket/10279
+--          https://gitlab.haskell.org/ghc/ghc/issues/10279
 --      - DIFFERENT FROM -package-name flag
 --      - DIFFERENT FROM the 'name' field in an installed package
 --        information.  This field could more accurately be described
@@ -344,7 +344,7 @@ instance Binary ModuleName where
 
 instance BinaryStringRep ModuleName where
   fromStringRep = mkModuleNameFS . mkFastStringByteString
-  toStringRep   = fastStringToByteString . moduleNameFS
+  toStringRep   = bytesFS . moduleNameFS
 
 instance Data ModuleName where
   -- don't traverse?
@@ -519,7 +519,7 @@ newtype ComponentId        = ComponentId        FastString deriving (Eq, Ord)
 
 instance BinaryStringRep ComponentId where
   fromStringRep = ComponentId . mkFastStringByteString
-  toStringRep (ComponentId s) = fastStringToByteString s
+  toStringRep (ComponentId s) = bytesFS s
 
 instance Uniquable ComponentId where
   getUnique (ComponentId n) = getUnique n
@@ -849,7 +849,7 @@ rawHashUnitId sorted_holes =
   . BS.concat $ do
         (m, b) <- sorted_holes
         [ toStringRep m,                BS.Char8.singleton ' ',
-          fastStringToByteString (unitIdFS (moduleUnitId b)), BS.Char8.singleton ':',
+          bytesFS (unitIdFS (moduleUnitId b)), BS.Char8.singleton ':',
           toStringRep (moduleName b),   BS.Char8.singleton '\n']
 
 fingerprintUnitId :: BS.ByteString -> Fingerprint -> BS.ByteString

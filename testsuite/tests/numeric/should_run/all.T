@@ -20,9 +20,7 @@ test('arith008', normal, compile_and_run, [opts])
 
 test('arith009', normal, compile_and_run, [''])
 test('arith010', normal, compile_and_run, [''])
-test('arith011',
-     when(have_library("integer-simple"), expect_broken(16091)),
-     compile_and_run, [''])
+test('arith011', normal, compile_and_run, [''])
 
 test('arith012', normal, compile_and_run, [opts])
 
@@ -56,7 +54,7 @@ test('mul2', normal, compile_and_run, ['-fobject-code'])
 test('quotRem2', normal, compile_and_run, ['-fobject-code'])
 test('T5863', normal, compile_and_run, [''])
 
-test('T7014', [], run_command, ['$MAKE -s --no-print-directory T7014'])
+test('T7014', [], makefile_test, [])
 
 test('T7233', normal, compile_and_run, [''])
 test('NumDecimals', normal, compile_and_run, [''])

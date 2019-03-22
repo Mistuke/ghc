@@ -16,8 +16,6 @@ module TysWiredIn (
 
         mkWiredInIdName,    -- used in MkId
 
-        mkFunKind, mkForAllKind,
-
         -- * All wired in things
         wiredInTyCons, isBuiltInOcc_maybe,
 
@@ -85,6 +83,9 @@ module TysWiredIn (
 
         -- * Any
         anyTyCon, anyTy, anyTypeOfKind,
+
+        -- * Recovery TyCon
+        makeRecoveryTyCon,
 
         -- * Sums
         mkSumTy, sumTyCon, sumDataCon,
@@ -395,6 +396,29 @@ anyTy = mkTyConTy anyTyCon
 anyTypeOfKind :: Kind -> Type
 anyTypeOfKind kind = mkTyConApp anyTyCon [kind]
 
+-- | Make a fake, recovery 'TyCon' from an existing one.
+-- Used when recovering from errors in type declarations
+makeRecoveryTyCon :: TyCon -> TyCon
+makeRecoveryTyCon tc
+  = mkTcTyCon (tyConName tc)
+              bndrs res_kind
+              []               -- No scoped vars
+              True             -- Fully generalised
+              flavour          -- Keep old flavour
+  where
+    flavour = tyConFlavour tc
+    [kv] = mkTemplateKindVars [liftedTypeKind]
+    (bndrs, res_kind)
+       = case flavour of
+           PromotedDataConFlavour -> ([mkNamedTyConBinder Inferred kv], mkTyVarTy kv)
+           _ -> (tyConBinders tc, tyConResKind tc)
+        -- For data types we have already validated their kind, so it
+        -- makes sense to keep it. For promoted data constructors we haven't,
+        -- so we recover with kind (forall k. k).  Otherwise consider
+        --     data T a where { MkT :: Show a => T a }
+        -- If T is for some reason invalid, we don't want to fall over
+        -- at (promoted) use-sites of MkT.
+
 -- Kinds
 typeNatKindConName, typeSymbolKindConName :: Name
 typeNatKindConName    = mkWiredInTyConName UserSyntax gHC_TYPES (fsLit "Nat")    typeNatKindConNameKey    typeNatKindCon
@@ -484,7 +508,7 @@ consDataCon_RDR = nameRdrName consDataConName
 pcTyCon :: Name -> Maybe CType -> [TyVar] -> [DataCon] -> TyCon
 pcTyCon name cType tyvars cons
   = mkAlgTyCon name
-                (mkAnonTyConBinders tyvars)
+                (mkAnonTyConBinders VisArg tyvars)
                 liftedTypeKind
                 (map (const Representational) tyvars)
                 cType
@@ -594,14 +618,6 @@ constraintKindTyCon = pcTyCon constraintKindTyConName Nothing [] []
 liftedTypeKind, constraintKind :: Kind
 liftedTypeKind   = tYPE liftedRepTy
 constraintKind   = mkTyConApp constraintKindTyCon []
-
--- mkFunKind and mkForAllKind are defined here
--- solely so that TyCon can use them via a SOURCE import
-mkFunKind :: Kind -> Kind -> Kind
-mkFunKind = mkFunTy
-
-mkForAllKind :: TyCoVar -> ArgFlag -> Kind -> Kind
-mkForAllKind = mkForAllTy
 
 {-
 ************************************************************************
@@ -738,7 +754,7 @@ isBuiltInOcc_maybe occ =
                 in Just $ dataConName $ sumDataCon alt arity
       _ -> Nothing
   where
-    name = fastStringToByteString $ occNameFS occ
+    name = bytesFS $ occNameFS occ
 
     choose_ns :: Name -> Name -> Name
     choose_ns tc dc
@@ -854,7 +870,7 @@ mk_tuple Boxed arity = (tycon, tuple_con)
     tycon = mkTupleTyCon tc_name tc_binders tc_res_kind tc_arity tuple_con
                          BoxedTuple flavour
 
-    tc_binders  = mkTemplateAnonTyConBinders (nOfThem arity liftedTypeKind)
+    tc_binders  = mkTemplateAnonTyConBinders (replicate arity liftedTypeKind)
     tc_res_kind = liftedTypeKind
     tc_arity    = arity
     flavour     = VanillaAlgTyCon (mkPrelTyConRepName tc_name)
@@ -879,7 +895,7 @@ mk_tuple Unboxed arity = (tycon, tuple_con)
 
     -- See Note [Unboxed tuple RuntimeRep vars] in TyCon
     -- Kind:  forall (k1:RuntimeRep) (k2:RuntimeRep). TYPE k1 -> TYPE k2 -> #
-    tc_binders = mkTemplateTyConBinders (nOfThem arity runtimeRepTy)
+    tc_binders = mkTemplateTyConBinders (replicate arity runtimeRepTy)
                                         (\ks -> map tYPE ks)
 
     tc_res_kind = unboxedTupleKind rr_tys
@@ -999,7 +1015,7 @@ mk_sum arity = (tycon, sum_cons)
     -- Unboxed sums are currently not Typeable due to efficiency concerns. See #13276.
     rep_name = Nothing -- Just $ mkPrelTyConRepName tc_name
 
-    tc_binders = mkTemplateTyConBinders (nOfThem arity runtimeRepTy)
+    tc_binders = mkTemplateTyConBinders (replicate arity runtimeRepTy)
                                         (\ks -> map tYPE ks)
 
     tyvars = binderVars tc_binders
@@ -1074,7 +1090,7 @@ eqSCSelId, heqSCSelId, coercibleSCSelId :: Id
     datacon   = pcDataCon heqDataConName tvs [sc_pred] tycon
 
     -- Kind: forall k1 k2. k1 -> k2 -> Constraint
-    binders   = mkTemplateTyConBinders [liftedTypeKind, liftedTypeKind] (\ks -> ks)
+    binders   = mkTemplateTyConBinders [liftedTypeKind, liftedTypeKind] id
     roles     = [Nominal, Nominal, Nominal, Nominal]
     rhs       = mkDataTyConRhs [datacon]
 

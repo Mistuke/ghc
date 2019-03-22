@@ -24,7 +24,7 @@ module TcRnDriver (
         getModuleInterface,
         tcRnDeclsi,
         isGHCiMonad,
-        runTcInteractive,    -- Used by GHC API clients (Trac #8878)
+        runTcInteractive,    -- Used by GHC API clients (#8878)
         tcRnLookupName,
         tcRnGetInfo,
         tcRnModule, tcRnModuleTcRnM,
@@ -399,8 +399,8 @@ tcRnSrcDecls explicit_mod_hdr decls
 
         -- Check for the 'main' declaration
         -- Must do this inside the captureTopConstraints
+        -- NB: always set envs *before* captureTopConstraints
       ; (tcg_env, lie_main) <- setEnvs (tcg_env, tcl_env) $
-                               -- always set envs *before* captureTopConstraints
                                captureTopConstraints $
                                checkMain explicit_mod_hdr
 
@@ -421,12 +421,6 @@ tcRnSrcDecls explicit_mod_hdr decls
         -- Emit Typeable bindings
       ; tcg_env <- mkTypeableBinds
 
-        -- Finalizers must run after constraints are simplified, or some types
-        -- might not be complete when using reify (see #12777).
-      ; (tcg_env, tcl_env) <- setGblEnv tcg_env run_th_modfinalizers
-      ; setEnvs (tcg_env, tcl_env) $ do {
-
-      ; finishTH
 
       ; traceTc "Tc9" empty
 
@@ -438,31 +432,62 @@ tcRnSrcDecls explicit_mod_hdr decls
         -- Zonk the final code.  This must be done last.
         -- Even simplifyTop may do some unification.
         -- This pass also warns about missing type signatures
-      ; let { TcGblEnv { tcg_type_env  = type_env,
-                         tcg_binds     = binds,
-                         tcg_ev_binds  = cur_ev_binds,
-                         tcg_imp_specs = imp_specs,
-                         tcg_rules     = rules,
-                         tcg_fords     = fords } = tcg_env
-            ; all_ev_binds = cur_ev_binds `unionBags` new_ev_binds } ;
-
       ; (bind_env, ev_binds', binds', fords', imp_specs', rules')
-            <- {-# SCC "zonkTopDecls" #-}
-               zonkTopDecls all_ev_binds binds rules
-                            imp_specs fords ;
+            <- zonkTcGblEnv new_ev_binds tcg_env
+
+        -- Finalizers must run after constraints are simplified, or some types
+        -- might not be complete when using reify (see #12777).
+        -- and also after we zonk the first time because we run typed splices
+        -- in the zonker which gives rise to the finalisers.
+      ; (tcg_env_mf, _) <- setGblEnv (clearTcGblEnv tcg_env)
+                                     run_th_modfinalizers
+      ; finishTH
       ; traceTc "Tc11" empty
 
-      ; let { final_type_env = plusTypeEnv type_env bind_env
-            ; tcg_env' = tcg_env { tcg_binds    = binds',
-                                   tcg_ev_binds = ev_binds',
-                                   tcg_imp_specs = imp_specs',
-                                   tcg_rules    = rules',
-                                   tcg_fords    = fords' } } ;
+      ; -- zonk the new bindings arising from running the finalisers.
+        -- This won't give rise to any more finalisers as you can't nest
+        -- finalisers inside finalisers.
+      ; (bind_env_mf, ev_binds_mf, binds_mf, fords_mf, imp_specs_mf, rules_mf)
+            <- zonkTcGblEnv emptyBag tcg_env_mf
+
+
+      ; let { final_type_env = plusTypeEnv (tcg_type_env tcg_env)
+                                (plusTypeEnv bind_env_mf bind_env)
+            ; tcg_env' = tcg_env_mf
+                          { tcg_binds    = binds' `unionBags` binds_mf,
+                            tcg_ev_binds = ev_binds' `unionBags` ev_binds_mf ,
+                            tcg_imp_specs = imp_specs' ++ imp_specs_mf ,
+                            tcg_rules    = rules' ++ rules_mf ,
+                            tcg_fords    = fords' ++ fords_mf } } ;
 
       ; setGlobalTypeEnv tcg_env' final_type_env
 
-   }
    } }
+
+zonkTcGblEnv :: Bag EvBind -> TcGblEnv
+             -> TcM (TypeEnv, Bag EvBind, LHsBinds GhcTc,
+                       [LForeignDecl GhcTc], [LTcSpecPrag], [LRuleDecl GhcTc])
+zonkTcGblEnv new_ev_binds tcg_env =
+  let TcGblEnv {   tcg_binds     = binds,
+                   tcg_ev_binds  = cur_ev_binds,
+                   tcg_imp_specs = imp_specs,
+                   tcg_rules     = rules,
+                   tcg_fords     = fords } = tcg_env
+
+      all_ev_binds = cur_ev_binds `unionBags` new_ev_binds
+
+  in {-# SCC "zonkTopDecls" #-}
+      zonkTopDecls all_ev_binds binds rules imp_specs fords
+
+
+-- | Remove accumulated bindings, rules and so on from TcGblEnv
+clearTcGblEnv :: TcGblEnv -> TcGblEnv
+clearTcGblEnv tcg_env
+  = tcg_env { tcg_binds    = emptyBag,
+              tcg_ev_binds = emptyBag ,
+              tcg_imp_specs = [],
+              tcg_rules    = [],
+              tcg_fords    = [] }
 
 -- | Runs TH finalizers and renames and typechecks the top-level declarations
 -- that they could introduce.
@@ -477,10 +502,13 @@ run_th_modfinalizers = do
     let run_finalizer (lcl_env, f) =
             setLclEnv lcl_env (runRemoteModFinalizers f)
 
-    (_, lie_th) <- captureTopConstraints $ mapM_ run_finalizer th_modfinalizers
+    (_, lie_th) <- captureTopConstraints $
+                   mapM_ run_finalizer th_modfinalizers
+
       -- Finalizers can add top-level declarations with addTopDecls, so
       -- we have to run tc_rn_src_decls to get them
     (tcg_env, tcl_env, lie_top_decls) <- tc_rn_src_decls []
+
     setEnvs (tcg_env, tcl_env) $ do
       -- Subsequent rounds of finalizers run after any new constraints are
       -- simplified, or some types might not be complete when using reify
@@ -507,7 +535,7 @@ tc_rn_src_decls ds
         -- Get TH-generated top-level declarations and make sure they don't
         -- contain any splices since we don't handle that at the moment
         --
-        -- The plumbing here is a bit odd: see Trac #10853
+        -- The plumbing here is a bit odd: see #10853
       ; th_topdecls_var <- fmap tcg_th_topdecls getGblEnv
       ; th_ds <- readTcRef th_topdecls_var
       ; writeTcRef th_topdecls_var []
@@ -591,11 +619,12 @@ tcRnHsBootDecls hsc_src decls
                             , hs_defds  = def_decls
                             , hs_ruleds = rule_decls
                             , hs_annds  = _
-                            , hs_valds
-                                 = XValBindsLR (NValBinds val_binds val_sigs) })
+                            , hs_valds  = XValBindsLR (NValBinds val_binds val_sigs) })
               <- rnTopSrcDecls first_group
+
         -- The empty list is for extra dependencies coming from .hs-boot files
         -- See Note [Extra dependencies from .hs-boot files] in RnSource
+
         ; (gbl_env, lie) <- setGblEnv tcg_env $ captureTopConstraints $ do {
               -- NB: setGblEnv **before** captureTopConstraints so that
               -- if the latter reports errors, it knows what's in scope
@@ -734,7 +763,7 @@ type env, do a setGloblaTypeEnv etc; but that all seems very indirect.
 It is much more directly simply to extract the DFunIds from the
 md_types of the SelfBootInfo.
 
-See Trac #4003, #16038 for why we need to take care here.
+See #4003, #16038 for why we need to take care here.
 -}
 
 checkHiBootIface' :: [ClsInst] -> TypeEnv -> [AvailInfo]
@@ -825,12 +854,12 @@ checkHiBootIface'
           --    That ensures that the TyCon etc inside the type are
           --    the ones defined in this module, not the ones gotten
           --    from the hi-boot file, which may have a lot less info
-          --    (Trac #8743, comment:10).
+          --    (#8743, comment:10).
           --
           --  * The DFunIds from boot_details are /GlobalIds/, because
           --    they come from typechecking M.hi-boot.
           --    But all bindings in this module should be for /LocalIds/,
-          --    otherwise dependency analysis fails (Trac #16038). This
+          --    otherwise dependency analysis fails (#16038). This
           --    is another reason for using mkExportedVanillaId, rather
           --    that modifying boot_dfun, to make local_boot_fun.
 
@@ -1725,7 +1754,7 @@ check_main dflags tcg_env explicit_mod_hdr
               -- The ev_binds of the `main` function may contain deferred
               -- type error when type of `main` is not `IO a`. The `ev_binds`
               -- must be put inside `runMainIO` to ensure the deferred type
-              -- error can be emitted correctly. See Trac #13838.
+              -- error can be emitted correctly. See #13838.
               ; rhs = nlHsApp (mkLHsWrap co (nlHsVar run_main_id)) $
                         mkHsDictLet ev_binds main_expr
               ; main_bind = mkVarBind root_main_id rhs }
@@ -2125,10 +2154,10 @@ naked expressions. Deferring type errors here is unhelpful because the
 expression gets evaluated right away anyway. It also would potentially emit
 two redundant type-error warnings, one from each plan.
 
-Trac #14963 reveals another bug that when deferred type errors is enabled
+#14963 reveals another bug that when deferred type errors is enabled
 in GHCi, any reference of imported/loaded variables (directly or indirectly)
 in interactively issued naked expressions will cause ghc panic. See more
-detailed dicussion in Trac #14963.
+detailed dicussion in #14963.
 
 The interactively issued declarations, statements, as well as the modules
 loaded into GHCi, are not affected. That means, for declaration, you could
@@ -2286,7 +2315,8 @@ getGhciStepIO = do
         ioM     = nlHsAppTy (nlHsTyVar ioTyConName) (nlHsTyVar a_tv)
 
         step_ty = noLoc $ HsForAllTy
-                     { hst_bndrs = [noLoc $ UserTyVar noExt (noLoc a_tv)]
+                     { hst_fvf = ForallInvis
+                     , hst_bndrs = [noLoc $ UserTyVar noExt (noLoc a_tv)]
                      , hst_xforall = noExt
                      , hst_body  = nlHsFunTy ghciM ioM }
 
@@ -2334,8 +2364,9 @@ tcRnExpr hsc_env mode rdr_expr
     uniq <- newUnique ;
     let { fresh_it  = itName uniq (getLoc rdr_expr)
         ; orig = lexprCtOrigin rn_expr } ;
-    (tclvl, lie, res_ty)
-          <- pushLevelAndCaptureConstraints $
+    ((tclvl, res_ty), lie)
+          <- captureTopConstraints $
+             pushTcLevelM          $
              do { (_tc_expr, expr_ty) <- tcInferSigma rn_expr
                 ; if inst
                   then snd <$> deeplyInstantiate orig expr_ty
@@ -2352,7 +2383,8 @@ tcRnExpr hsc_env mode rdr_expr
     _ <- perhaps_disable_default_warnings $
          simplifyInteractive residual ;
 
-    let { all_expr_ty = mkInvForAllTys qtvs (mkLamTypes dicts res_ty) } ;
+    let { all_expr_ty = mkInvForAllTys qtvs $
+                        mkPhiTy (map idType dicts) res_ty } ;
     ty <- zonkTcType all_expr_ty ;
 
     -- We normalise type families, so that the type of an expression is the
@@ -2403,7 +2435,7 @@ tcRnType hsc_env normalise rdr_type
         -- First bring into scope any wildcards
        ; traceTc "tcRnType" (vcat [ppr wcs, ppr rn_type])
        ; ((ty, kind), lie)  <-
-                       captureConstraints $
+                       captureTopConstraints $
                        tcWildCardBinders wcs $ \ wcs' ->
                        do { emitWildCardHoleConstraints wcs'
                           ; tcLHsTypeUnsaturated rn_type }
@@ -2415,7 +2447,7 @@ tcRnType hsc_env normalise rdr_type
        ; ty  <- zonkTcTypeToType ty
 
        -- Do validity checking on type
-       ; checkValidType GhciCtxt ty
+       ; checkValidType (GhciCtxt True) ty
 
        ; ty' <- if normalise
                 then do { fam_envs <- tcGetFamInstEnvs
@@ -2876,7 +2908,8 @@ runTypecheckerPlugin sum hsc_env gbl_env = do
       gbl_env
 
 mark_plugin_unsafe :: DynFlags -> TcM ()
-mark_plugin_unsafe dflags = recordUnsafeInfer pluginUnsafe
+mark_plugin_unsafe dflags = unless (gopt Opt_PluginTrustworthy dflags) $
+  recordUnsafeInfer pluginUnsafe
   where
     unsafeText = "Use of plugins makes the module unsafe"
     pluginUnsafe = unitBag ( mkPlainWarnMsg dflags noSrcSpan

@@ -165,6 +165,7 @@ data MiscFlags = MiscFlags
     , generateStackTrace    :: Bool
     , machineReadable       :: Bool
     , internalCounters      :: Bool
+    , linkerAlwaysPic       :: Bool
     , linkerMemBase         :: Word
       -- ^ address to ask the OS for memory for the linker, 0 ==> off
     , ioManager             :: IoSubSystem
@@ -472,6 +473,8 @@ getMiscFlags = do
                   (#{peek MISC_FLAGS, machineReadable} ptr :: IO CBool))
             <*> (toBool <$>
                   (#{peek MISC_FLAGS, internalCounters} ptr :: IO CBool))
+            <*> (toBool <$>
+                  (#{peek MISC_FLAGS, linkerAlwaysPic} ptr :: IO CBool))
             <*> #{peek MISC_FLAGS, linkerMemBase} ptr
             <*> (toEnum . fromIntegral
                  <$> (#{peek MISC_FLAGS, ioManager} ptr :: IO Word32))

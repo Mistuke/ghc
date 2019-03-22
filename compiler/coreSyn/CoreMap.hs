@@ -3,12 +3,14 @@
 (c) The GRASP/AQUA Project, Glasgow University, 1992-1998
 -}
 
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
+
 module CoreMap(
    -- * Maps over Core expressions
    CoreMap, emptyCoreMap, extendCoreMap, lookupCoreMap, foldCoreMap,
@@ -32,6 +34,8 @@ module CoreMap(
    lkDNamed, xtDNamed,
    (>.>), (|>), (|>>),
  ) where
+
+#include "HsVersions.h"
 
 import GhcPrelude
 
@@ -129,7 +133,7 @@ Note [Empty case alternatives]
 * For a key (Case e b ty []) we MUST look at the return type 'ty', because
   otherwise (Case (error () "urk") _ Int  []) would compare equal to
             (Case (error () "urk") _ Bool [])
-  which is utterly wrong (Trac #6097)
+  which is utterly wrong (#6097)
 
 We could compare the return type regardless, but the wildly common case
 is that it's unnecessary, so we have two fields (cm_case and cm_ecase)
@@ -516,7 +520,7 @@ instance Eq (DeBruijn Type) where
             -> D env t1 == D env' t1' && D env t2 == D env' t2'
         (s, AppTy t1' t2') | Just (t1, t2) <- repSplitAppTy_maybe s
             -> D env t1 == D env' t1' && D env t2 == D env' t2'
-        (FunTy t1 t2, FunTy t1' t2')
+        (FunTy _ t1 t2, FunTy _ t1' t2')
             -> D env t1 == D env' t1' && D env t2 == D env' t2'
         (TyConApp tc tys, TyConApp tc' tys')
             -> tc == tc' && D env tys == D env' tys'

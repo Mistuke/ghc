@@ -65,7 +65,7 @@ it re-exports @GHC@, which includes @takeMVar#@, whose type includes
 
 Note [Exports of data families]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Suppose you see (Trac #5306)
+Suppose you see (#5306)
         module M where
           import X( F )
           data instance F Int = FInt
@@ -89,6 +89,41 @@ At one point I implemented a compromise:
 But the compromise seemed too much of a hack, so we backed it out.
 You just have to use an explicit export list:
     module M( F(..) ) where ...
+
+Note [Avails of associated data families]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Suppose you have (#16077)
+
+    {-# LANGUAGE TypeFamilies #-}
+    module A (module A) where
+
+    class    C a  where { data T a }
+    instance C () where { data T () = D }
+
+Because @A@ is exported explicitly, GHC tries to produce an export list
+from the @GlobalRdrEnv@. In this case, it pulls out the following:
+
+    [ C defined at A.hs:4:1
+    , T parent:C defined at A.hs:4:23
+    , D parent:T defined at A.hs:5:35 ]
+
+If map these directly into avails, (via 'availFromGRE'), we get
+@[C{C;}, C{T;}, T{D;}]@, which eventually gets merged into @[C{C, T;}, T{D;}]@.
+That's not right, because @T{D;}@ violates the AvailTC invariant: @T@ is
+exported, but it isn't the first entry in the avail!
+
+We work around this issue by expanding GREs where the parent and child
+are both type constructors into two GRES.
+
+    T parent:C defined at A.hs:4:23
+
+      =>
+
+    [ T parent:C defined at A.hs:4:23
+    , T defined at A.hs:4:23 ]
+
+Then, we get  @[C{C;}, C{T;}, T{T;}, T{D;}]@, which eventually gets merged
+into @[C{C, T;}, T{T, D;}]@ (which satsifies the AvailTC invariant).
 -}
 
 data ExportAccum        -- The type of the accumulating parameter of
@@ -105,10 +140,10 @@ accumExports :: (ExportAccum -> x -> TcRn (Maybe (ExportAccum, y)))
              -> TcRn [y]
 accumExports f = fmap (catMaybes . snd) . mapAccumLM f' emptyExportAccum
   where f' acc x = do
-          m <- try_m (f acc x)
+          m <- attemptM (f acc x)
           pure $ case m of
-            Right (Just (acc', y)) -> (acc', Just y)
-            _                      -> (acc, Nothing)
+            Just (Just (acc', y)) -> (acc', Just y)
+            _                     -> (acc, Nothing)
 
 type ExportOccMap = OccEnv (Name, IE GhcPs)
         -- Tracks what a particular exported OccName
@@ -135,27 +170,29 @@ tcRnExports explicit_mod exports
        -- list, to avoid bleating about re-exporting a deprecated
        -- thing (especially via 'module Foo' export item)
    do   {
-        -- In interactive mode, we behave as if he had
-        -- written "module Main where ..."
         ; dflags <- getDynFlags
         ; let is_main_mod = mainModIs dflags == this_mod
         ; let default_main = case mainFunIs dflags of
                  Just main_fun
                      | is_main_mod -> mkUnqual varName (fsLit main_fun)
                  _                 -> main_RDR_Unqual
+        ; has_main <- lookupGlobalOccRn_maybe default_main >>= return . isJust
+        -- If the module has no explicit header, and it has a main function,
+        -- then we add a header like "module Main(main) where ..." (#13839)
+        -- See Note [Modules without a module header]
         ; let real_exports
                  | explicit_mod = exports
-                 | ghcLink dflags == LinkInMemory = Nothing
-                 | otherwise
+                 | has_main
                           = Just (noLoc [noLoc (IEVar noExt
                                      (noLoc (IEName $ noLoc default_main)))])
                         -- ToDo: the 'noLoc' here is unhelpful if 'main'
                         --       turns out to be out of scope
+                 | otherwise = Nothing
 
         ; let do_it = exports_from_avail real_exports rdr_env imports this_mod
         ; (rn_exports, final_avails)
             <- if hsc_src == HsigFile
-                then do (msgs, mb_r) <- tryTc do_it
+                then do (mb_r, msgs) <- tryTc do_it
                         case mb_r of
                             Just r  -> return r
                             Nothing -> addMessages msgs >> failM
@@ -175,12 +212,12 @@ tcRnExports explicit_mod exports
         ; return new_tcg_env }
 
 exports_from_avail :: Maybe (Located [LIE GhcPs])
-                         -- Nothing => no explicit export list
+                         -- ^ 'Nothing' means no explicit export list
                    -> GlobalRdrEnv
                    -> ImportAvails
-                         -- Imported modules; this is used to test if a
-                         -- 'module Foo' export is valid (it's not valid
-                         -- if we didn't import Foo!)
+                         -- ^ Imported modules; this is used to test if a
+                         -- @module Foo@ export is valid (it's not valid
+                         -- if we didn't import @Foo@!)
                    -> Module
                    -> RnM (Maybe [(LIE GhcRn, Avails)], Avails)
                          -- (Nothing, _) <=> no explicit export list
@@ -230,6 +267,11 @@ exports_from_avail (Just (dL->L _ rdr_items)) rdr_env imports this_mod
     kids_env :: NameEnv [GlobalRdrElt]
     kids_env = mkChildEnv (globalRdrEnvElts rdr_env)
 
+    -- See Note [Avails of associated data families]
+    expand_tyty_gre :: GlobalRdrElt -> [GlobalRdrElt]
+    expand_tyty_gre (gre @ GRE { gre_name = me, gre_par = ParentIs p })
+      | isTyConName p, isTyConName me = [gre, gre{ gre_par = NoParent }]
+    expand_tyty_gre gre = [gre]
 
     imported_modules = [ imv_name imv
                        | xs <- moduleEnvElts $ imp_mods imports
@@ -248,7 +290,9 @@ exports_from_avail (Just (dL->L _ rdr_items)) rdr_env imports this_mod
         = do { let { exportValid = (mod `elem` imported_modules)
                                 || (moduleName this_mod == mod)
                    ; gre_prs     = pickGREsModExp mod (globalRdrEnvElts rdr_env)
-                   ; new_exports = map (availFromGRE . fst) gre_prs
+                   ; new_exports = [ availFromGRE gre'
+                                   | (gre, _) <- gre_prs
+                                   , gre' <- expand_tyty_gre gre ]
                    ; all_gres    = foldr (\(gre1,gre2) gres -> gre1 : gre2 : gres) [] gre_prs
                    ; mods        = addOneToUniqSet earlier_mods mod
                    }
@@ -394,6 +438,34 @@ isDoc _ = False
 -- Renaming and typechecking of exports happens after everything else has
 -- been typechecked.
 
+{-
+Note [Modules without a module header]
+--------------------------------------------------
+
+The Haskell 2010 report says in section 5.1:
+
+>> An abbreviated form of module, consisting only of the module body, is
+>> permitted. If this is used, the header is assumed to be
+>> ‘module Main(main) where’.
+
+For modules without a module header, this is implemented the
+following way:
+
+If the module has a main function:
+   Then create a module header and export the main function.
+   This has the effect to mark the main function and all top level
+   functions called directly or indirectly via main as 'used',
+   and later on, unused top-level functions can be reported correctly.
+   There is no distinction between GHC and GHCi.
+If the module has NO main function:
+   Then export all top-level functions. This marks all top level
+   functions as 'used'.
+   In GHCi this has the effect, that we don't get any 'non-used' warnings.
+   In GHC, however, the 'has-main-module' check in the module
+   compiler/typecheck/TcRnDriver (functions checkMain / check-main) fires,
+   and we get the error:
+      The IO action ‘main’ is not defined in module ‘Main’
+-}
 
 
 -- Renaming exports lists is a minefield. Five different things can appear in
@@ -646,12 +718,12 @@ dupExport_ok :: Name -> IE GhcPs -> IE GhcPs -> Bool
 --        import A( f )
 --        import B( f )
 --
--- Example of "yes" (Trac #2436)
+-- Example of "yes" (#2436)
 --    module M( C(..), T(..) ) where
 --         class C a where { data T a }
 --         instance C Int where { data T Int = TInt }
 --
--- Example of "yes" (Trac #2436)
+-- Example of "yes" (#2436)
 --    module Foo ( T ) where
 --      data family T a
 --    module Bar ( T(..), module Foo ) where

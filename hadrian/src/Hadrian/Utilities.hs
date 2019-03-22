@@ -133,6 +133,7 @@ unifyPath = toStandard . normaliseEx
 
 -- | Combine paths with a forward slash regardless of platform.
 (-/-) :: FilePath -> FilePath -> FilePath
+_  -/- b | isAbsolute b && not (isAbsolute $ tail b) = b
 "" -/- b = b
 a  -/- b
     | last a == '/' = a ++       b
@@ -165,14 +166,15 @@ makeRelativeNoSysLink a b
         -- Use removePrefix to get the relative paths relative to a new
         -- base directory as high in the directory tree as possible.
         (baseToA, baseToB) = removePrefix aRelSplit bRelSplit
-        aToBase = if isDirUp (head baseToA)
-                    -- if baseToA contains any '..' then there is no way to get
-                    -- a path from a to the base directory.
-                    -- E.g. if   baseToA == "../u/v"
-                    --      then aToBase == "../../<UnknownDir>"
-                    then error $ "Impossible to find relatieve path from "
+        aToBase = case baseToA of
+                   (p: _) | isDirUp p ->
+                      -- if baseToA contains any '..' then there is no way to get
+                      -- a path from a to the base directory.
+                      -- E.g. if   baseToA == "../u/v"
+                      --      then aToBase == "../../<UnknownDir>"
+                      error $ "Impossible to find relatieve path from "
                                     ++ a ++ " to " ++ b
-                    else".." <$ baseToA
+                   _ -> ".." <$ baseToA
         aToB = aToBase ++ baseToB
 
         -- removePrefix "pre123" "prefix456" == ("123", "fix456")

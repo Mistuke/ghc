@@ -160,7 +160,7 @@ depanal excluded_mods allow_dup_roots = do
 -- but "A" imports some other module "C", then GHC will issue a warning
 -- about module "C" not being listed in a command line.
 --
--- The warning in enabled by `-Wmissing-home-modules`. See Trac #13129
+-- The warning in enabled by `-Wmissing-home-modules`. See #13129
 warnMissingHomeModules :: GhcMonad m => HscEnv -> ModuleGraph -> m ()
 warnMissingHomeModules hsc_env mod_graph =
     when (wopt Opt_WarnMissingHomeModules dflags && not (null missing)) $
@@ -178,7 +178,7 @@ warnMissingHomeModules hsc_env mod_graph =
     -- For instance, `ghc --make src-exe/Main.hs` and
     -- `ghc --make -isrc-exe Main` are supposed to be equivalent.
     -- Note also that we can't always infer the associated module name
-    -- directly from the filename argument.  See Trac #13727.
+    -- directly from the filename argument.  See #13727.
     is_my_target mod (TargetModule name)
       = moduleName (ms_mod mod) == name
     is_my_target mod (TargetFile target_file _)
@@ -395,8 +395,8 @@ load' how_much mHscMessage mod_graph = do
                    | otherwise  = upsweep
 
     setSession hsc_env{ hsc_HPT = emptyHomePackageTable }
-    (upsweep_ok, modsUpswept)
-       <- upsweep_fn mHscMessage pruned_hpt stable_mods cleanup mg
+    (upsweep_ok, modsUpswept) <- withDeferredDiagnostics $
+      upsweep_fn mHscMessage pruned_hpt stable_mods cleanup mg
 
     -- Make modsDone be the summaries for each home module now
     -- available; this should equal the domain of hpt3.
@@ -868,7 +868,7 @@ parUpsweep n_jobs mHscMessage old_hpt stable_mods cleanup sccs = do
             n_cpus <- getNumProcessors
             -- Setting number of capabilities more than
             -- CPU count usually leads to high userspace
-            -- lock contention. Trac #9221
+            -- lock contention. #9221
             let n_caps = min n_jobs n_cpus
             unless (n_capabilities /= 1) $ setNumCapabilities n_caps
             return n_capabilities
@@ -1629,7 +1629,7 @@ Potential TODOS:
 -- be any object code that we can compare against, nor should there
 -- be: we're *just* generating interface files.  In this case, we
 -- want to check if the interface file is new, in lieu of the object
--- file.  See also Trac #9243.
+-- file.  See also #9243.
 
 -- Filter modules in the HPT
 retainInTopLevelEnvs :: [ModuleName] -> HomePackageTable -> HomePackageTable
@@ -2045,6 +2045,9 @@ enableCodeGenForTH target nodemap =
         , ms_hspp_opts = dflags@DynFlags
           {hscTarget = HscNothing}
         } <- ms
+      -- Don't enable codegen for TH on indefinite packages; we
+      -- can't compile anything anyway! See #16219.
+      , not (isIndefinite dflags)
       , ms_mod `Set.member` needs_codegen_set
       = do
         let new_temp_file suf dynsuf = do
@@ -2456,6 +2459,41 @@ preprocessFile hsc_env src_fn mb_phase (Just (buf, _time))
 -----------------------------------------------------------------------------
 --                      Error messages
 -----------------------------------------------------------------------------
+
+-- Defer and group warning, error and fatal messages so they will not get lost
+-- in the regular output.
+withDeferredDiagnostics :: GhcMonad m => m a -> m a
+withDeferredDiagnostics f = do
+  dflags <- getDynFlags
+  if not $ gopt Opt_DeferDiagnostics dflags
+  then f
+  else do
+    warnings <- liftIO $ newIORef []
+    errors <- liftIO $ newIORef []
+    fatals <- liftIO $ newIORef []
+
+    let deferDiagnostics _dflags !reason !severity !srcSpan !style !msg = do
+          let action = putLogMsg dflags reason severity srcSpan style msg
+          case severity of
+            SevWarning -> atomicModifyIORef' warnings $ \i -> (action: i, ())
+            SevError -> atomicModifyIORef' errors $ \i -> (action: i, ())
+            SevFatal -> atomicModifyIORef' fatals $ \i -> (action: i, ())
+            _ -> action
+
+        printDeferredDiagnostics = liftIO $
+          forM_ [warnings, errors, fatals] $ \ref -> do
+            -- This IORef can leak when the dflags leaks, so let us always
+            -- reset the content.
+            actions <- atomicModifyIORef' ref $ \i -> ([], i)
+            sequence_ $ reverse actions
+
+        setLogAction action = modifySession $ \hsc_env ->
+          hsc_env{ hsc_dflags = (hsc_dflags hsc_env){ log_action = action } }
+
+    gbracket
+      (setLogAction deferDiagnostics)
+      (\_ -> setLogAction (log_action dflags) >> printDeferredDiagnostics)
+      (\_ -> f)
 
 noModError :: DynFlags -> SrcSpan -> ModuleName -> FindResult -> ErrMsg
 -- ToDo: we don't have a proper line number for this error

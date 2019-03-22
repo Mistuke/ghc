@@ -39,7 +39,7 @@ test('rnfail035', normal, compile_fail, [''])
 
 test('rnfail039', normal, compile_fail, [''])
 
-test('rnfail040', [extra_files(['Rnfail040_A.hs'])], multimod_compile_fail, ['rnfail040', '-v0'])
+test('rnfail040', [extra_files(['Rnfail040_A.hs']), normalise_version('base')], multimod_compile_fail, ['rnfail040', '-v0'])
 test('rnfail041', normal, compile_fail, [''])
 test('rnfail042', normal, compile_fail, [''])
 
@@ -110,8 +110,7 @@ test('T9815', normal, compile_fail, [''])
 
 test('T9032',
      normal,
-     run_command,
-     ['$MAKE -s --no-print-directory T9032'])
+     makefile_test, [])
 test('T10618', normal, compile_fail, [''])
 test('T10668', normal, compile_fail, [''])
 test('T5001b', normal, compile_fail, [''])
@@ -127,6 +126,7 @@ test('T11592', normal, compile_fail, [''])
 test('T12879', normal, compile_fail, [''])
 test('T13644', normal, multimod_compile_fail, ['T13644','-v0'])
 test('T13568', normal, multimod_compile_fail, ['T13568','-v0'])
+test('T13839b', normal, compile_fail, [''])
 test('T13947', normal, compile_fail, [''])
 test('T13847', normal, multimod_compile_fail, ['T13847','-v0'])
 test('T14225', normal, ghci_script, ['T14225.script'])
@@ -143,5 +143,8 @@ test('T15611a', normal, compile_fail, [''])
 test('T15611b', normal, ghci_script, ['T15611b.script'])
 test('T15828', normal, compile_fail, [''])
 test('T16002', normal, compile_fail, [''])
-
+test('T16114', normal, compile_fail, [''])
+test('T16116b', normal, compile_fail, [''])
 test('ExplicitForAllRules2', normal, compile_fail, [''])
+test('T15957_Fail', normal, compile_fail, ['-Werror -Wall -Wno-missing-signatures'])
+test('T16385', normal, compile_fail, [''])

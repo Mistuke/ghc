@@ -941,7 +941,9 @@ update_bkwd_compact( generation *gen )
 }
 
 void
-compact(StgClosure *static_objects)
+compact(StgClosure *static_objects,
+        StgWeak **dead_weak_ptr_list,
+        StgTSO **resurrected_threads)
 {
     W_ n, g, blocks;
     generation *gen;
@@ -959,7 +961,7 @@ compact(StgClosure *static_objects)
     }
 
     if (dead_weak_ptr_list != NULL) {
-        thread((void *)&dead_weak_ptr_list); // tmp
+        thread((void *)dead_weak_ptr_list); // tmp
     }
 
     // mutable lists
@@ -982,7 +984,7 @@ compact(StgClosure *static_objects)
     }
 
     // any threads resurrected during this GC
-    thread((void *)&resurrected_threads);
+    thread((void *)resurrected_threads);
 
     // the task list
     {

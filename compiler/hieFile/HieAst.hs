@@ -28,10 +28,14 @@ import HscTypes
 import Module                     ( ModuleName, ml_hs_file )
 import MonadUtils                 ( concatMapM, liftIO )
 import Name                       ( Name, nameSrcSpan, setNameLoc )
+import NameEnv                    ( NameEnv, emptyNameEnv, extendNameEnv, lookupNameEnv )
 import SrcLoc
-import TcHsSyn                    ( hsPatType )
-import Type                       ( Type )
+import TcHsSyn                    ( hsLitType, hsPatType )
+import Type                       ( mkVisFunTys, Type )
+import TysWiredIn                 ( mkListTy, mkSumTy )
 import Var                        ( Id, Var, setVarName, varName, varType )
+import TcRnTypes
+import MkIface                    ( mkIfaceExports )
 
 import HieTypes
 import HieUtils
@@ -60,11 +64,11 @@ We don't care about the distinction between mono and poly bindings,
 so we replace all occurrences of the mono name with the poly name.
 -}
 newtype HieState = HieState
-  { name_remapping :: M.Map Name Id
+  { name_remapping :: NameEnv Id
   }
 
 initState :: HieState
-initState = HieState M.empty
+initState = HieState emptyNameEnv
 
 class ModifyState a where -- See Note [Name Remapping]
   addSubstitution :: a -> a -> HieState -> HieState
@@ -74,7 +78,7 @@ instance ModifyState Name where
 
 instance ModifyState Id where
   addSubstitution mono poly hs =
-    hs{name_remapping = M.insert (varName mono) poly (name_remapping hs)}
+    hs{name_remapping = extendNameEnv (name_remapping hs) (varName mono) poly}
 
 modifyState :: ModifyState (IdP p) => [ABExport p] -> HieState -> HieState
 modifyState = foldr go id
@@ -85,17 +89,23 @@ modifyState = foldr go id
 type HieM = ReaderT HieState Hsc
 
 -- | Construct an 'HieFile' from the outputs of the typechecker.
-mkHieFile :: ModSummary -> TypecheckedSource -> RenamedSource -> Hsc HieFile
+mkHieFile :: ModSummary
+          -> TcGblEnv
+          -> RenamedSource -> Hsc HieFile
 mkHieFile ms ts rs = do
-  (asts', arr) <- getCompressedAsts ts rs
+  let tc_binds = tcg_binds ts
+  (asts', arr) <- getCompressedAsts tc_binds rs
   let Just src_file = ml_hs_file $ ms_location ms
   src <- liftIO $ BS.readFile src_file
   return $ HieFile
       { hie_version = curHieVersion
       , hie_ghc_version = BSC.pack cProjectVersion
       , hie_hs_file = src_file
+      , hie_module = ms_mod ms
       , hie_types = arr
       , hie_asts = asts'
+      -- mkIfaceExports sorts the AvailInfos for stability
+      , hie_exports = mkIfaceExports (tcg_exports ts)
       , hie_hs_src = src
       }
 
@@ -210,7 +220,7 @@ data PScoped a = PS (Maybe Span)
 {- Note [TyVar Scopes]
 Due to -XScopedTypeVariables, type variables can be in scope quite far from
 their original binding. We resolve the scope of these type variables
-in a seperate pass
+in a separate pass
 -}
 data TScoped a = TS TyVarScope a -- TyVarScope
 
@@ -328,6 +338,10 @@ instance (HasLoc a, HasLoc b) => HasLoc (FamEqn s a b) where
   loc (FamEqn _ a (Just tvs) b _ c) = foldl1' combineSrcSpans
                                               [loc a, loc tvs, loc b, loc c]
   loc _ = noSrcSpan
+instance (HasLoc tm, HasLoc ty) => HasLoc (HsArg tm ty) where
+  loc (HsValArg tm) = loc tm
+  loc (HsTypeArg _ ty) = loc ty
+  loc (HsArgPar sp)  = sp
 
 instance HasLoc (HsDataDefn GhcRn) where
   loc def@(HsDataDefn{}) = loc $ dd_cons def
@@ -373,7 +387,9 @@ instance ToHie (Context (Located Var)) where
       C context (L (RealSrcSpan span) name')
         -> do
         m <- asks name_remapping
-        let name = M.findWithDefault name' (varName name') m
+        let name = case lookupNameEnv m (varName name') of
+              Just var -> var
+              Nothing-> name'
         pure
           [Node
             (NodeInfo S.empty [] $
@@ -388,7 +404,7 @@ instance ToHie (Context (Located Name)) where
   toHie c = case c of
       C context (L (RealSrcSpan span) name') -> do
         m <- asks name_remapping
-        let name = case M.lookup name' m of
+        let name = case lookupNameEnv m name' of
               Just var -> varName var
               Nothing -> name'
         pure
@@ -428,13 +444,67 @@ instance HasType (LPat GhcTc) where
 instance HasType (LHsExpr GhcRn) where
   getTypeNode (L spn e) = makeNode e spn
 
+-- | This instance tries to construct 'HieAST' nodes which include the type of
+-- the expression. It is not yet possible to do this efficiently for all
+-- expression forms, so we skip filling in the type for those inputs.
+--
+-- 'HsApp', for example, doesn't have any type information available directly on
+-- the node. Our next recourse would be to desugar it into a 'CoreExpr' then
+-- query the type of that. Yet both the desugaring call and the type query both
+-- involve recursive calls to the function and argument! This is particularly
+-- problematic when you realize that the HIE traversal will eventually visit
+-- those nodes too and ask for their types again.
+--
+-- Since the above is quite costly, we just skip cases where computing the
+-- expression's type is going to be expensive.
+--
+-- See #16233
 instance HasType (LHsExpr GhcTc) where
-  getTypeNode e@(L spn e') = lift $ do
-    hs_env <- Hsc $ \e w -> return (e,w)
-    (_,mbe) <- liftIO $ deSugarExpr hs_env e
-    case mbe of
-      Just te -> makeTypeNode e' spn (exprType te)
-      Nothing -> makeNode e' spn
+  getTypeNode e@(L spn e') = lift $
+    -- Some expression forms have their type immediately available
+    let tyOpt = case e' of
+          HsLit _ l -> Just (hsLitType l)
+          HsOverLit _ o -> Just (overLitType o)
+
+          HsLam     _ (MG { mg_ext = groupTy }) -> Just (matchGroupType groupTy)
+          HsLamCase _ (MG { mg_ext = groupTy }) -> Just (matchGroupType groupTy)
+          HsCase _  _ (MG { mg_ext = groupTy }) -> Just (mg_res_ty groupTy)
+
+          ExplicitList  ty _ _   -> Just (mkListTy ty)
+          ExplicitSum   ty _ _ _ -> Just (mkSumTy ty)
+          HsDo          ty _ _   -> Just ty
+          HsMultiIf     ty _     -> Just ty
+
+          _ -> Nothing
+
+    in
+    case tyOpt of
+      _ | skipDesugaring e' -> fallback
+        | otherwise -> do
+            hs_env <- Hsc $ \e w -> return (e,w)
+            (_,mbe) <- liftIO $ deSugarExpr hs_env e
+            maybe fallback (makeTypeNode e' spn . exprType) mbe
+    where
+      fallback = makeNode e' spn
+
+      matchGroupType :: MatchGroupTc -> Type
+      matchGroupType (MatchGroupTc args res) = mkVisFunTys args res
+
+      -- | Skip desugaring of these expressions for performance reasons.
+      --
+      -- See impact on Haddock output (esp. missing type annotations or links)
+      -- before marking more things here as 'False'. See impact on Haddock
+      -- performance before marking more things as 'True'.
+      skipDesugaring :: HsExpr a -> Bool
+      skipDesugaring e = case e of
+        HsVar{}        -> False
+        HsUnboundVar{} -> False
+        HsConLikeOut{} -> False
+        HsRecFld{}     -> False
+        HsOverLabel{}  -> False
+        HsIPVar{}      -> False
+        HsWrap{}       -> False
+        _              -> True
 
 instance ( ToHie (Context (Located (IdP a)))
          , ToHie (MatchGroup a (LHsExpr a))
@@ -773,14 +843,6 @@ instance ( a ~ GhcPass p
         ]
       HsStatic _ expr ->
         [ toHie expr
-        ]
-      HsArrApp _ a b _ _ ->
-        [ toHie a
-        , toHie b
-        ]
-      HsArrForm _ expr _ cmds ->
-        [ toHie expr
-        , toHie cmds
         ]
       HsTick _ _ expr ->
         [ toHie expr
@@ -1324,7 +1386,7 @@ instance ToHie (LHsType GhcRn) where
 
 instance ToHie (TScoped (LHsType GhcRn)) where
   toHie (TS tsc (L span t)) = concatM $ makeNode t span : case t of
-      HsForAllTy _ bndrs body ->
+      HsForAllTy _ _ bndrs body ->
         [ toHie $ tvScopes tsc (mkScope $ getLoc body) bndrs
         , toHie body
         ]
@@ -1338,6 +1400,10 @@ instance ToHie (TScoped (LHsType GhcRn)) where
       HsAppTy _ a b ->
         [ toHie a
         , toHie b
+        ]
+      HsAppKindTy _ ty ki ->
+        [ toHie ty
+        , toHie $ TS (ResolvedScopes []) ki
         ]
       HsFunTy _ a b ->
         [ toHie a
@@ -1387,14 +1453,14 @@ instance ToHie (TScoped (LHsType GhcRn)) where
         [ toHie tys
         ]
       HsTyLit _ _ -> []
-      HsWildCardTy e ->
-        [ toHie e
-        ]
+      HsWildCardTy _ -> []
       HsStarTy _ _ -> []
       XHsType _ -> []
 
-instance ToHie HsWildCardInfo where
-  toHie (AnonWildCard name) = toHie $ C Use name
+instance (ToHie tm, ToHie ty) => ToHie (HsArg tm ty) where
+  toHie (HsValArg tm) = toHie tm
+  toHie (HsTypeArg _ ty) = toHie ty
+  toHie (HsArgPar sp) = pure $ locOnly sp
 
 instance ToHie (TVScoped (LHsTyVarBndr GhcRn)) where
   toHie (TVS tsc sc (L span bndr)) = concatM $ makeNode bndr span : case bndr of
@@ -1408,7 +1474,7 @@ instance ToHie (TVScoped (LHsTyVarBndr GhcRn)) where
       XTyVarBndr _ -> []
 
 instance ToHie (TScoped (LHsQTyVars GhcRn)) where
-  toHie (TS sc (HsQTvs (HsQTvsRn implicits _) vars)) = concatM $
+  toHie (TS sc (HsQTvs implicits vars)) = concatM $
     [ pure $ bindingsOnly bindings
     , toHie $ tvScopes sc NoScope vars
     ]
@@ -1495,6 +1561,8 @@ instance ( ToHie (LHsExpr a)
         [ pure $ locOnly ispan
         ]
       HsSpliced _ _ _ ->
+        []
+      HsSplicedT _ ->
         []
       XSplice _ -> []
 

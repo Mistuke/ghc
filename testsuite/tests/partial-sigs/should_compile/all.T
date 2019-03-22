@@ -1,3 +1,5 @@
+setTestOpts(normalise_version('base','ghc-prim'))
+
 test('ADT', normal, compile, ['-ddump-types -fno-warn-partial-type-signatures'])
 test('AddAndOr1', normal, compile, ['-ddump-types -fno-warn-partial-type-signatures'])
 test('AddAndOr2', normal, compile, ['-ddump-types -fno-warn-partial-type-signatures'])
@@ -89,3 +91,4 @@ test('T15039b', normal, compile, ['-fprint-explicit-kinds'])
 test('T15039c', normal, compile, ['-fprint-equality-relations'])
 test('T15039d', normal, compile,
                 ['-fprint-explicit-kinds -fprint-equality-relations'])
+test('T16334', normal, compile, [''])

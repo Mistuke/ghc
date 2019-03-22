@@ -87,11 +87,21 @@ ppc_mkStackDeallocInstr platform amount
 
 ppc_mkStackAllocInstr' :: Platform -> Int -> [Instr]
 ppc_mkStackAllocInstr' platform amount
-  = case platformArch platform of
-    ArchPPC      -> [UPDATE_SP II32 (ImmInt amount)]
-    ArchPPC_64 _ -> [UPDATE_SP II64 (ImmInt amount)]
-    _            -> panic $ "ppc_mkStackAllocInstr' "
-                            ++ show (platformArch platform)
+  | fits16Bits amount
+  = [ LD fmt r0 (AddrRegImm sp zero)
+    , STU fmt r0 (AddrRegImm sp immAmount)
+    ]
+  | otherwise
+  = [ LD fmt r0 (AddrRegImm sp zero)
+    , ADDIS tmp sp (HA immAmount)
+    , ADD tmp tmp (RIImm (LO immAmount))
+    , STU fmt r0 (AddrRegReg sp tmp)
+    ]
+  where
+    fmt = intFormat $ widthFromBytes ((platformWordSize platform) `quot` 8)
+    zero = ImmInt 0
+    tmp = tmpReg platform
+    immAmount = ImmInt amount
 
 --
 -- See note [extra spill slots] in X86/Instr.hs
@@ -141,12 +151,12 @@ allocMoreStack platform slots (CmmProc info lbl live (ListGraph code)) = do
             -- "labeled-goto" we use JMP, and for "computed-goto" we
             -- use MTCTR followed by BCTR. See 'PPC.CodeGen.genJump'.
             = case insn of
-                JMP _           -> dealloc ++ (insn : r)
-                BCTR [] Nothing -> dealloc ++ (insn : r)
-                BCTR ids label  -> BCTR (map (fmap retarget) ids) label : r
-                BCCFAR cond b p -> BCCFAR cond (retarget b) p : r
-                BCC    cond b p -> BCC    cond (retarget b) p : r
-                _               -> insn : r
+                JMP _ _           -> dealloc ++ (insn : r)
+                BCTR [] Nothing _ -> dealloc ++ (insn : r)
+                BCTR ids label rs -> BCTR (map (fmap retarget) ids) label rs : r
+                BCCFAR cond b p   -> BCCFAR cond (retarget b) p : r
+                BCC    cond b p   -> BCC    cond (retarget b) p : r
+                _                 -> insn : r
             -- BL and BCTRL are call-like instructions rather than
             -- jumps, and are used only for C calls.
 
@@ -213,10 +223,13 @@ data Instr
                                     --    Just True:  branch likely taken
                                     --    Just False: branch likely not taken
                                     --    Nothing:    no hint
-    | JMP     CLabel                -- same as branch,
+    | JMP     CLabel [Reg]          -- same as branch,
                                     -- but with CLabel instead of block ID
+                                    -- and live global registers
     | MTCTR   Reg
-    | BCTR    [Maybe BlockId] (Maybe CLabel) -- with list of local destinations, and jump table location if necessary
+    | BCTR    [Maybe BlockId] (Maybe CLabel) [Reg]
+                                    -- with list of local destinations, and
+                                    -- jump table location if necessary
     | BL      CLabel [Reg]          -- with list of argument regs
     | BCTRL   [Reg]
 
@@ -289,8 +302,6 @@ data Instr
     | NOP                       -- no operation, PowerPC 64 bit
                                 -- needs this as place holder to
                                 -- reload TOC pointer
-    | UPDATE_SP Format Imm      -- expand/shrink spill area on C stack
-                                -- pseudo-instruction
 
 -- | Get the registers that are being used by this instruction.
 -- regUsage doesn't need to do any trickery for jumps and such.
@@ -316,8 +327,9 @@ ppc_regUsageOfInstr platform instr
     CMPL    _ reg ri         -> usage (reg : regRI ri,[])
     BCC     _ _ _            -> noUsage
     BCCFAR  _ _ _            -> noUsage
+    JMP     _ regs           -> usage (regs, [])
     MTCTR   reg              -> usage ([reg],[])
-    BCTR    _ _              -> noUsage
+    BCTR    _ _ regs         -> usage (regs, [])
     BL      _ params         -> usage (params, callClobberedRegs platform)
     BCTRL   params           -> usage (params, callClobberedRegs platform)
 
@@ -370,7 +382,6 @@ ppc_regUsageOfInstr platform instr
     MFCR    reg             -> usage ([], [reg])
     MFLR    reg             -> usage ([], [reg])
     FETCHPC reg             -> usage ([], [reg])
-    UPDATE_SP _ _           -> usage ([], [sp])
     _                       -> noUsage
   where
     usage (src, dst) = RU (filter (interesting platform) src)
@@ -409,8 +420,9 @@ ppc_patchRegsOfInstr instr env
     CMPL    fmt reg ri      -> CMPL fmt (env reg) (fixRI ri)
     BCC     cond lbl p      -> BCC cond lbl p
     BCCFAR  cond lbl p      -> BCCFAR cond lbl p
+    JMP     l regs          -> JMP l regs -- global regs will not be remapped
     MTCTR   reg             -> MTCTR (env reg)
-    BCTR    targets lbl     -> BCTR targets lbl
+    BCTR    targets lbl rs  -> BCTR targets lbl rs
     BL      imm argRegs     -> BL imm argRegs    -- argument regs
     BCTRL   argRegs         -> BCTRL argRegs     -- cannot be remapped
     ADD     reg1 reg2 ri    -> ADD (env reg1) (env reg2) (fixRI ri)
@@ -499,10 +511,10 @@ ppc_isJumpishInstr instr
 ppc_jumpDestsOfInstr :: Instr -> [BlockId]
 ppc_jumpDestsOfInstr insn
   = case insn of
-        BCC _ id _      -> [id]
-        BCCFAR _ id _   -> [id]
-        BCTR targets _  -> [id | Just id <- targets]
-        _               -> []
+        BCC _ id _       -> [id]
+        BCCFAR _ id _    -> [id]
+        BCTR targets _ _ -> [id | Just id <- targets]
+        _                -> []
 
 
 -- | Change the destination of this jump instruction.
@@ -513,7 +525,7 @@ ppc_patchJumpInstr insn patchF
   = case insn of
         BCC cc id p     -> BCC cc (patchF id) p
         BCCFAR cc id p  -> BCCFAR cc (patchF id) p
-        BCTR ids lbl    -> BCTR (map (fmap patchF) ids) lbl
+        BCTR ids lbl rs -> BCTR (map (fmap patchF) ids) lbl rs
         _               -> insn
 
 
@@ -575,15 +587,13 @@ ppc_mkLoadInstr dflags reg delta slot
 stackFrameHeaderSize :: DynFlags -> Int
 stackFrameHeaderSize dflags
   = case platformOS platform of
-      OSLinux  -> case platformArch platform of
-                             -- header + parameter save area
-        ArchPPC           -> 64 -- TODO: check ABI spec
-        ArchPPC_64 ELF_V1 -> 48 + 8 * 8
-        ArchPPC_64 ELF_V2 -> 32 + 8 * 8
-        _ -> panic "PPC.stackFrameHeaderSize: Unknown Linux"
       OSAIX    -> 24 + 8 * 4
-      OSDarwin -> 64 -- TODO: check ABI spec
-      _ -> panic "PPC.stackFrameHeaderSize: not defined for this OS"
+      _ -> case platformArch platform of
+                             -- header + parameter save area
+             ArchPPC           -> 64 -- TODO: check ABI spec
+             ArchPPC_64 ELF_V1 -> 48 + 8 * 8
+             ArchPPC_64 ELF_V2 -> 32 + 8 * 8
+             _ -> panic "PPC.stackFrameHeaderSize: not defined for this OS"
      where platform = targetPlatform dflags
 
 -- | The maximum number of bytes required to spill a register. PPC32
@@ -602,8 +612,8 @@ maxSpillSlots dflags
 --     = 0 -- useful for testing allocMoreStack
 
 -- | The number of bytes that the stack pointer should be aligned
--- to. This is 16 both on PPC32 and PPC64 at least for Darwin, and
--- Linux (see ELF processor specific supplements).
+-- to. This is 16 both on PPC32 and PPC64 ELF (see ELF processor
+-- specific supplements).
 stackAlign :: Int
 stackAlign = 16
 

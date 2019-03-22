@@ -22,7 +22,8 @@ import FamInstEnv       ( FamInstEnv )
 import Literal          ( litIsLifted ) --, mkLitInt ) -- temporalily commented out. See #8326
 import Id
 import MkId             ( seqId )
-import MkCore           ( mkImpossibleExpr, castBottomExpr )
+import MkCore           ( FloatBind, mkImpossibleExpr, castBottomExpr )
+import qualified MkCore as MkCore
 import IdInfo
 import Name             ( mkSystemVarName, isExternalName, getOccFS )
 import Coercion hiding  ( substCo, substCoVar )
@@ -40,7 +41,7 @@ import CoreUtils
 import CoreOpt          ( pushCoTyArg, pushCoValArg
                         , joinPointBinding_maybe, joinPointBindings_maybe )
 import Rules            ( mkRuleInfo, lookupRule, getRules )
-import Demand           ( mkClosedStrictSig, topDmd, exnRes )
+import Demand           ( mkClosedStrictSig, topDmd, botRes )
 import BasicTypes       ( TopLevelFlag(..), isNotTopLevel, isTopLevel,
                           RecFlag(..), Arity )
 import MonadUtils       ( mapAccumLM, liftIO )
@@ -255,7 +256,7 @@ simplLazyBind env top_lvl is_rec bndr bndr1 rhs rhs_se
                   | not (tickishFloatable t) = surely_not_lam e
                    -- eta-reduction could float
                 surely_not_lam _            = True
-                        -- Do not do the "abstract tyyvar" thing if there's
+                        -- Do not do the "abstract tyvar" thing if there's
                         -- a lambda inside, because it defeats eta-reduction
                         --    f = /\a. \x. g a x
                         -- should eta-reduce.
@@ -270,7 +271,7 @@ simplLazyBind env top_lvl is_rec bndr bndr1 rhs rhs_se
 
               -- Never float join-floats out of a non-join let-binding
               -- So wrap the body in the join-floats right now
-              -- Henc: body_floats1 consists only of let-floats
+              -- Hence: body_floats1 consists only of let-floats
         ; let (body_floats1, body1) = wrapJoinFloatsX body_floats0 body0
 
         -- ANF-ise a constructor or PAP rhs
@@ -695,7 +696,7 @@ addLetBndrInfo new_bndr new_arity is_bot new_unf
 
     -- Bottoming bindings: see Note [Bottoming bindings]
     info4 | is_bot    = info3 `setStrictnessInfo`
-                        mkClosedStrictSig (replicate new_arity topDmd) exnRes
+                        mkClosedStrictSig (replicate new_arity topDmd) botRes
           | otherwise = info3
 
      -- Zap call arity info. We have used it by now (via
@@ -745,7 +746,7 @@ arity computation it performs (via CoreArity.findRhsArity) already
 does a simple bottoming-expression analysis.  So all we need to do
 is propagate that info to the binder's IdInfo.
 
-This showed up in Trac #12150; see comment:16.
+This showed up in #12150; see comment:16.
 
 Note [Setting the demand info]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1217,7 +1218,7 @@ rebuild env expr cont
 {- Note [Optimising reflexivity]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 It's important (for compiler performance) to get rid of reflexivity as soon
-as it appears.  See Trac #11735, #14737, and #15019.
+as it appears.  See #11735, #14737, and #15019.
 
 In particular, we want to behave well on
 
@@ -1231,7 +1232,7 @@ In particular, we want to behave well on
    build up NthCo stacks.  Silly to do that if co is reflexive.
 
 However, we don't want to call isReflexiveCo too much, because it uses
-type equality which is expensive on big types (Trac #14737 comment:7).
+type equality which is expensive on big types (#14737 comment:7).
 
 A good compromise (determined experimentally) seems to be to call
 isReflexiveCo
@@ -1239,7 +1240,7 @@ isReflexiveCo
  * at the end
 
 In investigating this I saw missed opportunities for on-the-fly
-coercion shrinkage. See Trac #15090.
+coercion shrinkage. See #15090.
 -}
 
 
@@ -1291,7 +1292,7 @@ simplCast env body co0 cont0
                     -- 'co' with the InExpr 'arg', so we simplify
                     -- to make it all consistent.  It's a bit messy.
                     -- But it isn't a common case.
-                    -- Example of use: Trac #995
+                    -- Example of use: #995
                ; return (ApplyToVal { sc_arg  = mkCast arg' co1
                                     , sc_env  = arg_se'
                                     , sc_dup  = dup'
@@ -1523,7 +1524,7 @@ Simplifying rules and stable-unfoldings happens a bit after
 simplifying the right-hand side, so we remember whether or not it
 is a join point, and what 'cont' is, in a value of type MaybeJoinCont
 
-Trac #13900 wsa caused by forgetting to push 'cont' into the RHS
+#13900 wsa caused by forgetting to push 'cont' into the RHS
 of a SpecConstr-generated RULE for a join point.
 -}
 
@@ -2268,7 +2269,7 @@ where 'r' is used strictly in (..r..), we can safely transform to
 This is a Good Thing, because 'r' might be dead (if the body just
 calls error), or might be used just once (in which case it can be
 inlined); or we might be able to float the let-binding up or down.
-E.g. Trac #15631 has an example.
+E.g. #15631 has an example.
 
 Note that this can change the error behaviour.  For example, we might
 transform
@@ -2279,7 +2280,7 @@ let-bound to (error "good").
 
 Nevertheless, the paper "A semantics for imprecise exceptions" allows
 this transformation. If you want to fix the evaluation order, use
-'pseq'.  See Trac #8900 for an example where the loss of this
+'pseq'.  See #8900 for an example where the loss of this
 transformation bit us in practice.
 
 See also Note [Empty case alternatives] in CoreSyn.
@@ -2297,7 +2298,7 @@ There have been various earlier versions of this patch:
     scrut_is_demanded_var _          = False
 
   This only fired if the scrutinee was a /variable/, which seems
-  an unnecessary restriction. So in Trac #15631 I relaxed it to allow
+  an unnecessary restriction. So in #15631 I relaxed it to allow
   arbitrary scrutinees.  Less code, less to explain -- but the change
   had 0.00% effect on nofib.
 
@@ -2312,7 +2313,7 @@ There have been various earlier versions of this patch:
     case_bndr_evald_next (Case e _ _ _)  = case_bndr_evald_next e
     case_bndr_evald_next _               = False
 
-  This patch was part of fixing Trac #7542. See also
+  This patch was part of fixing #7542. See also
   Note [Eta reduction of an eval'd function] in CoreUtils.)
 
 
@@ -2354,6 +2355,26 @@ Why don't we drop the case?  Because it's strict in v.  It's technically
 wrong to drop even unnecessary evaluations, and in practice they
 may be a result of 'seq' so we *definitely* don't want to drop those.
 I don't really know how to improve this situation.
+
+
+Note [FloatBinds from constructor wrappers]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+If we have FloatBinds coming from the constructor wrapper
+(as in Note [exprIsConApp_maybe on data constructors with wrappers]),
+ew cannot float past them. We'd need to float the FloatBind
+together with the simplify floats, unfortunately the
+simplifier doesn't have case-floats. The simplest thing we can
+do is to wrap all the floats here. The next iteration of the
+simplifier will take care of all these cases and lets.
+
+Given data T = MkT !Bool, this allows us to simplify
+case $WMkT b of { MkT x -> f x }
+to
+case b of { b' -> f b' }.
+
+We could try and be more clever (like maybe wfloats only contain
+let binders, so we could float them). But the need for the
+extra complication is not clear.
 -}
 
 ---------------------------------------------------------
@@ -2363,7 +2384,7 @@ rebuildCase, reallyRebuildCase
    :: SimplEnv
    -> OutExpr          -- Scrutinee
    -> InId             -- Case binder
-   -> [InAlt]          -- Alternatives (inceasing order)
+   -> [InAlt]          -- Alternatives (increasing order)
    -> SimplCont
    -> SimplM (SimplFloats, OutExpr)
 
@@ -2378,25 +2399,37 @@ rebuildCase env scrut case_bndr alts cont
   = do  { tick (KnownBranch case_bndr)
         ; case findAlt (LitAlt lit) alts of
             Nothing           -> missingAlt env case_bndr alts cont
-            Just (_, bs, rhs) -> simple_rhs bs rhs }
+            Just (_, bs, rhs) -> simple_rhs env [] scrut bs rhs }
 
-  | Just (con, ty_args, other_args) <- exprIsConApp_maybe (getUnfoldingInRuleMatch env) scrut
+  | Just (in_scope', wfloats, con, ty_args, other_args)
+      <- exprIsConApp_maybe (getUnfoldingInRuleMatch env) scrut
         -- Works when the scrutinee is a variable with a known unfolding
         -- as well as when it's an explicit constructor application
+  , let env0 = setInScopeSet env in_scope'
   = do  { tick (KnownBranch case_bndr)
         ; case findAlt (DataAlt con) alts of
-            Nothing  -> missingAlt env case_bndr alts cont
-            Just (DEFAULT, bs, rhs) -> simple_rhs bs rhs
-            Just (_, bs, rhs)       -> knownCon env scrut con ty_args other_args
+            Nothing  -> missingAlt env0 case_bndr alts cont
+            Just (DEFAULT, bs, rhs) -> let con_app = Var (dataConWorkId con)
+                                                 `mkTyApps` ty_args
+                                                 `mkApps`   other_args
+                                       in simple_rhs env0 wfloats con_app bs rhs
+            Just (_, bs, rhs)       -> knownCon env0 scrut wfloats con ty_args other_args
                                                 case_bndr bs rhs cont
         }
   where
-    simple_rhs bs rhs = ASSERT( null bs )
-                        do { (floats1, env') <- simplNonRecX env case_bndr scrut
-                               -- scrut is a constructor application,
-                               -- hence satisfies let/app invariant
-                           ; (floats2, expr') <- simplExprF env' rhs cont
-                           ; return (floats1 `addFloats` floats2, expr') }
+    simple_rhs env wfloats scrut' bs rhs =
+      ASSERT( null bs )
+      do { (floats1, env') <- simplNonRecX env case_bndr scrut'
+             -- scrut is a constructor application,
+             -- hence satisfies let/app invariant
+         ; (floats2, expr') <- simplExprF env' rhs cont
+         ; case wfloats of
+             [] -> return (floats1 `addFloats` floats2, expr')
+             _ -> return
+               -- See Note [FloatBinds from constructor wrappers]
+                   ( emptyFloats env,
+                     MkCore.wrapFloats wfloats $
+                     wrapFloats (floats1 `addFloats` floats2) expr' )}
 
 
 --------------------------------------------------
@@ -2529,7 +2562,7 @@ We'd like to transform
 so that 'rhs' can take advantage of the form of x'.  Notice that Note
 [Case of cast] (in OccurAnal) may then apply to the result.
 
-We'd also like to eliminate empty types (Trac #13468). So if
+We'd also like to eliminate empty types (#13468). So if
 
     data Void
     type instance F Bool = Void
@@ -2665,7 +2698,7 @@ NB: simplLamBinders preserves this eval info
 
 In addition to handling data constructor fields with !s, addEvals
 also records the fact that the result of seq# is always in WHNF.
-See Note [seq# magic] in PrelRules.  Example (Trac #15226):
+See Note [seq# magic] in PrelRules.  Example (#15226):
 
   case seq# v s of
     (# s', v' #) -> E
@@ -2674,7 +2707,7 @@ we want the compiler to be aware that v' is in WHNF in E.
 
 Open problem: we don't record that v itself is in WHNF (and we can't
 do it here).  The right thing is to do some kind of binder-swap;
-see Trac #15226 for discussion.
+see #15226 for discussion.
 -}
 
 addEvals :: Maybe OutExpr -> DataCon -> [Id] -> [Id]
@@ -2766,7 +2799,7 @@ The let/app invariant requires that y is evaluated in the call to
 reallyUnsafePtrEq#, which it is.  But we still want that to be true if we
 propagate binders to occurrences.
 
-This showed up in Trac #13027.
+This showed up in #13027.
 
 Note [Add unfolding for scrutinee]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2824,17 +2857,24 @@ All this should happen in one sweep.
 -}
 
 knownCon :: SimplEnv
-         -> OutExpr                             -- The scrutinee
-         -> DataCon -> [OutType] -> [OutExpr]   -- The scrutinee (in pieces)
-         -> InId -> [InBndr] -> InExpr          -- The alternative
+         -> OutExpr                                           -- The scrutinee
+         -> [FloatBind] -> DataCon -> [OutType] -> [OutExpr]  -- The scrutinee (in pieces)
+         -> InId -> [InBndr] -> InExpr                        -- The alternative
          -> SimplCont
          -> SimplM (SimplFloats, OutExpr)
 
-knownCon env scrut dc dc_ty_args dc_args bndr bs rhs cont
+knownCon env scrut dc_floats dc dc_ty_args dc_args bndr bs rhs cont
   = do  { (floats1, env1)  <- bind_args env bs dc_args
         ; (floats2, env2) <- bind_case_bndr env1
         ; (floats3, expr') <- simplExprF env2 rhs cont
-        ; return (floats1 `addFloats` floats2 `addFloats` floats3, expr') }
+        ; case dc_floats of
+            [] ->
+              return (floats1 `addFloats` floats2 `addFloats` floats3, expr')
+            _ ->
+              return ( emptyFloats env
+               -- See Note [FloatBinds from constructor wrappers]
+                     , MkCore.wrapFloats dc_floats $
+                       wrapFloats (floats1 `addFloats` floats2 `addFloats` floats3) expr') }
   where
     zap_occ = zapBndrOccInfo (isDeadBinder bndr)    -- bndr is an InId
 
@@ -2935,7 +2975,7 @@ When we have
        of alts
 then we can just duplicate those alts because the A and C cases
 will disappear immediately.  This is more direct than creating
-join points and inlining them away.  See Trac #4930.
+join points and inlining them away.  See #4930.
 -}
 
 --------------------
@@ -3168,7 +3208,7 @@ Supposing that body is big, we end up with
 This is just what we want because the rn produces a box that
 the case rn cancels with.
 
-See Trac #4957 a fuller example.
+See #4957 a fuller example.
 
 Note [Case binders and join points]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -3266,7 +3306,7 @@ them.  Thus:
 Now if the thing in the hole is a case expression (which is when
 we'll call mkDupableCont), we'll push the function call into the
 branches, which is what we want.  Now RULES for f may fire, and
-call-pattern specialisation.  Here's an example from Trac #3116
+call-pattern specialisation.  Here's an example from #3116
      go (n+1) (case l of
                  1  -> bs'
                  _  -> Chunk p fpc (o+1) (l-1) bs')
@@ -3449,7 +3489,7 @@ simplStableUnfolding env top_lvl mb_cont id unf rhs_ty
                         -- has got small. This happens, notably in the inlinings
                         -- for dfuns for single-method classes; see
                         -- Note [Single-method classes] in TcInstDcls.
-                        -- A test case is Trac #4138
+                        -- A test case is #4138
                         -- But retain a previous boring_ok of True; e.g. see
                         -- the way it is set in calcUnfoldingGuidanceWithArity
                         in return (mkCoreUnfolding src is_top_lvl expr' guide')
@@ -3560,4 +3600,3 @@ simplRules env mb_new_id rules mb_cont
                           , ru_fn    = fn_name'
                           , ru_args  = args'
                           , ru_rhs   = rhs' }) }
-

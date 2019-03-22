@@ -536,8 +536,6 @@ type family XTcBracketOut   x
 type family XSpliceE        x
 type family XProc           x
 type family XStatic         x
-type family XArrApp         x
-type family XArrForm        x
 type family XTick           x
 type family XBinTick        x
 type family XTickPragma     x
@@ -586,8 +584,6 @@ type ForallXExpr (c :: * -> Constraint) (x :: *) =
        , c (XSpliceE        x)
        , c (XProc           x)
        , c (XStatic         x)
-       , c (XArrApp         x)
-       , c (XArrForm        x)
        , c (XTick           x)
        , c (XBinTick        x)
        , c (XTickPragma     x)
@@ -916,6 +912,7 @@ type family XForAllTy        x
 type family XQualTy          x
 type family XTyVar           x
 type family XAppTy           x
+type family XAppKindTy       x
 type family XFunTy           x
 type family XListTy          x
 type family XTupleTy         x
@@ -942,6 +939,7 @@ type ForallXType (c :: * -> Constraint) (x :: *) =
        , c (XQualTy          x)
        , c (XTyVar           x)
        , c (XAppTy           x)
+       , c (XAppKindTy       x)
        , c (XFunTy           x)
        , c (XListTy          x)
        , c (XTupleTy         x)

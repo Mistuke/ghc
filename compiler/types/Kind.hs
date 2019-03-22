@@ -52,7 +52,7 @@ For this single-method class we may generate a newtype, which in turn
 generates an axiom witnessing
     C a ~ (a -> a)
 so on the left we have Constraint, and on the right we have Type.
-See Trac #7451.
+See #7451.
 
 Bottom line: although 'Type' and 'Constraint' are distinct TyCons, with
 distinct uniques, they are treated as equal at all times except
@@ -76,7 +76,7 @@ isKindLevPoly k = ASSERT2( isLiftedTypeKind k || _is_type, ppr k )
     go AppTy{}           = True  -- it can't be a TyConApp
     go (TyConApp tc tys) = isFamilyTyCon tc || any go tys
     go ForAllTy{}        = True
-    go (FunTy t1 t2)     = go t1 || go t2
+    go (FunTy _ t1 t2)   = go t1 || go t2
     go LitTy{}           = False
     go CastTy{}          = True
     go CoercionTy{}      = True

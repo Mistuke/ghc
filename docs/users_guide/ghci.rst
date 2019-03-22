@@ -1181,20 +1181,20 @@ IO ()``, and it works by converting the value to ``String`` using ``show``.
 This is not ideal in certain cases, like when the output is long, or
 contains strings with non-ascii characters.
 
-The :ghc-flag:`-interactive-print ⟨expr⟩` flag allows to specify any function
+The :ghc-flag:`-interactive-print ⟨name⟩` flag allows to specify any function
 of type ``C a => a -> IO ()``, for some constraint ``C``, as the function for
 printing evaluated expressions. The function can reside in any loaded module or
 any registered package, but only when it resides in a registered package will
 it survive a :ghci-cmd:`:cd`, :ghci-cmd:`:add`, :ghci-cmd:`:load`,
 :ghci-cmd:`:reload` or, :ghci-cmd:`:set`.
 
-.. ghc-flag:: -interactive-print ⟨expr⟩
+.. ghc-flag:: -interactive-print ⟨name⟩
     :shortdesc: :ref:`Select the function to use for printing evaluated
         expressions in GHCi <ghci-interactive-print>`
     :type: dynamic
     :category:
 
-    Set the function used by GHCi to print evaluation results. Expression
+    Set the function used by GHCi to print evaluation results. Given name
     must be of type ``C a => a -> IO ()``.
 
 As an example, suppose we have following special printing module: ::
@@ -1224,7 +1224,7 @@ will start an interactive session where values with be printed using
 A custom pretty printing function can be used, for example, to format
 tree-like and nested structures in a more readable way.
 
-The :ghc-flag:`-interactive-print ⟨expr⟩` flag can also be used when running
+The :ghc-flag:`-interactive-print ⟨name⟩` flag can also be used when running
 GHC in ``-e mode``:
 
 .. code-block:: none
@@ -3286,6 +3286,38 @@ dynamically-linked) from GHC itself.  So for example:
 
 This feature is experimental in GHC 8.0.x, but it may become the
 default in future releases.
+
+.. _external-interpreter-proxy:
+
+Running the interpreter on a different host
+-------------------------------------------
+
+When using the flag :ghc-flag:`-fexternal-interpreter` GHC will
+spawn and communicate with the separate process using pipes.  There
+are scenarios (e.g. when cross compiling) where it is favourable to
+have the communication happen over the network. GHC provides two
+utilities for this, which can be found in the ``utils`` directory.
+
+- ``remote-iserv`` needs to be built with the cross compiler to be
+  executed on the remote host. Or in the case of using it on the
+  same host the stage2 compiler will do as well.
+
+- ``iserv-proxy`` needs to be built on the build machine by the
+  build compiler.
+
+After starting ``remote-iserv ⟨tmp_dir⟩ ⟨port⟩`` on the target and
+providing it with a temporary folder (where it will copy the
+necessary libraries to load to) and port it will listen for
+the proxy to connect.
+
+Providing :ghc-flag:`-pgmi /path/to/iserv-proxy`, :ghc-flag:`-pgmo ⟨option⟩`
+and :ghc-flag:`-pgmo ⟨port⟩` in addition to :ghc-flag:`-fexternal-interpreter`
+will then make ghc go through the proxy instead.
+
+There are some limitations when using this. File and process IO
+will be executed on the target. As such packages like git-embed,
+file-embed and others might not behave as expected if the target
+and host do not share the same filesystem.
 
 .. _ghci-faq:
 

@@ -298,6 +298,27 @@ so the data constructor for T:C had a single argument, namely the
 predicate (C a).  But now we treat that as an ordinary argument, not
 part of the theta-type, so all is well.
 
+Note [Compulsory newtype unfolding]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Newtype wrappers, just like workers, have compulsory unfoldings.
+This is needed so that two optimizations involving newtypes have the same
+effect whether a wrapper is present or not:
+
+(1) Case-of-known constructor.
+    See Note [beta-reduction in exprIsConApp_maybe].
+
+(2) Matching against the map/coerce RULE. Suppose we have the RULE
+
+    {-# RULE "map/coerce" map coerce = ... #-}
+
+    As described in Note [Getting the map/coerce RULE to work],
+    the occurrence of 'coerce' is transformed into:
+
+    {-# RULE "map/coerce" forall (c :: T1 ~R# T2).
+                          map ((\v -> v) `cast` c) = ... #-}
+
+    We'd like 'map Age' to match the LHS. For this to happen, Age
+    must be unfolded, otherwise we'll be stuck. This is tested in T16208.
 
 ************************************************************************
 *                                                                      *
@@ -337,7 +358,7 @@ mkDictSelId name clas
     val_index      = assoc "MkId.mkDictSelId" (sel_names `zip` [0..]) name
 
     sel_ty = mkForAllTys tyvars $
-             mkFunTy (mkClassPred clas (mkTyVarTys (binderVars tyvars))) $
+             mkInvisFunTy (mkClassPred clas (mkTyVarTys (binderVars tyvars))) $
              getNth arg_tys val_index
 
     base_info = noCafIdInfo
@@ -409,8 +430,8 @@ dictSelRule :: Int -> Arity -> RuleFun
 --
 dictSelRule val_index n_ty_args _ id_unf _ args
   | (dict_arg : _) <- drop n_ty_args args
-  , Just (_, _, con_args) <- exprIsConApp_maybe id_unf dict_arg
-  = Just (getNth con_args val_index)
+  , Just (_, floats, _, _, con_args) <- exprIsConApp_maybe id_unf dict_arg
+  = Just (wrapFloats floats $ getNth con_args val_index)
   | otherwise
   = Nothing
 
@@ -425,26 +446,26 @@ dictSelRule val_index n_ty_args _ id_unf _ args
 mkDataConWorkId :: Name -> DataCon -> Id
 mkDataConWorkId wkr_name data_con
   | isNewTyCon tycon
-  = mkGlobalId (DataConWrapId data_con) wkr_name nt_wrap_ty nt_work_info
+  = mkGlobalId (DataConWrapId data_con) wkr_name wkr_ty nt_work_info
   | otherwise
-  = mkGlobalId (DataConWorkId data_con) wkr_name alg_wkr_ty wkr_info
+  = mkGlobalId (DataConWorkId data_con) wkr_name wkr_ty alg_wkr_info
 
   where
-    tycon = dataConTyCon data_con
+    tycon  = dataConTyCon data_con  -- The representation TyCon
+    wkr_ty = dataConRepType data_con
 
         ----------- Workers for data types --------------
-    alg_wkr_ty = dataConRepType data_con
-    wkr_arity = dataConRepArity data_con
-    wkr_info  = noCafIdInfo
-                `setArityInfo`          wkr_arity
-                `setStrictnessInfo`     wkr_sig
-                `setUnfoldingInfo`      evaldUnfolding  -- Record that it's evaluated,
-                                                        -- even if arity = 0
-                `setLevityInfoWithType` alg_wkr_ty
-                  -- NB: unboxed tuples have workers, so we can't use
-                  -- setNeverLevPoly
+    alg_wkr_info = noCafIdInfo
+                   `setArityInfo`          wkr_arity
+                   `setStrictnessInfo`     wkr_sig
+                   `setUnfoldingInfo`      evaldUnfolding  -- Record that it's evaluated,
+                                                           -- even if arity = 0
+                   `setLevityInfoWithType` wkr_ty
+                     -- NB: unboxed tuples have workers, so we can't use
+                     -- setNeverLevPoly
 
-    wkr_sig = mkClosedStrictSig (replicate wkr_arity topDmd) (dataConCPR data_con)
+    wkr_arity = dataConRepArity data_con
+    wkr_sig   = mkClosedStrictSig (replicate wkr_arity topDmd) (dataConCPR data_con)
         --      Note [Data-con worker strictness]
         -- Notice that we do *not* say the worker Id is strict
         -- even if the data constructor is declared strict
@@ -465,20 +486,21 @@ mkDataConWorkId wkr_name data_con
         -- not from the worker Id.
 
         ----------- Workers for newtypes --------------
-    (nt_tvs, _, nt_arg_tys, _) = dataConSig data_con
-    res_ty_args  = mkTyCoVarTys nt_tvs
-    nt_wrap_ty   = dataConUserType data_con
+    univ_tvs = dataConUnivTyVars data_con
+    arg_tys  = dataConRepArgTys  data_con  -- Should be same as dataConOrigArgTys
     nt_work_info = noCafIdInfo          -- The NoCaf-ness is set by noCafIdInfo
                   `setArityInfo` 1      -- Arity 1
                   `setInlinePragInfo`     alwaysInlinePragma
                   `setUnfoldingInfo`      newtype_unf
-                  `setLevityInfoWithType` nt_wrap_ty
-    id_arg1      = mkTemplateLocal 1 (head nt_arg_tys)
+                  `setLevityInfoWithType` wkr_ty
+    id_arg1      = mkTemplateLocal 1 (head arg_tys)
+    res_ty_args  = mkTyCoVarTys univ_tvs
     newtype_unf  = ASSERT2( isVanillaDataCon data_con &&
-                            isSingleton nt_arg_tys, ppr data_con  )
+                            isSingleton arg_tys
+                          , ppr data_con  )
                               -- Note [Newtype datacons]
                    mkCompulsoryUnfolding $
-                   mkLams nt_tvs $ Lam id_arg1 $
+                   mkLams univ_tvs $ Lam id_arg1 $
                    wrapNewTypeBody tycon res_ty_args (Var id_arg1)
 
 dataConCPR :: DataCon -> DmdResult
@@ -595,7 +617,7 @@ mkDataConRep dflags fam_envs wrap_name mb_bangs data_con
                         | otherwise           = topDmd
 
              wrap_prag = alwaysInlinePragma `setInlinePragmaActivation`
-                         activeAfterInitial
+                         activeDuringFinal
                          -- See Note [Activation for data constructor wrappers]
 
              -- The wrapper will usually be inlined (see wrap_unf), so its
@@ -606,7 +628,9 @@ mkDataConRep dflags fam_envs wrap_name mb_bangs data_con
              -- See Note [Inline partially-applied constructor wrappers]
              -- Passing Nothing here allows the wrapper to inline when
              -- unsaturated.
-             wrap_unf = mkInlineUnfolding wrap_rhs
+             wrap_unf | isNewTyCon tycon = mkCompulsoryUnfolding wrap_rhs
+                        -- See Note [Compulsory newtype unfolding]
+                      | otherwise        = mkInlineUnfolding wrap_rhs
              wrap_rhs = mkLams wrap_tvs $
                         mkLams wrap_args $
                         wrapFamInstBody tycon res_ty_args $
@@ -616,6 +640,8 @@ mkDataConRep dflags fam_envs wrap_name mb_bangs data_con
                      , dcr_boxer   = mk_boxer boxers
                      , dcr_arg_tys = rep_tys
                      , dcr_stricts = rep_strs
+                       -- For newtypes, dcr_bangs is always [HsLazy].
+                       -- See Note [HsImplBangs for newtypes].
                      , dcr_bangs   = arg_ibangs }) }
 
   where
@@ -637,11 +663,16 @@ mkDataConRep dflags fam_envs wrap_name mb_bangs data_con
              -- Because we are going to apply the eq_spec args manually in the
              -- wrapper
 
-    arg_ibangs =
-      case mb_bangs of
-        Nothing    -> zipWith (dataConSrcToImplBang dflags fam_envs)
-                              orig_arg_tys orig_bangs
-        Just bangs -> bangs
+    new_tycon = isNewTyCon tycon
+    arg_ibangs
+      | new_tycon
+      = ASSERT( isSingleton orig_arg_tys )
+        [HsLazy] -- See Note [HsImplBangs for newtypes]
+      | otherwise
+      = case mb_bangs of
+          Nothing    -> zipWith (dataConSrcToImplBang dflags fam_envs)
+                                orig_arg_tys orig_bangs
+          Just bangs -> bangs
 
     (rep_tys_w_strs, wrappers)
       = unzip (zipWith dataConArgRep all_arg_tys (ev_ibangs ++ arg_ibangs))
@@ -650,7 +681,7 @@ mkDataConRep dflags fam_envs wrap_name mb_bangs data_con
     (rep_tys, rep_strs) = unzip (concat rep_tys_w_strs)
 
     wrapper_reqd =
-        (not (isNewTyCon tycon)
+        (not new_tycon
                      -- (Most) newtypes have only a worker, with the exception
                      -- of some newtypes written with GADT syntax. See below.
          && (any isBanged (ev_ibangs ++ arg_ibangs)
@@ -698,16 +729,24 @@ mkDataConRep dflags fam_envs wrap_name mb_bangs data_con
 
 {- Note [Activation for data constructor wrappers]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-The Activation on a data constructor wrapper allows it to inline in
-Phase 2 and later (1, 0).  But not in the InitialPhase.  That gives
-rewrite rules a chance to fire (in the InitialPhase) if they mention
-a data constructor on the left
+The Activation on a data constructor wrapper allows it to inline only in Phase
+0. This way rules have a chance to fire if they mention a data constructor on
+the left
    RULE "foo"  f (K a b) = ...
 Since the LHS of rules are simplified with InitialPhase, we won't
 inline the wrapper on the LHS either.
 
-People have asked for this before, but now that even the InitialPhase
-does some inlining, it has become important.
+On the other hand, this means that exprIsConApp_maybe must be able to deal
+with wrappers so that case-of-constructor is not delayed; see
+Note [exprIsConApp_maybe on data constructors with wrappers] for details.
+
+It used to activate in phases 2 (afterInitial) and later, but it makes it
+awkward to write a RULE[1] with a constructor on the left: it would work if a
+constructor has no wrapper, but whether a constructor has a wrapper depends, for
+instance, on the order of type argument of that constructors. Therefore changing
+the order of type argument could make previously working RULEs fail.
+
+See also https://gitlab.haskell.org/ghc/ghc/issues/15840 .
 
 
 Note [Bangs on imported data constructors]
@@ -739,7 +778,7 @@ We certainly do not want to make a wrapper
 For a start, it's still to generate a no-op.  But worse, since wrappers
 are currently injected at TidyCore, we don't even optimise it away!
 So the stupid case expression stays there.  This actually happened for
-the Integer data type (see Trac #1600 comment:66)!
+the Integer data type (see #1600 comment:66)!
 
 Note [Data con wrappers and GADT syntax]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -774,6 +813,29 @@ wrappers! After all, a newtype can also be written with GADT syntax:
 Again, this needs a wrapper data con to reorder the type variables. It does
 mean that this newtype constructor requires another level of indirection when
 being called, but the inliner should make swift work of that.
+
+Note [HsImplBangs for newtypes]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Most of the time, we use the dataConSrctoImplBang function to decide what
+strictness/unpackedness to use for the fields of a data type constructor. But
+there is an exception to this rule: newtype constructors. You might not think
+that newtypes would pose a challenge, since newtypes are seemingly forbidden
+from having strictness annotations in the first place. But consider this
+(from #16141):
+
+  {-# LANGUAGE StrictData #-}
+  {-# OPTIONS_GHC -O #-}
+  newtype T a b where
+    MkT :: forall b a. Int -> T a b
+
+Because StrictData (plus optimization) is enabled, invoking
+dataConSrcToImplBang would sneak in and unpack the field of type Int to Int#!
+This would be disastrous, since the wrapper for `MkT` uses a coercion involving
+Int, not Int#.
+
+Bottom line: dataConSrcToImplBang should never be invoked for newtypes. In the
+case of a newtype constructor, we simply hardcode its dcr_bangs field to
+[HsLazy].
 -}
 
 -------------------------
@@ -781,7 +843,11 @@ newLocal :: Type -> UniqSM Var
 newLocal ty = do { uniq <- getUniqueM
                  ; return (mkSysLocalOrCoVar (fsLit "dt") uniq ty) }
 
--- | Unpack/Strictness decisions from source module
+-- | Unpack/Strictness decisions from source module.
+--
+-- This function should only ever be invoked for data constructor fields, and
+-- never on the field of a newtype constructor.
+-- See @Note [HsImplBangs for newtypes]@.
 dataConSrcToImplBang
    :: DynFlags
    -> FamInstEnvs
@@ -979,7 +1045,7 @@ And it'd be fine to unpack a product type with existential components
 too, but that would require a bit more plumbing, so currently we don't.
 
 So for now we require: null (dataConExTyCoVars data_con)
-See Trac #14978
+See #14978
 
 Note [Unpack one-wide fields]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1094,7 +1160,7 @@ mkPrimOpId prim_op
   = id
   where
     (tyvars,arg_tys,res_ty, arity, strict_sig) = primOpSig prim_op
-    ty   = mkSpecForAllTys tyvars (mkFunTys arg_tys res_ty)
+    ty   = mkSpecForAllTys tyvars (mkVisFunTys arg_tys res_ty)
     name = mkWiredInName gHC_PRIM (primOpOcc prim_op)
                          (mkPrimOpIdUnique (primOpTag prim_op))
                          (AnId id) UserSyntax
@@ -1109,7 +1175,7 @@ mkPrimOpId prim_op
                -- We give PrimOps a NOINLINE pragma so that we don't
                -- get silly warnings from Desugar.dsRule (the inline_shadows_rule
                -- test) about a RULE conflicting with a possible inlining
-               -- cf Trac #7287
+               -- cf #7287
 
 -- For each ccall we manufacture a separate CCallOpId, giving it
 -- a fresh unique, a type that is correct for this particular ccall,
@@ -1143,7 +1209,7 @@ mkFCallId dflags uniq fcall ty
     strict_sig = mkClosedStrictSig (replicate arity topDmd) topRes
     -- the call does not claim to be strict in its arguments, since they
     -- may be lifted (foreign import prim) and the called code doesn't
-    -- necessarily force them. See Trac #11076.
+    -- necessarily force them. See #11076.
 {-
 ************************************************************************
 *                                                                      *
@@ -1229,10 +1295,14 @@ proxyHashId
        (noCafIdInfo `setUnfoldingInfo` evaldUnfolding -- Note [evaldUnfoldings]
                     `setNeverLevPoly`  ty )
   where
-    -- proxy# :: forall k (a:k). Proxy# k a
-    bndrs   = mkTemplateKiTyVars [liftedTypeKind] (\ks -> ks)
-    [k,t]   = mkTyVarTys bndrs
-    ty      = mkSpecForAllTys bndrs (mkProxyPrimTy k t)
+    -- proxy# :: forall {k} (a:k). Proxy# k a
+    --
+    -- The visibility of the `k` binder is Inferred to match the type of the
+    -- Proxy data constructor (#16293).
+    [kv,tv] = mkTemplateKiTyVars [liftedTypeKind] id
+    kv_ty   = mkTyVarTy kv
+    tv_ty   = mkTyVarTy tv
+    ty      = mkInvForAllTy kv $ mkSpecForAllTy tv $ mkProxyPrimTy kv_ty tv_ty
 
 ------------------------------------------------
 unsafeCoerceId :: Id
@@ -1250,7 +1320,7 @@ unsafeCoerceId
 
     [_, _, a, b] = mkTyVarTys bndrs
 
-    ty  = mkSpecForAllTys bndrs (mkFunTy a b)
+    ty  = mkSpecForAllTys bndrs (mkVisFunTy a b)
 
     [x] = mkTemplateLocals [a]
     rhs = mkLams (bndrs ++ [x]) $
@@ -1284,7 +1354,7 @@ seqId = pcMiscPrelId seqName ty info
                   -- see Note [seqId magic]
 
     ty  = mkSpecForAllTys [alphaTyVar,betaTyVar]
-                          (mkFunTy alphaTy (mkFunTy betaTy betaTy))
+                          (mkVisFunTy alphaTy (mkVisFunTy betaTy betaTy))
 
     [x,y] = mkTemplateLocals [alphaTy, betaTy]
     rhs = mkLams [alphaTyVar,betaTyVar,x,y] (Case (Var x) x betaTy [(DEFAULT, [], Var y)])
@@ -1294,13 +1364,13 @@ lazyId :: Id    -- See Note [lazyId magic]
 lazyId = pcMiscPrelId lazyIdName ty info
   where
     info = noCafIdInfo `setNeverLevPoly` ty
-    ty  = mkSpecForAllTys [alphaTyVar] (mkFunTy alphaTy alphaTy)
+    ty  = mkSpecForAllTys [alphaTyVar] (mkVisFunTy alphaTy alphaTy)
 
 noinlineId :: Id -- See Note [noinlineId magic]
 noinlineId = pcMiscPrelId noinlineIdName ty info
   where
     info = noCafIdInfo `setNeverLevPoly` ty
-    ty  = mkSpecForAllTys [alphaTyVar] (mkFunTy alphaTy alphaTy)
+    ty  = mkSpecForAllTys [alphaTyVar] (mkVisFunTy alphaTy alphaTy)
 
 oneShotId :: Id -- See Note [The oneShot function]
 oneShotId = pcMiscPrelId oneShotName ty info
@@ -1309,8 +1379,8 @@ oneShotId = pcMiscPrelId oneShotName ty info
                        `setUnfoldingInfo`  mkCompulsoryUnfolding rhs
     ty  = mkSpecForAllTys [ runtimeRep1TyVar, runtimeRep2TyVar
                           , openAlphaTyVar, openBetaTyVar ]
-                          (mkFunTy fun_ty fun_ty)
-    fun_ty = mkFunTy openAlphaTy openBetaTy
+                          (mkVisFunTy fun_ty fun_ty)
+    fun_ty = mkVisFunTy openAlphaTy openBetaTy
     [body, x] = mkTemplateLocals [fun_ty, openAlphaTy]
     x' = setOneShotLambda x  -- Here is the magic bit!
     rhs = mkLams [ runtimeRep1TyVar, runtimeRep2TyVar
@@ -1340,7 +1410,8 @@ coerceId = pcMiscPrelId coerceName ty info
                                            , liftedTypeKind
                                            , alphaTy, betaTy ]
     ty        = mkSpecForAllTys [alphaTyVar, betaTyVar] $
-                mkFunTys [eqRTy, alphaTy] betaTy
+                mkInvisFunTy eqRTy                      $
+                mkVisFunTy alphaTy betaTy
 
     [eqR,x,eq] = mkTemplateLocals [eqRTy, alphaTy, eqRPrimTy]
     rhs = mkLams [alphaTyVar, betaTyVar, eqR, x] $
@@ -1428,7 +1499,7 @@ are truly used call-by-need, with no code motion.  Key examples:
   Again, it's clear that 'a' will be evaluated strictly (and indeed
   applied to a state token) but we want to make sure that any exceptions
   arising from the evaluation of 'a' are caught by the catch (see
-  Trac #11555).
+  #11555).
 
 Implementing 'lazy' is a bit tricky:
 
@@ -1442,7 +1513,7 @@ Implementing 'lazy' is a bit tricky:
   are exposed in the interface file.  Otherwise, the unfolding for
   (say) pseq in the interface file will not mention 'lazy', so if we
   inline 'pseq' we'll totally miss the very thing that 'lazy' was
-  there for in the first place. See Trac #3259 for a real world
+  there for in the first place. See #3259 for a real world
   example.
 
 * Suppose CorePrep sees (catch# (lazy e) b).  At all costs we must
@@ -1479,7 +1550,7 @@ if library authors could explicitly tell the compiler that a certain lambda is
 called at most once. The oneShot function allows that.
 
 'oneShot' is levity-polymorphic, i.e. the type variables can refer to unlifted
-types as well (Trac #10744); e.g.
+types as well (#10744); e.g.
    oneShot (\x:Int# -> x +# 1#)
 
 Like most magic functions it has a compulsory unfolding, so there is no need

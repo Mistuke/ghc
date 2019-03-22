@@ -27,6 +27,10 @@
 #include <shfolder.h> /* SHGetFolderPathW */
 #endif
 
+#if defined(openbsd_HOST_OS)
+#include <elf.h> /* _DYNAMIC */
+#endif
+
 /* -----------------------------------------------------------------------------
  * Symbols to be inserted into the RTS symbol table.
  */
@@ -106,7 +110,6 @@
       RTS_WIN64_ONLY(SymI_HasProto(__imp__environ))      \
       RTS_WIN32_ONLY(SymI_HasProto(_imp___iob))          \
       RTS_WIN64_ONLY(SymI_HasProto(__iob_func))          \
-      RTS_WIN64_ONLY(SymI_HasProto(__mingw_vsnwprintf))  \
       /* see Note [Symbols for MinGW's printf] */        \
       SymI_HasProto(_lock_file)                          \
       SymI_HasProto(_unlock_file)                        \
@@ -282,7 +285,7 @@
 #if defined(openbsd_HOST_OS)
 #define RTS_OPENBSD_ONLY_SYMBOLS                            \
      SymE_NeedsProto(__guard_local)                         \
-     SymE_NeedsProto(_DYNAMIC)
+     SymE_HasProto(_DYNAMIC)
 #else
 #define RTS_OPENBSD_ONLY_SYMBOLS
 #endif
@@ -491,9 +494,6 @@
 #define RTS_PROF_SYMBOLS                        \
       SymI_HasProto(CCS_DONT_CARE)              \
       SymI_HasProto(CC_LIST)                    \
-      SymI_HasProto(CC_ID)                      \
-      SymI_HasProto(CCS_LIST)                   \
-      SymI_HasProto(CCS_ID)                     \
       SymI_HasProto(stg_restore_cccs_info)      \
       SymI_HasProto(enterFunCCS)                \
       SymI_HasProto(pushCostCentre)             \
@@ -632,6 +632,7 @@
       SymI_HasProto(initLinker)                                         \
       SymI_HasProto(initLinker_)                                        \
       SymI_HasProto(stg_unpackClosurezh)                                \
+      SymI_HasProto(stg_closureSizzezh)                                 \
       SymI_HasProto(stg_getApStackValzh)                                \
       SymI_HasProto(stg_getSparkzh)                                     \
       SymI_HasProto(stg_numSparkszh)                                    \
@@ -957,15 +958,6 @@
       SymI_NeedsProto(__umodti3)
 #else
 #define RTS_LIBGCC_SYMBOLS
-#endif
-
-#if defined(darwin_HOST_OS) && defined(powerpc_HOST_ARCH)
-      // Symbols that don't have a leading underscore
-      // on Mac OS X. They have to receive special treatment,
-      // see machoInitSymbolsWithoutUnderscore()
-#define RTS_MACHO_NOUNDERLINE_SYMBOLS                   \
-      SymI_NeedsProto(saveFP)                           \
-      SymI_NeedsProto(restFP)
 #endif
 
 /* entirely bogus claims about types of these symbols */

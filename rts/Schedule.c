@@ -2035,6 +2035,10 @@ forkProcess(HsStablePtr *entry
 
     } else { // child
 
+        // Current process times reset in the child process, so we should reset
+        // the stats too. See #16102.
+        resetChildProcessStats();
+
 #if defined(THREADED_RTS)
         initMutex(&sched_mutex);
         initMutex(&sm_mutex);
@@ -2135,7 +2139,7 @@ forkProcess(HsStablePtr *entry
 
         // Install toplevel exception handlers, so interruption
         // signal will be sent to the main thread.
-        // See Trac #12903
+        // See #12903
         rts_evalStableIOMain(&cap, entry, NULL);  // run the action
         rts_checkSchedStatus("forkProcess",cap);
 

@@ -12,8 +12,14 @@ setTestOpts(req_interp)
 if config.have_ext_interp :
        setTestOpts(extra_ways(['ext-interp']))
        setTestOpts(only_ways(['normal','ghci','ext-interp']))
-       if config.ghc_built_by_llvm:
-           setTestOpts(expect_broken_for(16087, ['ext-interp']))
+
+broken_tests = ["ClosedFam1TH","T10620","T10828","T11721_TH","T11797","T12045TH2","T12478_1","T12646","T13642","T14060","T15502","T15738","T15792","T15845","T16180","T1835","T3920","T4135","T4188","T5037","T5362","T7477","T7910","T8761","T8884","T8953","T9262","T9692","T9738","TH_Lift","TH_RichKinds","TH_RichKinds2","TH_Roles3","TH_TyInstWhere2","TH_implicitParams","TH_recursiveDo","TH_reifyDecl1","TH_reifyExplicitForAllFams","TH_reifyInstances","TH_reifyMkName","TH_repE2","TH_repGuard","TH_repPrim","TH_repPrim2","TH_repUnboxedTuples","TH_spliceE6","T16326_TH"]
+# ext-interp, integer-gmp and llvm is broken see #16087
+def broken_ext_interp(name, opts):
+	if name in broken_tests and config.ghc_built_by_llvm:
+		expect_broken_for(16087, ['ext-interp'])(name, opts)
+
+setTestOpts(broken_ext_interp)
 
 test('TH_mkName', normal, compile, ['-v0'])
 test('TH_overloadedlabels', normal, compile, ['-v0'])
@@ -51,10 +57,10 @@ test('TH_NestedSplices', [], multimod_compile,
 test('TH_spliceE5_prof',
      [req_profiling, only_ways(['normal']),
       when(ghc_dynamic(), expect_broken(11495))],
-     run_command, ['$MAKE -s --no-print-directory TH_spliceE5_prof'])
+     makefile_test, ['TH_spliceE5_prof'])
 
 test('TH_spliceE5_prof_ext', [req_profiling, only_ways(['normal'])],
-     run_command, ['$MAKE -s --no-print-directory TH_spliceE5_prof_ext'])
+     makefile_test, ['TH_spliceE5_prof_ext'])
 
 test('TH_spliceD1', [], multimod_compile_fail,
      ['TH_spliceD1', '-v0 ' + config.ghc_th_way_flags])
@@ -134,8 +140,7 @@ test('T2713', normal, compile_fail, ['-v0'])
 test('T2674', normal, compile_fail, ['-v0'])
 test('TH_emptycase', normal, compile, ['-v0'])
 
-test('T2386', [only_ways(['normal'])], run_command,
-     ['$MAKE -s --no-print-directory T2386'])
+test('T2386', [only_ways(['normal'])], makefile_test, ['T2386'])
 
 test('T2685', [], multimod_compile, ['T2685', '-v0 ' + config.ghc_th_way_flags])
 
@@ -149,7 +154,10 @@ test('T3177', normal, compile, ['-v0'])
 test('T3177a', normal, compile_fail, ['-v0'])
 
 test('T3319', normal, compile, ['-ddump-splices -v0'])
-test('TH_foreignInterruptible', normal, compile, ['-ddump-splices -v0'])
+test('TH_foreignInterruptible',
+     # Fragile when unregisterised; see #16085
+     when(unregisterised(), skip),
+     compile, ['-ddump-splices -v0'])
 test('TH_foreignCallingConventions', normal,
                                      compile,
                                      ['-ddump-splices -dsuppress-uniques -v0'])
@@ -195,8 +203,7 @@ test('T5452', normal, compile, ['-v0'])
 test('T5434', [], multimod_compile,
      ['T5434', '-v0 -Wall ' + config.ghc_th_way_flags])
 test('T5508', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
-test('TH_Depends', [only_ways(['normal'])], run_command,
-     ['$MAKE -s --no-print-directory TH_Depends'])
+test('TH_Depends', [only_ways(['normal'])], makefile_test, ['TH_Depends'])
 test('T5597', [], multimod_compile, ['T5597', '-v0 ' + config.ghc_th_way_flags])
 test('T5665', [], multimod_compile, ['T5665', '-v0 ' + config.ghc_th_way_flags])
 test('T5700', [], multimod_compile,
@@ -236,8 +243,7 @@ test('T7276a', [ only_ways(['ghci']), combined_output ],
 test('TH_TyInstWhere1', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
 test('TH_TyInstWhere2', normal, compile, ['-v0'])
 
-test('T7445', [only_ways(['normal'])], run_command,
-     ['$MAKE -s --no-print-directory T7445'])
+test('T7445', [only_ways(['normal'])], makefile_test, ['T7445'])
 test('T7532', [], multimod_compile, ['T7532', '-v0 ' + config.ghc_th_way_flags])
 test('T2222', normal, compile, ['-v0'])
 test('T1849', only_ways(['ghci']), ghci_script, ['T1849.script'])
@@ -262,8 +268,7 @@ test('T8186', normal, compile_and_run, ['-v0'])
 
 test('T8333',
      only_ways(['normal']),
-     run_command,
-     ['$MAKE -s --no-print-directory T8333'])
+     makefile_test, ['T8333'])
 
 test('T4124', normal, compile, ['-v0'])
 test('T4128', normal, compile, ['-v0'])
@@ -304,9 +309,7 @@ test('T7484', normal, compile_fail, ['-v0'])
 test('T1476', normal, compile, ['-v0'])
 test('T1476b', normal, compile, ['-v0'])
 test('T8031', normal, compile, ['-v0'])
-test('T8624', only_ways(['normal']),
-              run_command,
-              ['$MAKE -s --no-print-directory T8624'])
+test('T8624', only_ways(['normal']), makefile_test, ['T8624'])
 test('TH_Lift', normal, compile, ['-v0'])
 test('T10047', only_ways(['ghci']), ghci_script, ['T10047.script'])
 test('T10019', only_ways(['ghci']), ghci_script, ['T10019.script'])
@@ -364,6 +367,8 @@ test('T11484', normal, compile, ['-v0'])
 test('T11629', normal, compile, ['-v0'])
 
 test('T8761', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
+test('T12045TH1', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
+test('T12045TH2', normal, compile, ['-v0'])
 test('T12130', [], multimod_compile,
      ['T12130', '-v0 ' + config.ghc_th_way_flags])
 test('T12387', normal, compile_fail, ['-v0'])
@@ -432,6 +437,7 @@ test('T15331', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
 test('T15365', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
 test('T15360a', normal, compile, [''])
 test('T15360b', normal, compile_fail, [''])
+test('T15362', normal, compile_fail,['-v0'])
 # Note: T9693 should be only_ways(['ghci']) once it's fixed.
 test('T9693', expect_broken(9693), ghci_script, ['T9693.script'])
 test('T14471', normal, compile, [''])
@@ -459,3 +465,11 @@ test('T15845', normal, compile, ['-v0 -dsuppress-uniques'])
 test('T15437', expect_broken(15437), multimod_compile,
      ['T15437', '-v0 ' + config.ghc_th_way_flags])
 test('T15985', normal, compile, [''])
+test('T16133', normal, compile_fail, [''])
+test('T15471', normal, multimod_compile, ['T15471.hs', '-v0'])
+test('T16180', normal, compile_and_run, ['-package ghc'])
+test('T16183', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
+test('T16195', normal, multimod_compile, ['T16195.hs', '-v0'])
+test('T16293b', normal, compile, [''])
+test('T16326_TH', normal, compile, ['-v0 -ddump-splices -dsuppress-uniques'])
+test('T14741', normal, compile_and_run, [''])

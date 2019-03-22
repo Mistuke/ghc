@@ -51,6 +51,8 @@ import Unique
 import Util
 
 -- The rest
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import Control.Monad.ST
 import Data.Bits
 import Data.Char
@@ -177,7 +179,7 @@ pprAlignment words =
 --
 -- It's a reasonable assumption also known as natural alignment.
 -- Although some architectures have different alignment rules.
--- One of known exceptions is m68k (Trac #11395, comment:16) where:
+-- One of known exceptions is m68k (#11395, comment:16) where:
 --   __alignof__(StgWord) == 2, sizeof(StgWord) == 4
 --
 -- Thus we explicitly increase alignment by using
@@ -1224,8 +1226,8 @@ machRep_S_CType w
 -- ---------------------------------------------------------------------
 -- print strings as valid C strings
 
-pprStringInCStyle :: [Word8] -> SDoc
-pprStringInCStyle s = doubleQuotes (text (concatMap charToC s))
+pprStringInCStyle :: ByteString -> SDoc
+pprStringInCStyle s = doubleQuotes (text (concatMap charToC (BS.unpack s)))
 
 -- ---------------------------------------------------------------------------
 -- Initialising static objects with floating-point numbers.  We can't

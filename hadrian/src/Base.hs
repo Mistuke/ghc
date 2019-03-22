@@ -24,7 +24,8 @@ module Base (
     -- * Paths
     hadrianPath, configPath, configFile, sourcePath, shakeFilesDir,
     generatedDir, generatedPath, stageBinPath, stageLibPath, templateHscPath,
-    ghcDeps, relativePackageDbPath, packageDbPath, packageDbStamp, ghcSplitPath
+    ghcDeps, includesDependencies, haddockDeps, relativePackageDbPath,
+    packageDbPath, packageDbStamp, mingwStamp,
     ) where
 
 import Control.Applicative
@@ -33,10 +34,11 @@ import Control.Monad.Reader
 import Data.List.Extra
 import Data.Maybe
 import Data.Semigroup
-import Development.Shake hiding (parallel, unit, (*>), Normal)
+import Development.Shake hiding (unit, (*>), Normal)
 import Development.Shake.Classes
 import Development.Shake.FilePath
 import Development.Shake.Util
+import Hadrian.Oracles.DirectoryContents
 import Hadrian.Utilities
 import Hadrian.Package
 
@@ -83,9 +85,9 @@ generatedPath :: Action FilePath
 generatedPath = buildRoot <&> (-/- generatedDir)
 
 -- | Path to the package database for a given build stage, relative to the build
--- root. Note that @StageN@, where @N > 1@, uses the 'Stage1' package database.
+-- root.
 relativePackageDbPath :: Stage -> FilePath
-relativePackageDbPath stage = stageString (min stage Stage1) -/- "lib/package.conf.d"
+relativePackageDbPath stage = stageString stage -/- "lib/package.conf.d"
 
 -- | Path to the package database used in a given 'Stage', including
 --   the build root.
@@ -104,23 +106,39 @@ stageBinPath stage = buildRoot <&> (-/- stageString stage -/- "bin")
 stageLibPath :: Stage -> Action FilePath
 stageLibPath stage = buildRoot <&> (-/- stageString stage -/- "lib")
 
--- | Files the `ghc` binary depends on
+-- | Files the GHC binary depends on.
 ghcDeps :: Stage -> Action [FilePath]
 ghcDeps stage = mapM (\f -> stageLibPath stage <&> (-/- f))
-      [ "ghc-usage.txt"
-      , "ghci-usage.txt"
-      , "llvm-targets"
-      , "llvm-passes"
-      , "platformConstants"
-      , "settings" ]
+    [ "ghc-usage.txt"
+    , "ghci-usage.txt"
+    , "llvm-targets"
+    , "llvm-passes"
+    , "platformConstants"
+    , "settings" ]
+
+includesDependencies :: Action [FilePath]
+includesDependencies = do
+    path <- generatedPath
+    return $ (path -/-) <$> [ "ghcautoconf.h", "ghcplatform.h", "ghcversion.h" ]
+
+-- | Files the `haddock` binary depends on
+haddockDeps :: Stage -> Action [FilePath]
+haddockDeps stage = do
+    let resdir = "utils/haddock/haddock-api/resources"
+    latexResources <- directoryContents matchAll (resdir -/- "latex")
+    htmlResources  <- directoryContents matchAll (resdir -/- "html")
+
+    haddockLib <- stageLibPath stage
+    return $ [ haddockLib -/- makeRelative resdir f
+             | f <- latexResources ++ htmlResources ]
 
 -- ref: utils/hsc2hs/ghc.mk
 -- | Path to 'hsc2hs' template.
 templateHscPath :: Stage -> Action FilePath
 templateHscPath stage = stageLibPath stage <&> (-/- "template-hsc.h")
 
--- | @ghc-split@ is a Perl script used by GHC when run with @-split-objs@ flag.
--- It is generated in "Rules.Generate". This function returns the path relative
--- to the build root under which we will copy @ghc-split@.
-ghcSplitPath :: Stage -> FilePath
-ghcSplitPath stage = stageString stage -/- "bin" -/- "ghc-split"
+-- | We use this stamp file to track whether we've moved the mingw toolchain
+--   under the build root (to make it accessible to the GHCs we build on
+--   Windows). See "Rules.Program".
+mingwStamp :: FilePath
+mingwStamp = "mingw" -/- ".stamp"

@@ -91,6 +91,7 @@ import DynFlags
 import Util
 
 import Data.Coerce (coerce)
+import qualified Data.ByteString.Char8 as BS8
 
 -----------------------------------------------------------------------------
 --                Data types and synonyms
@@ -731,7 +732,7 @@ blackHoleOnEntry cl_info
 {- Note [Black-holing non-updatable thunks]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 We must not black-hole non-updatable (single-entry) thunks otherwise
-we run into issues like Trac #10414. Specifically:
+we run into issues like #10414. Specifically:
 
   * There is no reason to black-hole a non-updatable thunk: it should
     not be competed for by multiple threads
@@ -744,7 +745,7 @@ we run into issues like Trac #10414. Specifically:
      - is not updated (of course)
      - hence, if it is black-holed and another thread tries to evaluate
        it, that thread will block forever
-    This actually happened in Trac #10414.  So we do not black-hole
+    This actually happened in #10414.  So we do not black-hole
     non-updatable thunks.
 
   * How could two threads evaluate the same non-updatable (single-entry)
@@ -754,7 +755,7 @@ we run into issues like Trac #10414. Specifically:
     thunk, because lazy black-holing only affects thunks with an
     update frame on the stack.
 
-Here is and example due to Reid Barton (Trac #10414):
+Here is and example due to Reid Barton (#10414):
     x = \u []  concat [[1], []]
 with the following definitions,
 
@@ -916,10 +917,9 @@ enterIdLabel dflags id c
 mkProfilingInfo :: DynFlags -> Id -> String -> ProfilingInfo
 mkProfilingInfo dflags id val_descr
   | not (gopt Opt_SccProfilingOn dflags) = NoProfilingInfo
-  | otherwise = ProfilingInfo ty_descr_w8 val_descr_w8
+  | otherwise = ProfilingInfo ty_descr_w8 (BS8.pack val_descr)
   where
-    ty_descr_w8  = stringToWord8s (getTyDescription (idType id))
-    val_descr_w8 = stringToWord8s val_descr
+    ty_descr_w8  = BS8.pack (getTyDescription (idType id))
 
 getTyDescription :: Type -> String
 getTyDescription ty
@@ -928,15 +928,15 @@ getTyDescription ty
       TyVarTy _              -> "*"
       AppTy fun _            -> getTyDescription fun
       TyConApp tycon _       -> getOccString tycon
-      FunTy _ res            -> '-' : '>' : fun_result res
+      FunTy {}              -> '-' : fun_result tau_ty
       ForAllTy _  ty         -> getTyDescription ty
       LitTy n                -> getTyLitDescription n
       CastTy ty _            -> getTyDescription ty
       CoercionTy co          -> pprPanic "getTyDescription" (ppr co)
     }
   where
-    fun_result (FunTy _ res) = '>' : fun_result res
-    fun_result other         = getTyDescription other
+    fun_result (FunTy { ft_res = res }) = '>' : fun_result res
+    fun_result other                    = getTyDescription other
 
 getTyLitDescription :: TyLit -> String
 getTyLitDescription l =
@@ -966,8 +966,8 @@ mkDataConInfoTable dflags data_con is_static ptr_wds nonptr_wds
    prof | not (gopt Opt_SccProfilingOn dflags) = NoProfilingInfo
         | otherwise                            = ProfilingInfo ty_descr val_descr
 
-   ty_descr  = stringToWord8s $ occNameString $ getOccName $ dataConTyCon data_con
-   val_descr = stringToWord8s $ occNameString $ getOccName data_con
+   ty_descr  = BS8.pack $ occNameString $ getOccName $ dataConTyCon data_con
+   val_descr = BS8.pack $ occNameString $ getOccName data_con
 
 -- We need a black-hole closure info to pass to @allocDynClosure@ when we
 -- want to allocate the black hole on entry to a CAF.

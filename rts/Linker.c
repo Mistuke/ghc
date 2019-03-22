@@ -72,10 +72,6 @@
 #  include <mach-o/fat.h>
 #endif
 
-#if defined(x86_64_HOST_ARCH) && defined(darwin_HOST_OS)
-#define ALWAYS_PIC
-#endif
-
 #if defined(dragonfly_HOST_OS)
 #include <sys/tls.h>
 #endif
@@ -212,9 +208,7 @@ int ocTryLoad( ObjectCode* oc );
  * We pick a default address based on the OS, but also make this
  * configurable via an RTS flag (+RTS -xm)
  */
-#if !defined(ALWAYS_PIC) && defined(x86_64_HOST_ARCH)
-
-#if defined(MAP_32BIT)
+#if defined(MAP_32BIT) || DEFAULT_LINKER_ALWAYS_PIC
 // Try to use MAP_32BIT
 #define MMAP_32BIT_BASE_DEFAULT 0
 #else
@@ -223,7 +217,6 @@ int ocTryLoad( ObjectCode* oc );
 #endif
 
 static void *mmap_32bit_base = (void *)MMAP_32BIT_BASE_DEFAULT;
-#endif
 
 static void ghciRemoveSymbolTable(HashTable *table, const SymbolName* key,
     ObjectCode *owner)
@@ -256,7 +249,7 @@ static void ghciRemoveSymbolTable(HashTable *table, const SymbolName* key,
 
  Some test have been written for weak symbols but have been disabled
  mostly because it's unsure how the weak symbols support should look.
- See Trac #11223
+ See #11223
  */
 int ghciInsertSymbolTable(
    pathchar* obj_name,
@@ -454,9 +447,7 @@ initLinker_ (int retain_cafs)
         }
         IF_DEBUG(linker, debugBelch("initLinker: inserting rts symbol %s, %p\n", sym->lbl, sym->addr));
     }
-#   if defined(OBJFORMAT_MACHO) && defined(powerpc_HOST_ARCH)
-    machoInitSymbolsWithoutUnderscore();
-#   endif
+
     /* GCC defines a special symbol __dso_handle which is resolved to NULL if
        referenced from a statically linked module. We need to mimic this, but
        we cannot use NULL because we use it to mean nonexistent symbols. So we
@@ -483,7 +474,7 @@ initLinker_ (int retain_cafs)
 #   endif /* RTLD_DEFAULT */
 
     compileResult = regcomp(&re_invalid,
-           "(([^ \t()])+\\.so([^ \t:()])*):([ \t])*(invalid ELF header|file too short|invalid file format)",
+           "(([^ \t()])+\\.so([^ \t:()])*):([ \t])*(invalid ELF header|file too short|invalid file format|Exec format error)",
            REG_EXTENDED);
     if (compileResult != 0) {
         barf("Compiling re_invalid failed");
@@ -496,12 +487,10 @@ initLinker_ (int retain_cafs)
     }
 #   endif
 
-#if !defined(ALWAYS_PIC) && defined(x86_64_HOST_ARCH)
     if (RtsFlags.MiscFlags.linkerMemBase != 0) {
         // User-override for mmap_32bit_base
         mmap_32bit_base = (void*)RtsFlags.MiscFlags.linkerMemBase;
     }
-#endif
 
     if (RTS_LINKER_USE_MMAP)
         m32_allocator_init();
@@ -690,7 +679,7 @@ addDLL( pathchar *dll_name )
       return NULL;
    }
 
-   // GHC Trac ticket #2615
+   // GHC #2615
    // On some systems (e.g., Gentoo Linux) dynamic files (e.g. libc.so)
    // contain linker scripts rather than ELF-format object code. This
    // code handles the situation by recognizing the real object code
@@ -1009,29 +998,32 @@ mmapForLinker (size_t bytes, uint32_t flags, int fd, int offset)
    void *map_addr = NULL;
    void *result;
    size_t size;
+   uint32_t tryMap32Bit = RtsFlags.MiscFlags.linkerAlwaysPic
+     ? 0
+     : TRY_MAP_32BIT;
    static uint32_t fixed = 0;
 
    IF_DEBUG(linker, debugBelch("mmapForLinker: start\n"));
    size = roundUpToPage(bytes);
 
-#if !defined(ALWAYS_PIC) && defined(x86_64_HOST_ARCH)
+#if defined(x86_64_HOST_ARCH)
 mmap_again:
+#endif
 
    if (mmap_32bit_base != 0) {
        map_addr = mmap_32bit_base;
    }
-#endif
 
    IF_DEBUG(linker,
             debugBelch("mmapForLinker: \tprotection %#0x\n",
                        PROT_EXEC | PROT_READ | PROT_WRITE));
    IF_DEBUG(linker,
             debugBelch("mmapForLinker: \tflags      %#0x\n",
-                       MAP_PRIVATE | TRY_MAP_32BIT | fixed | flags));
+                       MAP_PRIVATE | tryMap32Bit | fixed | flags));
 
    result = mmap(map_addr, size,
                  PROT_EXEC|PROT_READ|PROT_WRITE,
-                 MAP_PRIVATE|TRY_MAP_32BIT|fixed|flags, fd, offset);
+                 MAP_PRIVATE|tryMap32Bit|fixed|flags, fd, offset);
 
    if (result == MAP_FAILED) {
        sysErrorBelch("mmap %" FMT_Word " bytes at %p",(W_)size,map_addr);
@@ -1039,8 +1031,9 @@ mmap_again:
        return NULL;
    }
 
-#if !defined(ALWAYS_PIC) && defined(x86_64_HOST_ARCH)
-   if (mmap_32bit_base != 0) {
+#if defined(x86_64_HOST_ARCH)
+   if (RtsFlags.MiscFlags.linkerAlwaysPic) {
+   } else if (mmap_32bit_base != 0) {
        if (result == map_addr) {
            mmap_32bit_base = (StgWord8*)map_addr + size;
        } else {
@@ -1202,16 +1195,17 @@ void freeObjectCode (ObjectCode *oc)
     }
 
     freeProddableBlocks(oc);
+    freeSegments(oc);
 
     /* Free symbol_extras.  On x86_64 Windows, symbol_extras are allocated
      * alongside the image, so we don't need to free. */
 #if defined(NEED_SYMBOL_EXTRAS) && (!defined(x86_64_HOST_ARCH) \
                                     || !defined(mingw32_HOST_OS))
     if (RTS_LINKER_USE_MMAP) {
-        if (!USE_CONTIGUOUS_MMAP && oc->symbol_extras != NULL) {
-            m32_free(oc->symbol_extras,
-                    sizeof(SymbolExtra) * oc->n_symbol_extras);
-        }
+      if (!USE_CONTIGUOUS_MMAP && !RtsFlags.MiscFlags.linkerAlwaysPic &&
+          oc->symbol_extras != NULL) {
+        m32_free(oc->symbol_extras, sizeof(SymbolExtra) * oc->n_symbol_extras);
+      }
     }
     else {
         stgFree(oc->symbol_extras);
@@ -1286,11 +1280,15 @@ mkOc( pathchar *path, char *image, int imageSize,
    oc->symbols           = NULL;
    oc->n_sections        = 0;
    oc->sections          = NULL;
+   oc->n_segments        = 0;
+   oc->segments          = NULL;
    oc->proddables        = NULL;
    oc->stable_ptrs       = NULL;
 #if defined(NEED_SYMBOL_EXTRAS)
    oc->symbol_extras     = NULL;
 #endif
+   oc->bssBegin          = NULL;
+   oc->bssEnd            = NULL;
    oc->imageMapped       = mapped;
 
    oc->misalignment      = misalignment;
@@ -1424,6 +1422,9 @@ preloadObjectFile (pathchar *path)
 
 #endif /* RTS_LINKER_USE_MMAP */
 
+   IF_DEBUG(linker, debugBelch("loadObj: preloaded image at %p\n", (void *) image));
+
+   /* FIXME (AP): =mapped= parameter unconditionally set to true */
    oc = mkOc(path, image, fileSize, true, NULL, misalignment);
 
 #if defined(OBJFORMAT_MACHO)
@@ -1445,7 +1446,7 @@ preloadObjectFile (pathchar *path)
 static HsInt loadObj_ (pathchar *path)
 {
    ObjectCode* oc;
-   IF_DEBUG(linker, debugBelch("loadObj %" PATH_FMT "\n", path));
+   IF_DEBUG(linker, debugBelch("loadObj: %" PATH_FMT "\n", path));
 
    /* debugBelch("loadObj %s\n", path ); */
 
@@ -1504,17 +1505,39 @@ HsInt loadOc (ObjectCode* oc)
    }
 
    /* Note [loadOc orderings]
-      ocAllocateSymbolsExtras has only two pre-requisites, it must run after
-      preloadObjectFile and ocVerify.   Neither have changed.   On most targets
-      allocating the extras is independent on parsing the section data, so the
-      order between these two never mattered.
+      The order of `ocAllocateExtras` and `ocGetNames` matters. For MachO
+      and ELF, `ocInit` and `ocGetNames` initialize a bunch of pointers based
+      on the offset to `oc->image`, but `ocAllocateExtras` may relocate
+      the address of `oc->image` and invalidate those pointers. So we must
+      compute or recompute those pointers after `ocAllocateExtras`.
 
       On Windows, when we have an import library we (for now, as we don't honor
       the lazy loading semantics of the library and instead GHCi is already
       lazy) don't use the library after ocGetNames as it just populates the
-      symbol table.  Allocating space for jump tables in ocAllocateSymbolExtras
+      symbol table.  Allocating space for jump tables in ocAllocateExtras
       would just be a waste then as we'll be stopping further processing of the
-      library in the next few steps.  */
+      library in the next few steps. If necessary, the actual allocation
+      happens in `ocGetNames_PEi386` and `ocAllocateExtras_PEi386` simply
+      set the correct pointers.
+      */
+
+#if defined(NEED_SYMBOL_EXTRAS)
+#  if defined(OBJFORMAT_MACHO)
+   r = ocAllocateExtras_MachO ( oc );
+   if (!r) {
+       IF_DEBUG(linker,
+                debugBelch("loadOc: ocAllocateExtras_MachO failed\n"));
+       return r;
+   }
+#  elif defined(OBJFORMAT_ELF)
+   r = ocAllocateExtras_ELF ( oc );
+   if (!r) {
+       IF_DEBUG(linker,
+                debugBelch("loadOc: ocAllocateExtras_ELF failed\n"));
+       return r;
+   }
+#  endif
+#endif
 
    /* build the symbol list for this image */
 #  if defined(OBJFORMAT_ELF)
@@ -1532,22 +1555,8 @@ HsInt loadOc (ObjectCode* oc)
    }
 
 #if defined(NEED_SYMBOL_EXTRAS)
-#  if defined(OBJFORMAT_MACHO)
-   r = ocAllocateSymbolExtras_MachO ( oc );
-   if (!r) {
-       IF_DEBUG(linker,
-                debugBelch("loadOc: ocAllocateSymbolExtras_MachO failed\n"));
-       return r;
-   }
-#  elif defined(OBJFORMAT_ELF)
-   r = ocAllocateSymbolExtras_ELF ( oc );
-   if (!r) {
-       IF_DEBUG(linker,
-                debugBelch("loadOc: ocAllocateSymbolExtras_ELF failed\n"));
-       return r;
-   }
-#  elif defined(OBJFORMAT_PEi386)
-   ocAllocateSymbolExtras_PEi386 ( oc );
+#  if defined(OBJFORMAT_PEi386)
+   ocAllocateExtras_PEi386 ( oc );
 #  endif
 #endif
 
@@ -1605,6 +1614,8 @@ int ocTryLoad (ObjectCode* oc) {
     if (!r) { return r; }
 
     // run init/init_array/ctors/mod_init_func
+
+    IF_DEBUG(linker, debugBelch("ocTryLoad: ocRunInit start\n"));
 
     loading_obj = oc; // tells foreignExportStablePtr what to do
 #if defined(OBJFORMAT_ELF)
@@ -1809,8 +1820,8 @@ void freeProddableBlocks (ObjectCode *oc)
  */
 void
 addSection (Section *s, SectionKind kind, SectionAlloc alloc,
-            void* start, StgWord size, StgWord mapped_offset,
-            void* mapped_start, StgWord mapped_size)
+            void* start, StgWord size,
+            StgWord mapped_offset, void* mapped_start, StgWord mapped_size)
 {
    s->start        = start;     /* actual start of section in memory */
    s->size         = size;      /* actual size of section in memory */
@@ -1830,5 +1841,51 @@ addSection (Section *s, SectionKind kind, SectionAlloc alloc,
             debugBelch("addSection: %p-%p (size %" FMT_Word "), kind %d\n",
                        start, (void*)((StgWord)start + size),
                        size, kind ));
+}
+
+/* -----------------------------------------------------------------------------
+ * Segment management
+ */
+void
+initSegment (Segment *s, void *start, size_t size, SegmentProt prot, int n_sections)
+{
+    s->start = start;
+    s->size = size;
+    s->prot = prot;
+    s->sections_idx = (int *)stgCallocBytes(n_sections, sizeof(int),
+                                               "initSegment(segment)");
+    s->n_sections = n_sections;
+}
+
+void freeSegments (ObjectCode *oc)
+{
+    if (oc->segments != NULL) {
+        IF_DEBUG(linker, debugBelch("freeSegments: freeing %d segments\n", oc->n_segments));
+
+        for (int i = 0; i < oc->n_segments; i++) {
+            Segment *s = &oc->segments[i];
+
+            IF_DEBUG(linker, debugBelch("freeSegments: freeing segment %d at %p size %zu\n",
+                                        i, s->start, s->size));
+
+            stgFree(s->sections_idx);
+            s->sections_idx = NULL;
+
+            if (0 == s->size) {
+                IF_DEBUG(linker, debugBelch("freeSegment: skipping segment of 0 size\n"));
+                continue;
+            } else {
+#if RTS_LINKER_USE_MMAP
+                CHECKM(0 == munmap(s->start, s->size), "freeSegments: failed to unmap memory");
+#else
+                stgFree(s->start);
+#endif
+            }
+            s->start = NULL;
+        }
+
+        stgFree(oc->segments);
+        oc->segments = NULL;
+    }
 }
 

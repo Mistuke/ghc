@@ -45,7 +45,11 @@ instance NFData   CcMode
 -- * Compile a C source file.
 -- * Extract source dependencies by passing @-M@ command line argument.
 -- * Link object files & static libraries into an executable.
-data GhcMode = CompileHs | CompileCWithGhc | FindHsDependencies | LinkHs
+data GhcMode = CompileHs
+             | CompileCWithGhc
+             | FindHsDependencies
+             | LinkHs
+             | ToolArgs
     deriving (Eq, Generic, Show)
 
 instance Binary   GhcMode
@@ -75,13 +79,13 @@ instance Hashable ConfigurationInfo
 instance NFData   ConfigurationInfo
 
 -- TODO: Do we really need all these modes? Why do we need 'Dependencies'? We
--- can extract dependencies using the Cabal library.
+-- can extract dependencies using the Cabal library. Note: we used to also have
+-- the @Init@ mode for initialising a new package database but we've deleted it.
 -- | 'GhcPkg' can initialise a package database and register packages in it.
-data GhcPkgMode = Init         -- ^ Initialize a new database.
-                | Update       -- ^ Update a package.
-                | Copy         -- ^ Copy a package from one database to another.
-                | Unregister   -- ^ Unregister a package.
+data GhcPkgMode = Copy         -- ^ Copy a package from one database to another.
                 | Dependencies -- ^ Compute package dependencies.
+                | Unregister   -- ^ Unregister a package.
+                | Update       -- ^ Update a package.
                 deriving (Eq, Generic, Show)
 
 instance Binary   GhcPkgMode
@@ -127,7 +131,6 @@ data Builder = Alex
              | Nm
              | Objdump
              | Patch
-             | Perl
              | Python
              | Ranlib
              | RunTest
@@ -152,8 +155,8 @@ builderProvenance = \case
     Ghc _ Stage0     -> Nothing
     Ghc _ stage      -> context (pred stage) ghc
     GhcPkg _ Stage0  -> Nothing
-    GhcPkg _ _       -> context Stage0 ghcPkg
-    Haddock _        -> context Stage2 haddock
+    GhcPkg _ s       -> context (pred s) ghcPkg
+    Haddock _        -> context Stage1 haddock
     Hpc              -> context Stage1 hpcBin
     Hp2Ps            -> context Stage0 hp2ps
     Hsc2Hs _         -> context Stage0 hsc2hs
@@ -173,20 +176,26 @@ instance H.Builder Builder where
         Autoreconf dir -> return [dir -/- "configure.ac"]
         Configure  dir -> return [dir -/- "configure"]
 
-        Ghc _ Stage0 -> return []
+        Ghc _ Stage0 -> generatedGhcDependencies Stage0
         Ghc _ stage -> do
             root <- buildRoot
             win <- windowsHost
             touchyPath <- programPath (vanillaContext Stage0 touchy)
             unlitPath  <- builderPath Unlit
             ghcdeps <- ghcDeps stage
-            return $ [ root -/- ghcSplitPath stage -- TODO: Make conditional on --split-objects
-                     , unlitPath ]
+            ghcgens <- generatedGhcDependencies stage
+            return $ [ unlitPath ]
                   ++ ghcdeps
+                  ++ ghcgens
                   ++ [ touchyPath | win ]
+                  ++ [ root -/- mingwStamp | win ]
+                     -- proxy for the entire mingw toolchain that
+                     -- we have in inplace/mingw initially, and then at
+                     -- root -/- mingw.
 
         Hsc2Hs stage -> (\p -> [p]) <$> templateHscPath stage
         Make dir  -> return [dir -/- "Makefile"]
+        Haddock _ -> haddockDeps Stage1  -- Haddock currently runs in Stage1
         _         -> return []
 
     -- query the builder for some information.
@@ -229,7 +238,7 @@ instance H.Builder Builder where
 
                 Ar Unpack _ -> cmd echo [Cwd output] [path] buildArgs
 
-                Autoreconf dir -> cmd echo [Cwd dir] [path] buildArgs
+                Autoreconf dir -> cmd echo [Cwd dir] ["sh", path] buildArgs
                 Configure  dir -> do
                     -- Inject /bin/bash into `libtool`, instead of /bin/sh,
                     -- otherwise Windows breaks. TODO: Figure out why.
@@ -285,7 +294,7 @@ systemBuilderPath builder = case builder of
     Alex            -> fromKey "alex"
     Ar _ Stage0     -> fromKey "system-ar"
     Ar _ _          -> fromKey "ar"
-    Autoreconf _    -> fromKey "autoreconf"
+    Autoreconf _    -> stripExe =<< fromKey "autoreconf"
     Cc  _  Stage0   -> fromKey "system-cc"
     Cc  _  _        -> fromKey "cc"
     -- We can't ask configure for the path to configure!
@@ -299,7 +308,6 @@ systemBuilderPath builder = case builder of
     Nm              -> fromKey "nm"
     Objdump         -> fromKey "objdump"
     Patch           -> fromKey "patch"
-    Perl            -> fromKey "perl"
     Python          -> fromKey "python"
     Ranlib          -> fromKey "ranlib"
     RunTest         -> fromKey "python"
@@ -325,6 +333,18 @@ systemBuilderPath builder = case builder of
                 (False, _    ) -> return fullPath
                 (True , True ) -> fixAbsolutePathOnWindows fullPath
                 (True , False) -> fixAbsolutePathOnWindows fullPath <&> (<.> exe)
+
+    -- Without this function, on Windows we can observe a bad builder path
+    -- for 'autoreconf'. If the relevant system.config field is set to
+    -- /usr/bin/autoreconf in the file, the path that we read
+    -- is C:/msys64/usr/bin/autoreconf.exe. A standard msys2 set up happens
+    -- to have an executable named 'autoreconf' there, without the 'exe'
+    -- extension. Hence this function.
+    stripExe s = do
+        let sNoExt = dropExtension s
+        exists <- doesFileExist s
+        if exists then return s else return sNoExt
+
 
 -- | Was the path to a given system 'Builder' specified in configuration files?
 isSpecified :: Builder -> Action Bool

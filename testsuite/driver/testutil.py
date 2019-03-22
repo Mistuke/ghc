@@ -8,15 +8,18 @@ import threading
 def passed():
     return {'passFail': 'pass'}
 
-def failBecause(reason, tag=None):
-    return {'passFail': 'fail', 'reason': reason, 'tag': tag}
+def failBecauseStderr(reason, stderr, tag=None):
+    return failBecause(reason, tag, stderr=stderr)
+
+def failBecause(reason, tag=None, **kwargs):
+    return (dict ({'passFail': 'fail', 'reason': reason, 'tag': tag}, **kwargs))
 
 def strip_quotes(s):
     # Don't wrap commands to subprocess.call/Popen in quotes.
     return s.strip('\'"')
 
 def str_fail(s):
-    return '\033[1m\033[43m\033[31m' + s + '\033[0m'
+    return '\033[1m\033[31m' + s + '\033[0m'
 
 def str_pass(s):
     return '\033[1m\033[32m' + s + '\033[0m'
@@ -61,7 +64,7 @@ def lndir(srcdir, dstdir):
 #
 # We define the following function to make this magic more
 # explicit/discoverable. You are enouraged to use it instead of os.symlink.
-if platform.system() == 'Windows':
+if platform.system() == 'Windows' and os.getenv('FORCE_SYMLINKS') == None:
     link_or_copy_file = shutil.copyfile
 else:
     link_or_copy_file = os.symlink

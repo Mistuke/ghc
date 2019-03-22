@@ -84,9 +84,11 @@ import Binary
 import UniqSet
 import Unique( mkAlphaTyVarUnique )
 
+import Data.ByteString (ByteString)
+import qualified Data.ByteString.Builder as BSB
+import qualified Data.ByteString.Lazy    as LBS
 import qualified Data.Data as Data
 import Data.Char
-import Data.Word
 import Data.List( find )
 
 {-
@@ -172,9 +174,38 @@ The "wrapper Id", \$WC, goes as follows
   nothing for the wrapper to do.  That is, if its defn would be
         \$wC = C
 
+Note [Data constructor workers and wrappers]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* Algebraic data types
+  - Always have a worker, with no unfolding
+  - May or may not have a wrapper; see Note [The need for a wrapper]
+
+* Newtypes
+  - Always have a worker, which has a compulsory unfolding (just a cast)
+  - May or may not have a wrapper; see Note [The need for a wrapper]
+
+* INVARIANT: the dictionary constructor for a class
+             never has a wrapper.
+
+* Neither_ the worker _nor_ the wrapper take the dcStupidTheta dicts as arguments
+
+* The wrapper (if it exists) takes dcOrigArgTys as its arguments
+  The worker takes dataConRepArgTys as its arguments
+  If the worker is absent, dataConRepArgTys is the same as dcOrigArgTys
+
+* The 'NoDataConRep' case of DataConRep is important. Not only is it
+  efficient, but it also ensures that the wrapper is replaced by the
+  worker (because it *is* the worker) even when there are no
+  args. E.g. in
+               f (:) x
+  the (:) *is* the worker.  This is really important in rule matching,
+  (We could match on the wrappers, but that makes it less likely that
+  rules will match when we bring bits of unfoldings together.)
+
 Note [The need for a wrapper]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Why might the wrapper have anything to do?  Two reasons:
+Why might the wrapper have anything to do?  The full story is
+in wrapper_reqd in MkId.mkDataConRep.
 
 * Unboxing strict fields (with -funbox-strict-fields)
         data T = MkT !(Int,Int)
@@ -197,12 +228,14 @@ Why might the wrapper have anything to do?  Two reasons:
   The third argument is a coercion
         [a] :: [a]~[a]
 
-INVARIANT: the dictionary constructor for a class
-           never has a wrapper.
+* Data family instances may do a cast on the result
+
+* Type variables may be permuted; see MkId
+  Note [Data con wrappers and GADT syntax]
 
 
-A note about the stupid context
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Note [The stupid context]
+~~~~~~~~~~~~~~~~~~~~~~~~~
 Data types can have a context:
 
         data (Eq a, Ord b) => T a b = T1 a b | T2 a
@@ -566,9 +599,12 @@ perspective.
 -}
 
 -- | Data Constructor Representation
+-- See Note [Data constructor workers and wrappers]
 data DataConRep
-  = NoDataConRep              -- No wrapper
+  = -- NoDataConRep means that the data con has no wrapper
+    NoDataConRep
 
+    -- DCR means that the data con has a wrapper
   | DCR { dcr_wrap_id :: Id   -- Takes src args, unboxes/flattens,
                               -- and constructs the representation
 
@@ -586,30 +622,6 @@ data DataConRep
                                      -- See Note [Bangs on data constructor arguments]
 
     }
--- Algebraic data types always have a worker, and
--- may or may not have a wrapper, depending on whether
--- the wrapper does anything.
---
--- Data types have a worker with no unfolding
--- Newtypes just have a worker, which has a compulsory unfolding (just a cast)
-
--- _Neither_ the worker _nor_ the wrapper take the dcStupidTheta dicts as arguments
-
--- The wrapper (if it exists) takes dcOrigArgTys as its arguments
--- The worker takes dataConRepArgTys as its arguments
--- If the worker is absent, dataConRepArgTys is the same as dcOrigArgTys
-
--- The 'NoDataConRep' case is important
--- Not only is this efficient,
--- but it also ensures that the wrapper is replaced
--- by the worker (because it *is* the worker)
--- even when there are no args. E.g. in
---              f (:) x
--- the (:) *is* the worker.
--- This is really important in rule matching,
--- (We could match on the wrappers,
--- but that makes it less likely that rules will match
--- when we bring bits of unfoldings together.)
 
 -------------------------
 
@@ -947,36 +959,33 @@ mkDataCon name declared_infix prom_info
         -- If the DataCon has a wrapper, then the worker's type is never seen
         -- by the user. The visibilities we pick do not matter here.
         DCR{} -> mkInvForAllTys univ_tvs $ mkTyCoInvForAllTys ex_tvs $
-                 mkFunTys rep_arg_tys $
+                 mkVisFunTys rep_arg_tys $
                  mkTyConApp rep_tycon (mkTyVarTys univ_tvs)
 
       -- See Note [Promoted data constructors] in TyCon
     prom_tv_bndrs = [ mkNamedTyConBinder vis tv
                     | Bndr tv vis <- user_tvbs ]
 
-    prom_arg_bndrs = mkCleanAnonTyConBinders prom_tv_bndrs (theta ++ orig_arg_tys)
-    prom_res_kind  = orig_res_ty
-    promoted       = mkPromotedDataCon con name prom_info
-                                       (prom_tv_bndrs ++ prom_arg_bndrs)
-                                       prom_res_kind roles rep_info
+    fresh_names = freshNames (map getName user_tvbs)
+      -- fresh_names: make sure that the "anonymous" tyvars don't
+      -- clash in name or unique with the universal/existential ones.
+      -- Tiresome!  And unnecessary because these tyvars are never looked at
+    prom_theta_bndrs = [ mkAnonTyConBinder InvisArg (mkTyVar n t)
+     {- Invisible -}   | (n,t) <- fresh_names `zip` theta ]
+    prom_arg_bndrs   = [ mkAnonTyConBinder VisArg (mkTyVar n t)
+     {- Visible -}     | (n,t) <- dropList theta fresh_names `zip` orig_arg_tys ]
+    prom_bndrs       = prom_tv_bndrs ++ prom_theta_bndrs ++ prom_arg_bndrs
+    prom_res_kind    = orig_res_ty
+    promoted         = mkPromotedDataCon con name prom_info prom_bndrs
+                                         prom_res_kind roles rep_info
 
     roles = map (\tv -> if isTyVar tv then Nominal else Phantom)
                 (univ_tvs ++ ex_tvs)
-            ++ map (const Representational) orig_arg_tys
-
-mkCleanAnonTyConBinders :: [TyConBinder] -> [Type] -> [TyConBinder]
--- Make sure that the "anonymous" tyvars don't clash in
--- name or unique with the universal/existential ones.
--- Tiresome!  And unnecessary because these tyvars are never looked at
-mkCleanAnonTyConBinders tc_bndrs tys
-  = [ mkAnonTyConBinder (mkTyVar name ty)
-    | (name, ty) <- fresh_names `zip` tys ]
-  where
-    fresh_names = freshNames (map getName (binderVars tc_bndrs))
+            ++ map (const Representational) (theta ++ orig_arg_tys)
 
 freshNames :: [Name] -> [Name]
--- Make names whose Uniques and OccNames differ from
--- those in the 'avoid' list
+-- Make an infinite list of Names whose Uniques and OccNames
+-- differ from those in the 'avoid' list
 freshNames avoids
   = [ mkSystemName uniq occ
     | n <- [0..]
@@ -1287,8 +1296,8 @@ dataConUserType (MkData { dcUserTyVarBinders = user_tvbs,
                           dcOtherTheta = theta, dcOrigArgTys = arg_tys,
                           dcOrigResTy = res_ty })
   = mkForAllTys user_tvbs $
-    mkFunTys theta $
-    mkFunTys arg_tys $
+    mkInvisFunTys theta $
+    mkVisFunTys arg_tys $
     res_ty
 
 -- | Finds the instantiated types of the arguments required to construct a
@@ -1346,11 +1355,15 @@ dataConRepArgTys (MkData { dcRep = rep
 
 -- | The string @package:module.name@ identifying a constructor, which is attached
 -- to its info table and used by the GHCi debugger and the heap profiler
-dataConIdentity :: DataCon -> [Word8]
+dataConIdentity :: DataCon -> ByteString
 -- We want this string to be UTF-8, so we get the bytes directly from the FastStrings.
-dataConIdentity dc = bytesFS (unitIdFS (moduleUnitId mod)) ++
-                  fromIntegral (ord ':') : bytesFS (moduleNameFS (moduleName mod)) ++
-                  fromIntegral (ord '.') : bytesFS (occNameFS (nameOccName name))
+dataConIdentity dc = LBS.toStrict $ BSB.toLazyByteString $ mconcat
+   [ BSB.byteString $ bytesFS (unitIdFS (moduleUnitId mod))
+   , BSB.int8 $ fromIntegral (ord ':')
+   , BSB.byteString $ bytesFS (moduleNameFS (moduleName mod))
+   , BSB.int8 $ fromIntegral (ord '.')
+   , BSB.byteString $ bytesFS (occNameFS (nameOccName name))
+   ]
   where name = dataConName dc
         mod  = ASSERT( isExternalName name ) nameModule name
 
@@ -1390,10 +1403,13 @@ dataConCannotMatch tys con
 
     -- TODO: could gather equalities from superclasses too
     predEqs pred = case classifyPredType pred of
-                     EqPred NomEq ty1 ty2       -> [(ty1, ty2)]
-                     ClassPred eq [_, ty1, ty2]
-                       | eq `hasKey` eqTyConKey -> [(ty1, ty2)]
-                     _                          -> []
+                     EqPred NomEq ty1 ty2         -> [(ty1, ty2)]
+                     ClassPred eq args
+                       | eq `hasKey` eqTyConKey
+                       , [_, ty1, ty2] <- args    -> [(ty1, ty2)]
+                       | eq `hasKey` heqTyConKey
+                       , [_, _, ty1, ty2] <- args -> [(ty1, ty2)]
+                     _                            -> []
 
 -- | Were the type variables of the data con written in a different order
 -- than the regular order (universal tyvars followed by existential tyvars)?

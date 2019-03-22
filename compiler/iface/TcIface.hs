@@ -16,7 +16,7 @@ module TcIface (
         typecheckIfaceForInstantiate,
         tcIfaceDecl, tcIfaceInst, tcIfaceFamInst, tcIfaceRules,
         tcIfaceAnnotations, tcIfaceCompleteSigs,
-        tcIfaceExpr,    -- Desired by HERMIT (Trac #7683)
+        tcIfaceExpr,    -- Desired by HERMIT (#7683)
         tcIfaceGlobal
  ) where
 
@@ -757,7 +757,7 @@ tc_iface_decl _parent ignore_prags
         --     class C (T a) => D a where
         --       data T a
         -- Here the associated type T is knot-tied with the class, and
-        -- so we must not pull on T too eagerly.  See Trac #5970
+        -- so we must not pull on T too eagerly.  See #5970
 
    tc_sig :: IfaceClassOp -> IfL TcMethInfo
    tc_sig (IfaceClassOp op_name rdr_ty dm)
@@ -789,7 +789,7 @@ tc_iface_decl _parent ignore_prags
                                      ; return (Just (tc_def, noSrcSpan)) }
                   -- Must be done lazily in case the RHS of the defaults mention
                   -- the type constructor being defined here
-                  -- e.g.   type AT a; type AT b = AT [b]   Trac #8002
+                  -- e.g.   type AT a; type AT b = AT [b]   #8002
           return (ATI tc mb_def)
 
    mk_sc_doc pred = text "Superclass" <+> ppr pred
@@ -804,7 +804,7 @@ tc_iface_decl _ _ (IfaceAxiom { ifName = tc_name, ifTyCon = tc
        -- a hs-boot declared type constructor that is going to be
        -- defined by this module.
        -- e.g. type instance F Int = ToBeDefined
-       -- See Trac #13803
+       -- See #13803
        ; tc_branches <- forkM (text "Axiom branches" <+> ppr tc_name)
                       $ tc_ax_branches branches
        ; let axiom = CoAxiom { co_ax_unique   = nameUnique tc_name
@@ -992,7 +992,7 @@ Note [Synonym kind loop]
 ~~~~~~~~~~~~~~~~~~~~~~~~
 Notice that we eagerly grab the *kind* from the interface file, but
 build a forkM thunk for the *rhs* (and family stuff).  To see why,
-consider this (Trac #2412)
+consider this (#2412)
 
 M.hs:       module M where { import X; data T = MkT S }
 X.hs:       module X where { import {-# SOURCE #-} M; type S = T }
@@ -1140,12 +1140,11 @@ tcIfaceCompleteSig (IfaceCompleteMatch ms t) = return (CompleteMatch ms t)
 tcIfaceType :: IfaceType -> IfL Type
 tcIfaceType = go
   where
-    go (IfaceTyVar n)         = TyVarTy <$> tcIfaceTyVar n
-    go (IfaceFreeTyVar n)     = pprPanic "tcIfaceType:IfaceFreeTyVar" (ppr n)
-    go (IfaceLitTy l)         = LitTy <$> tcIfaceTyLit l
-    go (IfaceFunTy t1 t2)     = FunTy <$> go t1 <*> go t2
-    go (IfaceDFunTy t1 t2)    = FunTy <$> go t1 <*> go t2
-    go (IfaceTupleTy s i tks) = tcIfaceTupleTy s i tks
+    go (IfaceTyVar n)          = TyVarTy <$> tcIfaceTyVar n
+    go (IfaceFreeTyVar n)      = pprPanic "tcIfaceType:IfaceFreeTyVar" (ppr n)
+    go (IfaceLitTy l)          = LitTy <$> tcIfaceTyLit l
+    go (IfaceFunTy flag t1 t2) = FunTy flag <$> go t1 <*> go t2
+    go (IfaceTupleTy s i tks)  = tcIfaceTupleTy s i tks
     go (IfaceAppTy t ts)
       = do { t'  <- go t
            ; ts' <- traverse go (appArgsIfaceTypes ts)

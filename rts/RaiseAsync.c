@@ -925,8 +925,7 @@ raiseAsync(Capability *cap, StgTSO *tso, StgClosure *exception,
                 ap->payload[i] = (StgClosure *)*sp++;
             }
 
-            SET_HDR(ap,&stg_AP_STACK_NOUPD_info,
-                    ((StgClosure *)frame)->header.prof.ccs /* ToDo */);
+            SET_HDR(ap,&stg_AP_STACK_NOUPD_info,stack->header.prof.ccs);
             TICK_ALLOC_SE_THK(WDS(words+1),0);
 
             stack->sp = sp;

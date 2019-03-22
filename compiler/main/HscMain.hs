@@ -63,8 +63,8 @@ module HscMain
     , hscGetModuleInterface
     , hscRnImportDecls
     , hscTcRnLookupRdrName
-    , hscStmt, hscStmtWithLocation, hscParsedStmt
-    , hscDecls, hscDeclsWithLocation
+    , hscStmt, hscParseStmtWithLocation, hscStmtWithLocation, hscParsedStmt
+    , hscDecls, hscParseDeclsWithLocation, hscDeclsWithLocation, hscParsedDecls
     , hscTcExpr, TcRnExprMode(..), hscImport, hscKcType
     , hscParseExpr
     , hscCompileCoreExpr
@@ -233,9 +233,15 @@ logWarningsReportErrors (warns,errs) = do
     logWarnings warns
     when (not $ isEmptyBag errs) $ throwErrors errs
 
--- | Throw some errors.
-throwErrors :: ErrorMessages -> Hsc a
-throwErrors = liftIO . throwIO . mkSrcErr
+-- | Log warnings and throw errors, assuming the messages
+-- contain at least one error (e.g. coming from PFailed)
+handleWarningsThrowErrors :: Messages -> Hsc a
+handleWarningsThrowErrors (warns, errs) = do
+    logWarnings warns
+    dflags <- getDynFlags
+    (wWarns, wErrs) <- warningsToMessages dflags <$> getWarnings
+    liftIO $ printBagOfErrors dflags wWarns
+    throwErrors (unionBags errs wErrs)
 
 -- | Deal with errors and warnings returned by a compilation step
 --
@@ -341,19 +347,18 @@ hscParse' mod_summary
                  | otherwise = parseModule
 
     case unP parseMod (mkPState dflags buf loc) of
-        PFailed warnFn span err -> do
-            logWarningsReportErrors (warnFn dflags)
-            handleWarnings
-            liftIO $ throwOneError (mkPlainErrMsg dflags span err)
-
+        PFailed pst ->
+            handleWarningsThrowErrors (getMessages pst dflags)
         POk pst rdr_module -> do
-            logWarningsReportErrors (getMessages pst dflags)
+            let (warns, errs) = getMessages pst dflags
+            logWarnings warns
             liftIO $ dumpIfSet_dyn dflags Opt_D_dump_parsed "Parser" $
                                    ppr rdr_module
             liftIO $ dumpIfSet_dyn dflags Opt_D_dump_parsed_ast "Parser AST" $
                                    showAstData NoBlankSrcSpan rdr_module
             liftIO $ dumpIfSet_dyn dflags Opt_D_source_stats "Source Statistics" $
                                    ppSourceStats False rdr_module
+            when (not $ isEmptyBag errs) $ throwErrors errs
 
             -- To get the list of extra source files, we take the list
             -- that the parser gave us,
@@ -408,8 +413,9 @@ extract_renamed_stuff mod_summary tc_result = do
 
     -- Create HIE files
     when (gopt Opt_WriteHie dflags) $ do
-        hieFile <- mkHieFile mod_summary (tcg_binds tc_result)
-                                         (fromJust rn_info)
+        -- I assume this fromJust is safe because `-fwrite-hie-file`
+        -- enables the option which keeps the renamed source.
+        hieFile <- mkHieFile mod_summary tc_result (fromJust rn_info)
         let out_file = ml_hie_file $ ms_location mod_summary
         liftIO $ writeHieFile out_file hieFile
 
@@ -1022,7 +1028,7 @@ checkSafeImports tcg_env
         | imv_is_safe v1 /= imv_is_safe v2
         = do
             dflags <- getDynFlags
-            throwErrors $ unitBag $ mkPlainErrMsg dflags (imv_span v1)
+            throwOneError $ mkPlainErrMsg dflags (imv_span v1)
               (text "Module" <+> ppr (imv_name v1) <+>
               (text $ "is imported both as a safe and unsafe import!"))
         | otherwise
@@ -1088,7 +1094,7 @@ hscCheckSafe' m l = do
         iface <- lookup' m
         case iface of
             -- can't load iface to check trust!
-            Nothing -> throwErrors $ unitBag $ mkPlainErrMsg dflags l
+            Nothing -> throwOneError $ mkPlainErrMsg dflags l
                          $ text "Can't load the interface file for" <+> ppr m
                            <> text ", to check that it can be safely imported"
 
@@ -1438,6 +1444,7 @@ hscCompileCmmFile hsc_env filename output_filename = runHsc hsc_env $ do
             mod_name = mkModuleName $ "Cmm$" ++ FilePath.takeFileName filename
             cmm_mod = mkModule (thisPackage dflags) mod_name
         (_, cmmgroup) <- cmmPipeline hsc_env (emptySRT cmm_mod) cmm
+        dumpIfSet_dyn dflags Opt_D_dump_cmm "Output Cmm" (ppr cmmgroup)
         rawCmms <- cmmToRawCmm dflags (Stream.yield cmmgroup)
         _ <- codeOutput dflags cmm_mod output_filename no_loc NoStubs [] []
              rawCmms
@@ -1487,7 +1494,7 @@ doCodeGen hsc_env this_mod data_tycons
     -- we generate one SRT for the whole module.
     let
      pipeline_stream
-      | gopt Opt_SplitObjs dflags || gopt Opt_SplitSections dflags ||
+      | gopt Opt_SplitSections dflags ||
         osSubsectionsViaSymbols (platformOS (targetPlatform dflags))
         = {-# SCC "cmmPipeline" #-}
           let run_pipeline us cmmgroup = do
@@ -1601,17 +1608,27 @@ hscDecls :: HscEnv
          -> IO ([TyThing], InteractiveContext)
 hscDecls hsc_env str = hscDeclsWithLocation hsc_env str "<interactive>" 1
 
+hscParseDeclsWithLocation :: HscEnv -> String -> Int -> String -> IO [LHsDecl GhcPs]
+hscParseDeclsWithLocation hsc_env source line_num str = do
+    L _ (HsModule{ hsmodDecls = decls }) <-
+      runInteractiveHsc hsc_env $
+        hscParseThingWithLocation source line_num parseModule str
+    return decls
+
 -- | Compile a decls
 hscDeclsWithLocation :: HscEnv
                      -> String -- ^ The statement
                      -> String -- ^ The source
                      -> Int    -- ^ Starting line
                      -> IO ([TyThing], InteractiveContext)
-hscDeclsWithLocation hsc_env0 str source linenumber =
- runInteractiveHsc hsc_env0 $ do
+hscDeclsWithLocation hsc_env str source linenumber = do
     L _ (HsModule{ hsmodDecls = decls }) <-
+      runInteractiveHsc hsc_env $
         hscParseThingWithLocation source linenumber parseModule str
+    hscParsedDecls hsc_env decls
 
+hscParsedDecls :: HscEnv -> [LHsDecl GhcPs] -> IO ([TyThing], InteractiveContext)
+hscParsedDecls hsc_env decls = runInteractiveHsc hsc_env $ do
     {- Rename and typecheck it -}
     hsc_env <- getHscEnv
     tc_gblenv <- ioMsgMaybe $ tcRnDeclsi hsc_env decls
@@ -1748,7 +1765,7 @@ hscParseExpr expr = do
   maybe_stmt <- hscParseStmt expr
   case maybe_stmt of
     Just (L _ (BodyStmt _ expr _ _)) -> return expr
-    _ -> throwErrors $ unitBag $ mkPlainErrMsg (hsc_dflags hsc_env) noSrcSpan
+    _ -> throwOneError $ mkPlainErrMsg (hsc_dflags hsc_env) noSrcSpan
       (text "not an expression:" <+> quotes (text expr))
 
 hscParseStmt :: String -> Hsc (Maybe (GhciLStmt GhcPs))
@@ -1782,11 +1799,8 @@ hscParseThingWithLocation source linenumber parser str
         loc = mkRealSrcLoc (fsLit source) linenumber 1
 
     case unP parser (mkPState dflags buf loc) of
-        PFailed warnFn span err -> do
-            logWarningsReportErrors (warnFn dflags)
-            handleWarnings
-            let msg = mkPlainErrMsg dflags span err
-            throwErrors $ unitBag msg
+        PFailed pst -> do
+            handleWarningsThrowErrors (getMessages pst dflags)
 
         POk pst thing -> do
             logWarningsReportErrors (getMessages pst dflags)

@@ -47,7 +47,7 @@ import GhcPrelude
 import DynFlags
 import CoreSyn
 import PprCore          ()      -- Instances
-import OccurAnal        ( occurAnalyseExpr )
+import OccurAnal        ( occurAnalyseExpr_NoBinderSwap )
 import CoreOpt
 import CoreArity       ( manifestArity )
 import CoreUtils
@@ -101,7 +101,7 @@ mkDFunUnfolding :: [Var] -> DataCon -> [CoreExpr] -> Unfolding
 mkDFunUnfolding bndrs con ops
   = DFunUnfolding { df_bndrs = bndrs
                   , df_con = con
-                  , df_args = map occurAnalyseExpr ops }
+                  , df_args = map occurAnalyseExpr_NoBinderSwap ops }
                   -- See Note [Occurrence analysis of unfoldings]
 
 mkWwInlineRule :: DynFlags -> CoreExpr -> Arity -> Unfolding
@@ -260,7 +260,7 @@ the `UnfoldingGuidance`.)
 
 In the example, x's ug_arity is 0, so we should inline it at every use
 site.  It's rare to have such an INLINE pragma (usually INLINE Is on
-functions), but it's occasionally very important (Trac #15578, #15519).
+functions), but it's occasionally very important (#15578, #15519).
 In #15519 we had something like
    x = case (g a b) of I# r -> T r
    {-# INLINE x #-}
@@ -294,7 +294,7 @@ Note [INLINE pragmas and boring contexts]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 An INLINE pragma uses mkInlineUnfoldingWithArity to build the
 unfolding.  That sets the ug_boring_ok flag to False if the function
-is not tiny (inlineBorkingOK), so that even INLINE functions are not
+is not tiny (inlineBoringOK), so that even INLINE functions are not
 inlined in an utterly boring context.  E.g.
      \x y. Just (f y x)
 Nothing is gained by inlining f here, even if it has an INLINE
@@ -311,7 +311,7 @@ mkCoreUnfolding :: UnfoldingSource -> Bool -> CoreExpr
                 -> UnfoldingGuidance -> Unfolding
 -- Occurrence-analyses the expression before capturing it
 mkCoreUnfolding src top_lvl expr guidance
-  = CoreUnfolding { uf_tmpl         = occurAnalyseExpr expr,
+  = CoreUnfolding { uf_tmpl         = occurAnalyseExpr_NoBinderSwap expr,
                       -- See Note [Occurrence analysis of unfoldings]
                     uf_src          = src,
                     uf_is_top       = top_lvl,
@@ -330,7 +330,7 @@ mkUnfolding :: DynFlags -> UnfoldingSource
 -- Calculates unfolding guidance
 -- Occurrence-analyses the expression before capturing it
 mkUnfolding dflags src is_top_lvl is_bottoming expr
-  = CoreUnfolding { uf_tmpl         = occurAnalyseExpr expr,
+  = CoreUnfolding { uf_tmpl         = occurAnalyseExpr_NoBinderSwap expr,
                       -- See Note [Occurrence analysis of unfoldings]
                     uf_src          = src,
                     uf_is_top       = is_top_lvl,
@@ -342,7 +342,7 @@ mkUnfolding dflags src is_top_lvl is_bottoming expr
   where
     is_top_bottoming = is_top_lvl && is_bottoming
     guidance         = calcUnfoldingGuidance dflags is_top_bottoming expr
-        -- NB: *not* (calcUnfoldingGuidance (occurAnalyseExpr expr))!
+        -- NB: *not* (calcUnfoldingGuidance (occurAnalyseExpr_NoBinderSwap expr))!
         -- See Note [Calculate unfolding guidance on the non-occ-anal'd expression]
 
 {-
@@ -357,12 +357,45 @@ But given this decision it's vital that we do
 where g* is (for some strange reason) the loop breaker.  If we don't
 occ-anal it when reading it in, we won't mark g as a loop breaker, and
 we may inline g entirely in body, dropping its binding, and leaving
-the occurrence in f out of scope. This happened in Trac #8892, where
+the occurrence in f out of scope. This happened in #8892, where
 the unfolding in question was a DFun unfolding.
 
 But more generally, the simplifier is designed on the
 basis that it is looking at occurrence-analysed expressions, so better
 ensure that they acutally are.
+
+We use occurAnalyseExpr_NoBinderSwap instead of occurAnalyseExpr;
+see Note [No binder swap in unfoldings].
+
+Note [No binder swap in unfoldings]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The binder swap can temporarily violate Core Lint, by assinging
+a LocalId binding to a GlobalId. For example, if A.foo{r872}
+is a GlobalId with unique r872, then
+
+ case A.foo{r872} of bar {
+   K x -> ...(A.foo{r872})...
+ }
+
+gets transformed to
+
+  case A.foo{r872} of bar {
+    K x -> let foo{r872} = bar
+           in ...(A.foo{r872})...
+
+This is usually not a problem, because the simplifier will transform
+this to:
+
+  case A.foo{r872} of bar {
+    K x -> ...(bar)...
+
+However, after occurrence analysis but before simplification, this extra 'let'
+violates the Core Lint invariant that we do not have local 'let' bindings for
+GlobalIds.  That seems (just) tolerable for the occurrence analysis that happens
+just before the Simplifier, but not for unfoldings, which are Linted
+independently.
+As a quick workaround, we disable binder swap in this module.
+See #16288 and #16296 for further plans.
 
 Note [Calculate unfolding guidance on the non-occ-anal'd expression]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -877,7 +910,7 @@ Simon M tried a MUCH bigger discount: (10 * (10 + n_val_args)),
 and said it was an "unambiguous win", but its terribly dangerous
 because a function with many many case branches, each finishing with
 a constructor, can have an arbitrarily large discount.  This led to
-terrible code bloat: see Trac #6099.
+terrible code bloat: see #6099.
 
 Note [Unboxed tuple size and result discount]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -903,10 +936,10 @@ monadic combinators with continuation arguments, where inlining is
 quite important.
 
 But we don't want a big discount when a function is called many times
-(see the detailed comments with Trac #6048) because if the function is
+(see the detailed comments with #6048) because if the function is
 big it won't be inlined at its many call sites and no benefit results.
 Indeed, we can get exponentially big inlinings this way; that is what
-Trac #6048 is about.
+#6048 is about.
 
 On the other hand, for data-valued arguments, if there are lots of
 case expressions in the body, each one will get smaller if we apply
@@ -1085,13 +1118,14 @@ smallEnoughToInline _ _
 ----------------
 
 certainlyWillInline :: DynFlags -> IdInfo -> Maybe Unfolding
--- Sees if the unfolding is pretty certain to inline
--- If so, return a *stable* unfolding for it, that will always inline
+-- ^ Sees if the unfolding is pretty certain to inline.
+-- If so, return a *stable* unfolding for it, that will always inline.
 certainlyWillInline dflags fn_info
   = case unfoldingInfo fn_info of
       CoreUnfolding { uf_tmpl = e, uf_guidance = g }
-        | loop_breaker -> Nothing       -- Won't inline, so try w/w
-        | otherwise    -> do_cunf e g   -- Depends on size, so look at that
+        | loop_breaker -> Nothing      -- Won't inline, so try w/w
+        | noinline     -> Nothing      -- See Note [Worker-wrapper for NOINLINE functions]
+        | otherwise    -> do_cunf e g  -- Depends on size, so look at that
 
       DFunUnfolding {} -> Just fn_unf  -- Don't w/w DFuns; it never makes sense
                                        -- to do so, and even if it is currently a
@@ -1101,6 +1135,7 @@ certainlyWillInline dflags fn_info
 
   where
     loop_breaker = isStrongLoopBreaker (occInfo fn_info)
+    noinline     = inlinePragmaSpec (inlinePragInfo fn_info) == NoInline
     fn_unf       = unfoldingInfo fn_info
 
     do_cunf :: CoreExpr -> UnfoldingGuidance -> Maybe Unfolding
@@ -1115,9 +1150,6 @@ certainlyWillInline dflags fn_info
         --    See Note [certainlyWillInline: INLINABLE]
     do_cunf expr (UnfIfGoodArgs { ug_size = size, ug_args = args })
       | not (null args)  -- See Note [certainlyWillInline: be careful of thunks]
-      , case inlinePragmaSpec (inlinePragInfo fn_info) of
-          NoInline -> False -- NOINLINE; do not say certainlyWillInline!
-          _        -> True  -- INLINE, INLINABLE, or nothing
       , not (isBottomingSig (strictnessInfo fn_info))
               -- Do not unconditionally inline a bottoming functions even if
               -- it seems smallish. We've carefully lifted it out to top level,
@@ -1138,7 +1170,7 @@ certainlyWillInline dflags fn_info
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Don't claim that thunks will certainly inline, because that risks work
 duplication.  Even if the work duplication is not great (eg is_cheap
-holds), it can make a big difference in an inner loop In Trac #5623 we
+holds), it can make a big difference in an inner loop In #5623 we
 found that the WorkWrap phase thought that
        y = case x of F# v -> F# (v +# v)
 was certainlyWillInline, so the addition got duplicated.

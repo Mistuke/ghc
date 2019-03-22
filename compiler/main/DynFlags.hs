@@ -34,6 +34,7 @@ module DynFlags (
         wopt, wopt_set, wopt_unset,
         wopt_fatal, wopt_set_fatal, wopt_unset_fatal,
         xopt, xopt_set, xopt_unset,
+        xopt_set_unlessExplSpec,
         lang_set,
         useUnicodeSyntax,
         useStarIsType,
@@ -89,7 +90,7 @@ module DynFlags (
         ghcUsagePath, ghciUsagePath, topDir, tmpDir, rawSettings,
         versionedAppDir,
         extraGccViaCFlags, systemPackageConfig,
-        pgm_L, pgm_P, pgm_F, pgm_c, pgm_s, pgm_a, pgm_l, pgm_dll, pgm_T,
+        pgm_L, pgm_P, pgm_F, pgm_c, pgm_a, pgm_l, pgm_dll, pgm_T,
         pgm_windres, pgm_libtool, pgm_ar, pgm_ranlib, pgm_lo, pgm_lc,
         pgm_lcc, pgm_i, opt_L, opt_P, opt_F, opt_c, opt_a, opt_l, opt_i,
         opt_P_signature,
@@ -323,7 +324,7 @@ import Foreign (Ptr) -- needed for 2nd stage
 --    There is a change log tracking language extension additions and removals
 --    on the GHC wiki:  https://ghc.haskell.org/trac/ghc/wiki/LanguagePragmaHistory
 --
---  See Trac #4437 and #8176.
+--  See #4437 and #8176.
 
 -- -----------------------------------------------------------------------------
 -- DynFlags
@@ -525,7 +526,6 @@ data GeneralFlag
    | Opt_ExcessPrecision
    | Opt_EagerBlackHoling
    | Opt_NoHsMain
-   | Opt_SplitObjs
    | Opt_SplitSections
    | Opt_StgStats
    | Opt_HideAllPackages
@@ -581,6 +581,7 @@ data GeneralFlag
    -- output style opts
    | Opt_ErrorSpans -- Include full span info in error messages,
                     -- instead of just the start position.
+   | Opt_DeferDiagnostics
    | Opt_DiagnosticsShowCaret -- Show snippets of offending code
    | Opt_PprCaseAsLet
    | Opt_PprShowTicks
@@ -646,6 +647,7 @@ data GeneralFlag
    -- safe haskell flags
    | Opt_DistrustAllPackages
    | Opt_PackageTrust
+   | Opt_PluginTrustworthy
 
    | Opt_G_NoStateHack
    | Opt_G_NoOptCoercion
@@ -725,7 +727,7 @@ data WarnReason
 
 -- | Used to differentiate the scope an include needs to apply to.
 -- We have to split the include paths to avoid accidentally forcing recursive
--- includes since -I overrides the system search paths. See Trac #14312.
+-- includes since -I overrides the system search paths. See #14312.
 data IncludeSpecs
   = IncludeSpecs { includePathsQuote  :: [String]
                  , includePathsGlobal :: [String]
@@ -787,6 +789,8 @@ data WarningFlag =
    | Opt_WarnUnusedMatches
    | Opt_WarnUnusedTypePatterns
    | Opt_WarnUnusedForalls
+   | Opt_WarnUnusedRecordWildcards
+   | Opt_WarnRedundantRecordWildcards
    | Opt_WarnWarningsDeprecations
    | Opt_WarnDeprecatedFlags
    | Opt_WarnMissingMonadFailInstances -- since 8.0
@@ -834,6 +838,7 @@ data WarningFlag =
    | Opt_WarnStarBinder                   -- Since 8.6
    | Opt_WarnImplicitKindVars             -- Since 8.6
    | Opt_WarnSpaceAfterBang
+   | Opt_WarnMissingDerivingStrategies    -- Since 8.8
    deriving (Eq, Show, Enum)
 
 data Language = Haskell98 | Haskell2010
@@ -907,6 +912,9 @@ data DynFlags = DynFlags {
   specConstrCount       :: Maybe Int,   -- ^ Max number of specialisations for any one function
   specConstrRecursive   :: Int,         -- ^ Max number of specialisations for recursive types
                                         --   Not optional; otherwise ForceSpecConstr can diverge.
+  binBlobThreshold      :: Word,        -- ^ Binary literals (e.g. strings) whose size is above
+                                        --   this threshold will be dumped in a binary file
+                                        --   by the assembler code generator (0 to disable)
   liberateCaseThreshold :: Maybe Int,   -- ^ Threshold for LiberateCase
   floatLamArgs          :: Maybe Int,   -- ^ Arg count for lambda floating
                                         --   See CoreMonad.FloatOutSwitches
@@ -1076,6 +1084,9 @@ data DynFlags = DynFlags {
   warnUnsafeOnLoc       :: SrcSpan,
   trustworthyOnLoc      :: SrcSpan,
   -- Don't change this without updating extensionFlags:
+  -- Here we collect the settings of the language extensions
+  -- from the command line, the ghci config file and
+  -- from interactive :set / :seti commands.
   extensions            :: [OnOff LangExt.Extension],
   -- extensionFlags should always be equal to
   --     flattenExtensionFlags language extensions
@@ -1310,7 +1321,6 @@ data Settings = Settings {
   sPgm_P                 :: (String,[Option]),
   sPgm_F                 :: String,
   sPgm_c                 :: (String,[Option]),
-  sPgm_s                 :: (String,[Option]),
   sPgm_a                 :: (String,[Option]),
   sPgm_l                 :: (String,[Option]),
   sPgm_dll               :: (String,[Option]),
@@ -1371,8 +1381,6 @@ pgm_F                 :: DynFlags -> String
 pgm_F dflags = sPgm_F (settings dflags)
 pgm_c                 :: DynFlags -> (String,[Option])
 pgm_c dflags = sPgm_c (settings dflags)
-pgm_s                 :: DynFlags -> (String,[Option])
-pgm_s dflags = sPgm_s (settings dflags)
 pgm_a                 :: DynFlags -> (String,[Option])
 pgm_a dflags = sPgm_a (settings dflags)
 pgm_l                 :: DynFlags -> (String,[Option])
@@ -1734,13 +1742,10 @@ wayUnsetGeneralFlags :: Platform -> Way -> [GeneralFlag]
 wayUnsetGeneralFlags _ (WayCustom {}) = []
 wayUnsetGeneralFlags _ WayThreaded = []
 wayUnsetGeneralFlags _ WayDebug    = []
-wayUnsetGeneralFlags _ WayDyn      = [-- There's no point splitting objects
+wayUnsetGeneralFlags _ WayDyn      = [-- There's no point splitting
                                       -- when we're going to be dynamically
                                       -- linking. Plus it breaks compilation
                                       -- on OSX x86.
-                                      Opt_SplitObjs,
-                                      -- If splitobjs wasn't useful for this,
-                                      -- assume sections aren't either.
                                       Opt_SplitSections]
 wayUnsetGeneralFlags _ WayProf     = []
 wayUnsetGeneralFlags _ WayEventLog = []
@@ -1877,6 +1882,7 @@ defaultDynFlags mySettings (myLlvmTargets, myLlvmPasses) =
         maxPmCheckIterations    = 2000000,
         ruleCheck               = Nothing,
         inlineCheck             = Nothing,
+        binBlobThreshold        = 500000, -- 500K is a good default (see #16190)
         maxRelevantBinds        = Just 6,
         maxValidHoleFits   = Just 6,
         maxRefHoleFits     = Just 6,
@@ -2376,6 +2382,19 @@ xopt_unset dfs f
     = let onoffs = Off f : extensions dfs
       in dfs { extensions = onoffs,
                extensionFlags = flattenExtensionFlags (language dfs) onoffs }
+
+-- | Set or unset a 'LangExt.Extension', unless it has been explicitly
+--   set or unset before.
+xopt_set_unlessExplSpec
+        :: LangExt.Extension
+        -> (DynFlags -> LangExt.Extension -> DynFlags)
+        -> DynFlags -> DynFlags
+xopt_set_unlessExplSpec ext setUnset dflags =
+    let referedExts = stripOnOff <$> extensions dflags
+        stripOnOff (On x)  = x
+        stripOnOff (Off x) = x
+    in
+        if ext `elem` referedExts then dflags else setUnset dflags ext
 
 lang_set :: DynFlags -> Maybe Language -> DynFlags
 lang_set dflags lang =
@@ -2986,10 +3005,10 @@ dynamic_flags_deps = [
   , make_ord_flag defFlag "pgmc"
       (hasArg (\f -> alterSettings (\s -> s { sPgm_c   = (f,[]),
                                               -- Don't pass -no-pie with -pgmc
-                                              -- (see Trac #15319)
+                                              -- (see #15319)
                                               sGccSupportsNoPie = False})))
   , make_ord_flag defFlag "pgms"
-      (hasArg (\f -> alterSettings (\s -> s { sPgm_s   = (f,[])})))
+      (HasArg (\_ -> addWarn "Object splitting was removed in GHC 8.8"))
   , make_ord_flag defFlag "pgma"
       (hasArg (\f -> alterSettings (\s -> s { sPgm_a   = (f,[])})))
   , make_ord_flag defFlag "pgml"
@@ -3030,9 +3049,7 @@ dynamic_flags_deps = [
         alterSettings (\s -> s { sOpt_windres = f : sOpt_windres s})))
 
   , make_ord_flag defGhcFlag "split-objs"
-      (NoArg (if can_split
-                then setGeneralFlag Opt_SplitObjs
-                else addWarn "ignoring -split-objs"))
+      (NoArg $ addWarn "ignoring -split-objs")
 
   , make_ord_flag defGhcFlag "split-sections"
       (noArgM (\dflags -> do
@@ -3493,6 +3510,8 @@ dynamic_flags_deps = [
 
         ------ Plugin flags ------------------------------------------------
   , make_ord_flag defGhcFlag "fplugin-opt" (hasArg addPluginModuleNameOption)
+  , make_ord_flag defGhcFlag "fplugin-trustworthy"
+      (NoArg (setGeneralFlag Opt_PluginTrustworthy))
   , make_ord_flag defGhcFlag "fplugin"     (hasArg addPluginModuleName)
   , make_ord_flag defGhcFlag "fclear-plugins" (noArg clearPluginModuleNames)
   , make_ord_flag defGhcFlag "ffrontend-opt" (hasArg addFrontendPluginOption)
@@ -3504,6 +3523,8 @@ dynamic_flags_deps = [
                                                 setOptLevel (mb_n `orElse` 1)))
                 -- If the number is missing, use 1
 
+  , make_ord_flag defFlag "fbinary-blob-threshold"
+      (intSuffix (\n d -> d { binBlobThreshold = fromIntegral n }))
 
   , make_ord_flag defFlag "fmax-relevant-binds"
       (intSuffix (\n d -> d { maxRelevantBinds = Just n }))
@@ -3732,7 +3753,7 @@ dynamic_flags_deps = [
                   "-XDeriveGeneric for generic programming support.") ]
 
 -- | This is where we handle unrecognised warning flags. We only issue a warning
--- if -Wunrecognised-warning-flags is set. See Trac #11429 for context.
+-- if -Wunrecognised-warning-flags is set. See #11429 for context.
 unrecognisedWarning :: String -> Flag (CmdLineP DynFlags)
 unrecognisedWarning prefix = defHiddenFlag prefix (Prefix action)
   where
@@ -3962,7 +3983,8 @@ wWarningFlagsDeps = [
   flagSpec "hi-shadowing"                Opt_WarnHiShadows,
   flagSpec "inaccessible-code"           Opt_WarnInaccessibleCode,
   flagSpec "implicit-prelude"            Opt_WarnImplicitPrelude,
-  flagSpec "implicit-kind-vars"          Opt_WarnImplicitKindVars,
+  depFlagSpec "implicit-kind-vars"       Opt_WarnImplicitKindVars
+    "it is now an error",
   flagSpec "incomplete-patterns"         Opt_WarnIncompletePatterns,
   flagSpec "incomplete-record-updates"   Opt_WarnIncompletePatternsRecUpd,
   flagSpec "incomplete-uni-patterns"     Opt_WarnIncompleteUniPatterns,
@@ -4018,10 +4040,13 @@ wWarningFlagsDeps = [
   flagSpec "unused-pattern-binds"        Opt_WarnUnusedPatternBinds,
   flagSpec "unused-top-binds"            Opt_WarnUnusedTopBinds,
   flagSpec "unused-type-patterns"        Opt_WarnUnusedTypePatterns,
+  flagSpec "unused-record-wildcards"     Opt_WarnUnusedRecordWildcards,
+  flagSpec "redundant-record-wildcards"  Opt_WarnRedundantRecordWildcards,
   flagSpec "warnings-deprecations"       Opt_WarnWarningsDeprecations,
   flagSpec "wrong-do-bind"               Opt_WarnWrongDoBind,
   flagSpec "missing-pattern-synonym-signatures"
                                     Opt_WarnMissingPatternSynonymSignatures,
+  flagSpec "missing-deriving-strategies" Opt_WarnMissingDerivingStrategies,
   flagSpec "simplifiable-class-constraints" Opt_WarnSimplifiableClassConstraints,
   flagSpec "missing-home-modules"        Opt_WarnMissingHomeModules,
   flagSpec "unrecognised-warning-flags"  Opt_WarnUnrecognisedWarningFlags,
@@ -4082,6 +4107,7 @@ fFlagsDeps = [
   flagSpec "stg-cse"                          Opt_StgCSE,
   flagSpec "stg-lift-lams"                    Opt_StgLiftLams,
   flagSpec "cpr-anal"                         Opt_CprAnal,
+  flagSpec "defer-diagnostics"                Opt_DeferDiagnostics,
   flagSpec "defer-type-errors"                Opt_DeferTypeErrors,
   flagSpec "defer-typed-holes"                Opt_DeferTypedHoles,
   flagSpec "defer-out-of-scope-variables"     Opt_DeferOutOfScopeVariables,
@@ -4256,6 +4282,14 @@ supportedExtensions :: [String]
 supportedExtensions = concatMap toFlagSpecNamePair xFlags
   where
     toFlagSpecNamePair flg
+#if !defined(GHCI)
+      -- IMPORTANT! Make sure that `ghc --supported-extensions` omits
+      -- "TemplateHaskell"/"QuasiQuotes" when it's known not to work out of the
+      -- box. See also GHC #11102 and #16331 for more details about
+      -- the rationale
+      | flagSpecFlag flg == LangExt.TemplateHaskell  = [noName]
+      | flagSpecFlag flg == LangExt.QuasiQuotes      = [noName]
+#endif
       | otherwise = [name, noName]
       where
         noName = "No" ++ name
@@ -4523,7 +4557,7 @@ impliedXFlags
     , (LangExt.ExistentialQuantification, turnOn, LangExt.ExplicitForAll)
     , (LangExt.FlexibleInstances,         turnOn, LangExt.TypeSynonymInstances)
     , (LangExt.FunctionalDependencies,    turnOn, LangExt.MultiParamTypeClasses)
-    , (LangExt.MultiParamTypeClasses,     turnOn, LangExt.ConstrainedClassMethods)  -- c.f. Trac #7854
+    , (LangExt.MultiParamTypeClasses,     turnOn, LangExt.ConstrainedClassMethods)  -- c.f. #7854
     , (LangExt.TypeFamilyDependencies,    turnOn, LangExt.TypeFamilies)
 
     , (LangExt.RebindableSyntax, turnOff, LangExt.ImplicitPrelude)      -- NB: turn off!
@@ -4641,7 +4675,7 @@ optLevelFlags -- see Note [Documenting optimisation flags]
 
 {- Note [Eta-reduction in -O0]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Trac #11562 showed an example which tripped an ASSERT in CoreToStg; a
+#11562 showed an example which tripped an ASSERT in CoreToStg; a
 function was marked as MayHaveCafRefs when in fact it obviously
 didn't.  Reason was:
  * Eta reduction wasn't happening in the simplifier, but it was
@@ -4769,7 +4803,9 @@ minusWallOpts
         Opt_WarnUnusedDoBind,
         Opt_WarnTrustworthySafe,
         Opt_WarnUntickedPromotedConstructors,
-        Opt_WarnMissingPatternSynonymSignatures
+        Opt_WarnMissingPatternSynonymSignatures,
+        Opt_WarnUnusedRecordWildcards,
+        Opt_WarnRedundantRecordWildcards
       ]
 
 -- | Things you get with -Weverything, i.e. *all* known warnings flags
@@ -4786,7 +4822,6 @@ minusWcompatOpts
     = [ Opt_WarnMissingMonadFailInstances
       , Opt_WarnSemigroup
       , Opt_WarnNonCanonicalMonoidInstances
-      , Opt_WarnImplicitKindVars
       , Opt_WarnStarIsType
       ]
 
@@ -5518,7 +5553,7 @@ picCCOpts dflags = pieOpts ++ picOpts
        | gopt Opt_PIC dflags || WayDyn `elem` ways dflags ->
           ["-fPIC", "-U__PIC__", "-D__PIC__"]
       -- gcc may be configured to have PIC on by default, let's be
-      -- explicit here, see Trac #15847
+      -- explicit here, see #15847
        | otherwise -> ["-fno-PIC"]
 
     pieOpts
@@ -5544,12 +5579,6 @@ picPOpts dflags
  | otherwise           = []
 
 -- -----------------------------------------------------------------------------
--- Splitting
-
-can_split :: Bool
-can_split = cSupportsSplitObjs == "YES"
-
--- -----------------------------------------------------------------------------
 -- Compiler Info
 
 compilerInfo :: DynFlags -> [(String, String)]
@@ -5571,7 +5600,7 @@ compilerInfo dflags
        ("Host platform",               cHostPlatformString),
        ("Target platform",             cTargetPlatformString),
        ("Have interpreter",            cGhcWithInterpreter),
-       ("Object splitting supported",  cSupportsSplitObjs),
+       ("Object splitting supported",  showBool False),
        ("Have native code generator",  cGhcWithNativeCodeGen),
        ("Support SMP",                 cGhcWithSMP),
        ("Tables next to code",         cGhcEnableTablesNextToCode),

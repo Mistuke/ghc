@@ -1,7 +1,7 @@
 module Settings (
     getArgs, getLibraryWays, getRtsWays, flavour, knownPackages,
-    findPackageByName, isLibrary, stagePackages, programContext,
-    getIntegerPackage
+    findPackageByName, unsafeFindPackageByName, unsafeFindPackageByPath,
+    isLibrary, stagePackages, programContext, getIntegerPackage
     ) where
 
 import CommandLine
@@ -11,12 +11,15 @@ import Packages
 import UserSettings (userFlavours, userPackages, userDefaultFlavour)
 
 import {-# SOURCE #-} Settings.Default
+import Settings.Flavours.Benchmark
 import Settings.Flavours.Development
+import Settings.Flavours.Llvm
 import Settings.Flavours.Performance
 import Settings.Flavours.Profiled
 import Settings.Flavours.Quick
 import Settings.Flavours.Quickest
 import Settings.Flavours.QuickCross
+import Settings.Flavours.GhcInGhci
 
 getArgs :: Args
 getArgs = expr flavour >>= args
@@ -34,9 +37,11 @@ stagePackages stage = do
 
 hadrianFlavours :: [Flavour]
 hadrianFlavours =
-    [ defaultFlavour, developmentFlavour Stage1, developmentFlavour Stage2
-    , performanceFlavour, profiledFlavour, quickFlavour, quickestFlavour
-    , quickCrossFlavour ]
+    [ benchmarkFlavour, defaultFlavour, developmentFlavour Stage1
+    , developmentFlavour Stage2, performanceFlavour, profiledFlavour
+    , quickFlavour, quickestFlavour, quickCrossFlavour, benchmarkLlvmFlavour
+    , performanceLlvmFlavour, profiledLlvmFlavour, quickLlvmFlavour
+    , ghcInGhciFlavour ]
 
 flavour :: Action Flavour
 flavour = do
@@ -48,12 +53,17 @@ flavour = do
 getIntegerPackage :: Expr Package
 getIntegerPackage = expr (integerLibrary =<< flavour)
 
+-- TODO: there is duplication and inconsistency between this and
+-- Rules.Program.getProgramContexts. There should only be one way to get a
+-- context / contexts for a given stage and package.
 programContext :: Stage -> Package -> Action Context
 programContext stage pkg = do
     profiled <- ghcProfiled <$> flavour
-    return $ if pkg == ghc && profiled && stage > Stage0
-             then Context stage pkg profiling
-             else vanillaContext stage pkg
+    dynGhcProgs <- dynamicGhcPrograms =<< flavour
+    return . Context stage pkg . wayFromUnits . concat $
+        [ [ Profiling  | pkg == ghc && profiled && stage > Stage0 ]
+        , [ Dynamic    | dynGhcProgs && stage > Stage0 ]
+        ]
 
 -- TODO: switch to Set Package as the order of packages should not matter?
 -- Otherwise we have to keep remembering to sort packages from time to time.
@@ -64,3 +74,13 @@ knownPackages = sort $ ghcPackages ++ userPackages
 -- Note: this is slow but we keep it simple as there are just ~50 packages
 findPackageByName :: PackageName -> Maybe Package
 findPackageByName name = find (\pkg -> pkgName pkg == name) knownPackages
+
+unsafeFindPackageByName :: PackageName -> Package
+unsafeFindPackageByName name = fromMaybe (error msg) $ findPackageByName name
+  where
+    msg = "unsafeFindPackageByName: No package with name " ++ name
+
+unsafeFindPackageByPath :: FilePath -> Package
+unsafeFindPackageByPath path = err $ find (\pkg -> pkgPath pkg == path) knownPackages
+  where
+    err = fromMaybe $ error ("findPackageByPath: No package for path " ++ path)

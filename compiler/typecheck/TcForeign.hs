@@ -206,7 +206,7 @@ used even though it is not mentioned expclitly in the source, so we don't
 want to report it as "defined but not used" or "imported but not used".
 eg     newtype D = MkD Int
        foreign import foo :: D -> IO ()
-Here 'MkD' us used.  See Trac #7408.
+Here 'MkD' us used.  See #7408.
 
 GHC also expands type functions during this process, so it's not enough
 just to look at the free variables of the declaration.
@@ -277,7 +277,7 @@ tcCheckFIType arg_tys res_ty (CImport (L lc cconv) safety mh l@(CLabel _) src)
   = do checkCg checkCOrAsmOrLlvmOrInterp
        -- NB check res_ty not sig_ty!
        --    In case sig_ty is (forall a. ForeignPtr a)
-       check (isFFILabelTy (mkFunTys arg_tys res_ty)) (illegalForeignTyErr Outputable.empty)
+       check (isFFILabelTy (mkVisFunTys arg_tys res_ty)) (illegalForeignTyErr Outputable.empty)
        cconv' <- checkCConv cconv
        return (CImport (L lc cconv') safety mh l src)
 
@@ -307,7 +307,7 @@ tcCheckFIType arg_tys res_ty idecl@(CImport (L lc cconv) (L ls safety) mh
           addErrTc (illegalForeignTyErr Outputable.empty (text "At least one argument expected"))
         (arg1_ty:arg_tys) -> do
           dflags <- getDynFlags
-          let curried_res_ty = mkFunTys arg_tys res_ty
+          let curried_res_ty = mkVisFunTys arg_tys res_ty
           check (isFFIDynTy curried_res_ty arg1_ty)
                 (illegalForeignTyErr argument)
           checkForeignArgs (isFFIArgumentTy dflags safety) arg_tys

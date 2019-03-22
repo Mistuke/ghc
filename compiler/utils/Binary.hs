@@ -539,7 +539,7 @@ instance Binary Integer where
 
     {-
     -- This code is currently commented out.
-    -- See https://ghc.haskell.org/trac/ghc/ticket/3379#comment:10 for
+    -- See https://gitlab.haskell.org/ghc/ghc/issues/3379#note_104346 for
     -- discussion.
 
     put_ bh (S# i#) = do putByte bh 0; put_ bh (I# i#)
@@ -916,7 +916,7 @@ type SymbolTable = Array Int Name
 ---------------------------------------------------------
 
 putFS :: BinHandle -> FastString -> IO ()
-putFS bh fs = putBS bh $ fastStringToByteString fs
+putFS bh fs = putBS bh $ bytesFS fs
 
 getFS :: BinHandle -> IO FastString
 getFS bh = do

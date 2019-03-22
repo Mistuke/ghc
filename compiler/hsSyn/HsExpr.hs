@@ -43,6 +43,8 @@ import Util
 import Outputable
 import FastString
 import Type
+import TcType (TcType)
+import {-# SOURCE #-} TcRnTypes (TcLclEnv)
 
 -- libraries:
 import Data.Data hiding (Fixity(..))
@@ -245,7 +247,7 @@ When it calls RnEnv.unknownNameSuggestions to identify these alternatives, the
 typechecker must provide a GlobalRdrEnv.  If it provided the current one, which
 contains top-level declarations for the entire module, the error message would
 incorrectly suggest the out-of-scope `bar` and `bad` as possible alternatives
-for `bar` (see Trac #11680).  Instead, the typechecker must use the same
+for `bar` (see #11680).  Instead, the typechecker must use the same
 GlobalRdrEnv the renamer used when it determined that `bar` is out-of-scope.
 
 To obtain this GlobalRdrEnv, can the typechecker simply use the out-of-scope
@@ -589,38 +591,6 @@ data HsExpr p
              (LHsExpr p)        -- Body
 
   ---------------------------------------
-  -- The following are commands, not expressions proper
-  -- They are only used in the parsing stage and are removed
-  --    immediately in parser.RdrHsSyn.checkCommand
-
-  -- | - 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.Annlarrowtail',
-  --          'ApiAnnotation.Annrarrowtail','ApiAnnotation.AnnLarrowtail',
-  --          'ApiAnnotation.AnnRarrowtail'
-
-  -- For details on above see note [Api annotations] in ApiAnnotation
-  | HsArrApp             -- Arrow tail, or arrow application (f -< arg)
-        (XArrApp p)     -- type of the arrow expressions f,
-                        -- of the form a t t', where arg :: t
-        (LHsExpr p)     -- arrow expression, f
-        (LHsExpr p)     -- input expression, arg
-        HsArrAppType    -- higher-order (-<<) or first-order (-<)
-        Bool            -- True => right-to-left (f -< arg)
-                        -- False => left-to-right (arg >- f)
-
-  -- | - 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnOpenB' @'(|'@,
-  --         'ApiAnnotation.AnnCloseB' @'|)'@
-
-  -- For details on above see note [Api annotations] in ApiAnnotation
-  | HsArrForm            -- Command formation,  (| e cmd1 .. cmdn |)
-        (XArrForm p)
-        (LHsExpr p)      -- the operator
-                         -- after type-checking, a type abstraction to be
-                         -- applied to the type of the local environment tuple
-        (Maybe Fixity)   -- fixity (filled in by the renamer), for forms that
-                         -- were converted from OpApp's by the renamer
-        [LHsCmdTop p]    -- argument commands
-
-  ---------------------------------------
   -- Haskell program coverage (Hpc) Support
 
   | HsTick
@@ -788,11 +758,6 @@ type instance XStatic        GhcPs = NoExt
 type instance XStatic        GhcRn = NameSet
 type instance XStatic        GhcTc = NameSet
 
-type instance XArrApp        GhcPs = NoExt
-type instance XArrApp        GhcRn = NoExt
-type instance XArrApp        GhcTc = Type
-
-type instance XArrForm       (GhcPass _) = NoExt
 type instance XTick          (GhcPass _) = NoExt
 type instance XBinTick       (GhcPass _) = NoExt
 type instance XTickPragma    (GhcPass _) = NoExt
@@ -1142,22 +1107,6 @@ ppr_expr (HsTickPragma _ _ externalSrcLoc _ exp)
           ppr exp,
           text ")"]
 
-ppr_expr (HsArrApp _ arrow arg HsFirstOrderApp True)
-  = hsep [ppr_lexpr arrow, larrowt, ppr_lexpr arg]
-ppr_expr (HsArrApp _ arrow arg HsFirstOrderApp False)
-  = hsep [ppr_lexpr arg, arrowt, ppr_lexpr arrow]
-ppr_expr (HsArrApp _ arrow arg HsHigherOrderApp True)
-  = hsep [ppr_lexpr arrow, larrowtt, ppr_lexpr arg]
-ppr_expr (HsArrApp _ arrow arg HsHigherOrderApp False)
-  = hsep [ppr_lexpr arg, arrowtt, ppr_lexpr arrow]
-
-ppr_expr (HsArrForm _ (L _ (HsVar _ (L _ v))) (Just _) [arg1, arg2])
-  = sep [pprCmdArg (unLoc arg1), hsep [pprInfixOcc v, pprCmdArg (unLoc arg2)]]
-ppr_expr (HsArrForm _ (L _ (HsConLikeOut _ c)) (Just _) [arg1, arg2])
-  = sep [pprCmdArg (unLoc arg1), hsep [pprInfixOcc (conLikeName c), pprCmdArg (unLoc arg2)]]
-ppr_expr (HsArrForm _ op _ args)
-  = hang (text "(|" <+> ppr_lexpr op)
-         4 (sep (map (pprCmdArg.unLoc) args) <+> text "|)")
 ppr_expr (HsRecFld _ f) = ppr f
 ppr_expr (XExpr x) = ppr x
 
@@ -1262,8 +1211,6 @@ hsExprNeedsParens p = go
     go (HsTick _ _ (L _ e))           = go e
     go (HsBinTick _ _ _ (L _ e))      = go e
     go (HsTickPragma _ _ _ _ (L _ e)) = go e
-    go (HsArrApp{})                   = True
-    go (HsArrForm{})                  = True
     go (RecordCon{})                  = False
     go (HsRecFld{})                   = False
     go (XExpr{})                      = True
@@ -1530,8 +1477,8 @@ ppr_cmd (HsCmdArrForm _ (L _ (HsConLikeOut _ c)) Infix _    [arg1, arg2])
   = hang (pprCmdArg (unLoc arg1)) 4 (sep [ pprInfixOcc (conLikeName c)
                                          , pprCmdArg (unLoc arg2)])
 ppr_cmd (HsCmdArrForm _ op _ _ args)
-  = hang (text "(|" <> ppr_lexpr op)
-         4 (sep (map (pprCmdArg.unLoc) args) <> text "|)")
+  = hang (text "(|" <+> ppr_lexpr op)
+         4 (sep (map (pprCmdArg.unLoc) args) <+> text "|)")
 ppr_cmd (XCmd x) = ppr x
 
 pprCmdArg :: (OutputableBndrId (GhcPass p)) => HsCmdTop (GhcPass p) -> SDoc
@@ -2060,7 +2007,7 @@ Note [The type of bind in Stmts]
 Some Stmts, notably BindStmt, keep the (>>=) bind operator.
 We do NOT assume that it has type
     (>>=) :: m a -> (a -> m b) -> m b
-In some cases (see Trac #303, #1537) it might have a more
+In some cases (see #303, #1537) it might have a more
 exotic type, such as
     (>>=) :: m i j a -> (a -> m j k b) -> m i k b
 So we must be careful not to make assumptions about the type.
@@ -2354,7 +2301,7 @@ pprComp quals     -- Prints:  body | qual1, ..., qualn
        -- one, we simply treat it like a normal list. This does arise
        -- occasionally in code that GHC generates, e.g., in implementations of
        -- 'range' for derived 'Ix' instances for product datatypes with exactly
-       -- one constructor (e.g., see Trac #12583).
+       -- one constructor (e.g., see #12583).
        then ppr body
        else hang (ppr body <+> vbar) 2 (pprQuals initStmts)
   | otherwise
@@ -2403,6 +2350,8 @@ data HsSplice id
         (XSpliced id)
         ThModFinalizers     -- TH finalizers produced by the splice.
         (HsSplicedThing id) -- The result of splicing
+   | HsSplicedT
+      DelayedSplice
    | XSplice (XXSplice id)  -- Note [Trees that Grow] extension point
 
 type instance XTypedSplice   (GhcPass _) = NoExt
@@ -2442,6 +2391,21 @@ instance Data ThModFinalizers where
   toConstr  a   = mkConstr (dataTypeOf a) "ThModFinalizers" [] Data.Prefix
   dataTypeOf a  = mkDataType "HsExpr.ThModFinalizers" [toConstr a]
 
+-- See Note [Running typed splices in the zonker]
+-- These are the arguments that are passed to `TcSplice.runTopSplice`
+data DelayedSplice =
+  DelayedSplice
+    TcLclEnv          -- The local environment to run the splice in
+    (LHsExpr GhcRn)   -- The original renamed expression
+    TcType            -- The result type of running the splice, unzonked
+    (LHsExpr GhcTcId) -- The typechecked expression to run and splice in the result
+
+-- A Data instance which ignores the argument of 'DelayedSplice'.
+instance Data DelayedSplice where
+  gunfold _ _ _ = panic "DelayedSplice"
+  toConstr  a   = mkConstr (dataTypeOf a) "DelayedSplice" [] Data.Prefix
+  dataTypeOf a  = mkDataType "HsExpr.DelayedSplice" [toConstr a]
+
 -- | Haskell Spliced Thing
 --
 -- Values that can result from running a splice.
@@ -2467,7 +2431,6 @@ data UntypedSpliceFlavour
 
 -- | Pending Type-checker Splice
 data PendingTcSplice
-  -- AZ:TODO: The hard-coded GhcTc feels wrong.
   = PendingTcSplice SplicePointName (LHsExpr GhcTc)
 
 {-
@@ -2573,6 +2536,7 @@ pprSplice (HsUntypedSplice _ NoParens n e)
   = ppr_splice empty  n e empty
 pprSplice (HsQuasiQuote _ n q _ s)      = ppr_quasi n q s
 pprSplice (HsSpliced _ _ thing)         = ppr thing
+pprSplice (HsSplicedT {})               = text "Unevaluated typed splice"
 pprSplice (XSplice x)                   = ppr x
 
 ppr_quasi :: OutputableBndr p => p -> p -> FastString -> SDoc

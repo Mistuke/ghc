@@ -247,8 +247,7 @@ buildClass tycon_name binders roles fds Nothing
     do  { traceIf (text "buildClass")
 
         ; tc_rep_name  <- newTyConRepName tycon_name
-        ; let univ_bndrs = tyConTyVarBinders binders
-              univ_tvs   = binderVars univ_bndrs
+        ; let univ_tvs = binderVars binders
               tycon = mkClassTyCon tycon_name binders roles
                                    AbstractTyCon rec_clas tc_rep_name
               result = mkAbstractClass tycon_name univ_tvs fds tycon
@@ -371,7 +370,7 @@ Consider
 
 We cannot represent this by a newtype, even though it's not
 existential, because there are two value fields (the equality
-predicate and op. See Trac #2238
+predicate and op. See #2238
 
 Moreover,
           class (a ~ F b) => C a b where {}

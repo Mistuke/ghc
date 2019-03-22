@@ -237,6 +237,7 @@ void initRtsFlagsDefaults(void)
     RtsFlags.MiscFlags.generate_dump_file      = false;
     RtsFlags.MiscFlags.machineReadable         = false;
     RtsFlags.MiscFlags.internalCounters        = false;
+    RtsFlags.MiscFlags.linkerAlwaysPic         = DEFAULT_LINKER_ALWAYS_PIC;
     RtsFlags.MiscFlags.linkerMemBase           = 0;
     RtsFlags.MiscFlags.ioManager               = IO_MNGR_POSIX;
 #if defined(THREADED_RTS) && defined(mingw32_HOST_OS)
@@ -330,9 +331,11 @@ usage_text[] = {
 "  -Pa        Give information about *all* cost centres in tree format",
 "  -pj        Output cost-center profile in JSON format",
 "",
+"  -h         Heap residency profile, by cost centre stack",
 "  -h<break-down> Heap residency profile (hp2ps) (output file <program>.hp)",
 "     break-down: c = cost centre stack (default)",
 "                 m = module",
+"                 T = closure type",
 "                 d = closure description",
 "                 y = type description",
 "                 r = retainer",
@@ -354,9 +357,10 @@ usage_text[] = {
 "  -xt            Include threads (TSOs) in a heap profile",
 "",
 "  -xc      Show current cost centre stack on raising an exception",
+#else /* PROFILING */
+"  -h       Heap residency profile (output file <program>.hp)",
+"  -hT      Produce a heap profile grouped by closure type",
 #endif /* PROFILING */
-"",
-"  -hT            Produce a heap profile grouped by closure type"
 
 #if defined(TRACING)
 "",
@@ -379,10 +383,6 @@ usage_text[] = {
 "             the initial enabled event classes are 'sgpu'",
 #endif
 
-#if !defined(PROFILING)
-"",
-"  -h       Heap residency profile (output file <program>.hp)",
-#endif
 "  -i<sec>  Time between heap profile samples (seconds, default: 0.1)",
 "",
 #if defined(TICKY_TICKY)
@@ -472,6 +472,11 @@ usage_text[] = {
 "  -e<n>     Maximum number of outstanding local sparks (default: 4096)",
 #endif
 #if defined(x86_64_HOST_ARCH)
+#if !DEFAULT_LINKER_ALWAYS_PIC
+"  -xp       Assume that all object files were compiled with -fPIC",
+"            -fexternal-dynamic-refs and load them anywhere in the address",
+"            space",
+#endif
 "  -xm       Base address to mmap memory in the GHCi linker",
 "            (hex; must be <80000000)",
 #endif
@@ -806,7 +811,7 @@ static void procRtsOpts (int rts_argc0,
 
         } else {
             /* 0 is dash, 1 is first letter */
-            /* see Trac #9839 */
+            /* see #9839 */
             unchecked_arg_start = 1;
             switch(rts_argv[arg][1]) {
 
@@ -1552,6 +1557,11 @@ error = true;
                     break;
 
 #if defined(x86_64_HOST_ARCH)
+                case 'p': /* linkerAlwaysPic */
+                    OPTION_UNSAFE;
+                    RtsFlags.MiscFlags.linkerAlwaysPic = true;
+                    break;
+
                 case 'm': /* linkerMemBase */
                     OPTION_UNSAFE;
                     if (rts_argv[arg][3] != '\0') {
@@ -1605,12 +1615,12 @@ error = true;
                 break;  /* defensive programming */
 
             /* check the rest to be sure there is nothing afterwards.*/
-            /* see Trac #9839 */
+            /* see #9839 */
             check_rest:
                 {
                     /* start checking from the first unchecked position,
                      * not from index 2*/
-                    /* see Trac #9839 */
+                    /* see #9839 */
                     if (rts_argv[arg][unchecked_arg_start] != '\0') {
                       errorBelch("flag -%c given an argument"
                                  " when none was expected: %s",
@@ -1726,7 +1736,7 @@ static void normaliseRtsOpts (void)
 
         // If allocation area is larger that CPU cache
         // we can finish scanning quicker doing work-stealing
-        // scan. Trac #9221
+        // scan. #9221
         // 32M looks big enough not to fit into L2 cache
         // of popular modern CPUs.
         if (alloc_area_bytes >= 32 * 1024 * 1024) {
@@ -1955,6 +1965,7 @@ static bool read_heap_profiling_flag(const char *arg)
     case 'r':
     case 'B':
     case 'b':
+    case 'T':
         if (arg[2] != '\0' && arg[3] != '\0') {
             {
                 const char *left  = strchr(arg, '{');

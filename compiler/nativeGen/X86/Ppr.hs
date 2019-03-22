@@ -47,9 +47,6 @@ import FastString
 import Outputable
 
 import Data.Word
-
-import Data.Char
-
 import Data.Bits
 
 -- -----------------------------------------------------------------------------
@@ -86,17 +83,14 @@ pprNatCmmDecl proc@(CmmProc top_info lbl _ (ListGraph blocks)) =
   pprProcAlignment $$
   case topInfoTable proc of
     Nothing ->
-       case blocks of
-         []     -> -- special case for split markers:
-           pprLabel lbl
-         blocks -> -- special case for code without info table:
-           pprSectionAlign (Section Text lbl) $$
-           pprProcAlignment $$
-           pprLabel lbl $$ -- blocks guaranteed not null, so label needed
-           vcat (map (pprBasicBlock top_info) blocks) $$
-           (if debugLevel dflags > 0
-            then ppr (mkAsmTempEndLabel lbl) <> char ':' else empty) $$
-           pprSizeDecl lbl
+        -- special case for code without info table:
+        pprSectionAlign (Section Text lbl) $$
+        pprProcAlignment $$
+        pprLabel lbl $$ -- blocks guaranteed not null, so label needed
+        vcat (map (pprBasicBlock top_info) blocks) $$
+        (if debugLevel dflags > 0
+         then ppr (mkAsmTempEndLabel lbl) <> char ':' else empty) $$
+        pprSizeDecl lbl
 
     Just (Statics info_lbl _) ->
       sdocWithPlatform $ \platform ->
@@ -156,8 +150,7 @@ pprDatas (align, (Statics lbl dats))
  = vcat (pprAlign align : pprLabel lbl : map pprData dats)
 
 pprData :: CmmStatic -> SDoc
-pprData (CmmString str)
- = ptext (sLit "\t.asciz ") <> doubleQuotes (pprASCII str)
+pprData (CmmString str) = pprBytes str
 
 pprData (CmmUninitialised bytes)
  = sdocWithPlatform $ \platform ->
@@ -242,45 +235,6 @@ pprLabel :: CLabel -> SDoc
 pprLabel lbl = pprGloblDecl lbl
             $$ pprTypeDecl lbl
             $$ (ppr lbl <> char ':')
-
-{-
-Note [Pretty print ASCII when AsmCodeGen]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Previously, when generating assembly code, we created SDoc with
-`(ptext . sLit)` for every bytes in literal bytestring, then
-combine them using `hcat`.
-
-When handling literal bytestrings with millions of bytes,
-millions of SDoc would be created and to combine, leading to
-high memory usage.
-
-Now we escape the given bytestring to string directly and construct
-SDoc only once. This improvement could dramatically decrease the
-memory allocation from 4.7GB to 1.3GB when embedding a 3MB literal
-string in source code. See Trac #14741 for profiling results.
--}
-
-pprASCII :: [Word8] -> SDoc
-pprASCII str
-  -- Transform this given literal bytestring to escaped string and construct
-  -- the literal SDoc directly.
-  -- See Trac #14741
-  -- and Note [Pretty print ASCII when AsmCodeGen]
-  = ptext $ sLit $ foldr (\w s -> (do1 . fromIntegral) w ++ s) "" str
-    where
-       do1 :: Int -> String
-       do1 w | '\t' <- chr w = "\\t"
-             | '\n' <- chr w = "\\n"
-             | '"'  <- chr w = "\\\""
-             | '\\' <- chr w = "\\\\"
-             | isPrint (chr w) = [chr w]
-             | otherwise = '\\' : octal w
-
-       octal :: Int -> String
-       octal w = [ chr (ord '0' + (w `div` 64) `mod` 8)
-                 , chr (ord '0' + (w `div` 8) `mod` 8)
-                 , chr (ord '0' + w `mod` 8)
-                 ]
 
 pprAlign :: Int -> SDoc
 pprAlign bytes
@@ -734,6 +688,8 @@ pprInstr (XOR FF64 src dst) = pprOpOp (sLit "xorpd") FF64 src dst
 pprInstr (XOR format src dst) = pprFormatOpOp (sLit "xor")  format src dst
 
 pprInstr (POPCNT format src dst) = pprOpOp (sLit "popcnt") format src (OpReg dst)
+pprInstr (LZCNT format src dst)  = pprOpOp (sLit "lzcnt")  format src (OpReg dst)
+pprInstr (TZCNT format src dst)  = pprOpOp (sLit "tzcnt")  format src (OpReg dst)
 pprInstr (BSF format src dst)    = pprOpOp (sLit "bsf")    format src (OpReg dst)
 pprInstr (BSR format src dst)    = pprOpOp (sLit "bsr")    format src (OpReg dst)
 
@@ -770,7 +726,7 @@ pprInstr (TEST format src dst) = sdocWithPlatform $ \platform ->
         -- The mask must have the high bit clear for this smaller encoding
         -- to be completely equivalent to the original; in particular so
         -- that the signed comparison condition bits are the same as they
-        -- would be if doing a full word comparison. See Trac #13425.
+        -- would be if doing a full word comparison. See #13425.
         (OpImm (ImmInteger mask), OpReg dstReg)
           | 0 <= mask && mask < 128 -> minSizeOfReg platform dstReg
         _ -> format

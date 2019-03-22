@@ -21,7 +21,7 @@
 --  http://ghc.haskell.org/trac/ghc/wiki/Commentary/PrimOps
 --
 -- Note in particular that Haskell block-style comments are not recognized
--- here, so stick to '--' (even for Notes spanning mutliple lines).
+-- here, so stick to '--' (even for Notes spanning multiple lines).
 
 -- This file is divided into named sections, each containing or more
 -- primop entries. Section headers have the format:
@@ -2478,9 +2478,6 @@ section "Exceptions"
 --          0#      -> maskAsynchExceptions# (\st -> case ma of MVar a -> ...)
 -- The outer case just decides whether to mask exceptions, but we don't want
 -- thereby to hide the strictness in 'ma'!  Hence the use of strictApply1Dmd.
---
--- For catch, catchSTM, and catchRetry, we must be extra careful; see
--- Note [Exceptions and strictness] in Demand
 
 primop  CatchOp "catch#" GenPrimOp
           (State# RealWorld -> (# State# RealWorld, a #) )
@@ -2499,8 +2496,7 @@ primop  RaiseOp "raise#" GenPrimOp
    b -> o
       -- NB: the type variable "o" is "a", but with OpenKind
    with
-   strictness  = { \ _arity -> mkClosedStrictSig [topDmd] exnRes }
-      -- NB: result is ThrowsExn
+   strictness  = { \ _arity -> mkClosedStrictSig [topDmd] botRes }
    out_of_line = True
    has_side_effects = True
      -- raise# certainly throws a Haskell exception and hence has_side_effects
@@ -2528,7 +2524,7 @@ primop  RaiseOp "raise#" GenPrimOp
 primop  RaiseIOOp "raiseIO#" GenPrimOp
    a -> State# RealWorld -> (# State# RealWorld, b #)
    with
-   strictness  = { \ _arity -> mkClosedStrictSig [topDmd, topDmd] exnRes }
+   strictness  = { \ _arity -> mkClosedStrictSig [topDmd, topDmd] botRes }
    out_of_line = True
    has_side_effects = True
 
@@ -2579,7 +2575,7 @@ primop  AtomicallyOp "atomically#" GenPrimOp
    out_of_line = True
    has_side_effects = True
 
--- NB: retry#'s strictness information specifies it to throw an exception
+-- NB: retry#'s strictness information specifies it to diverge.
 -- This lets the compiler perform some extra simplifications, since retry#
 -- will technically never return.
 --
@@ -2588,14 +2584,11 @@ primop  AtomicallyOp "atomically#" GenPrimOp
 --     (# s2, a #) -> e
 -- with:
 --   retry# s1
--- where 'e' would be unreachable anyway.  See Trac #8091.
---
--- Note that it *does not* return botRes as the "exception" that is thrown may be
--- "caught" by catchRetry#. This mistake caused #14171.
+-- where 'e' would be unreachable anyway.  See #8091.
 primop  RetryOp "retry#" GenPrimOp
    State# RealWorld -> (# State# RealWorld, a #)
    with
-   strictness  = { \ _arity -> mkClosedStrictSig [topDmd] exnRes }
+   strictness  = { \ _arity -> mkClosedStrictSig [topDmd] botRes }
    out_of_line = True
    has_side_effects = True
 
@@ -3125,7 +3118,7 @@ primop  ReallyUnsafePtrEqualityOp "reallyUnsafePtrEquality#" GenPrimOp
 -- conservative, but it prevented reallyUnsafePtrEquality# from floating out of
 -- places where its arguments were known to be forced. Unfortunately, GHC could
 -- sometimes lose track of whether those arguments were forced, leading to let/app
--- invariant failures (see Trac 13027 and the discussion in Trac 11444). Now that
+-- invariant failures (see #13027 and the discussion in #11444). Now that
 -- ok_for_speculation skips over lifted arguments, we need to explicitly prevent
 -- reallyUnsafePtrEquality# from floating out. Imagine if we had
 --
@@ -3251,6 +3244,13 @@ primop  UnpackClosureOp "unpackClosure#" GenPrimOp
      payload of the given closure into two new arrays, and returns a pointer to
      the first word of the closure's info table, a non-pointer array for the raw
      bytes of the closure, and a pointer array for the pointers in the payload. }
+   with
+   out_of_line = True
+
+primop  ClosureSizeOp "closureSize#" GenPrimOp
+   a -> Int#
+   { {\tt closureSize\# closure} returns the size of the given closure in
+     machine words. }
    with
    out_of_line = True
 

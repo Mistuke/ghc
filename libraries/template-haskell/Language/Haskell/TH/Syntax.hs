@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable,
+{-# LANGUAGE CPP, DeriveDataTypeable,
              DeriveGeneric, FlexibleInstances, DefaultSignatures,
              RankNTypes, RoleAnnotations, ScopedTypeVariables,
              Trustworthy #-}
@@ -44,6 +44,7 @@ import GHC.ForeignSrcLang.Type
 import Language.Haskell.TH.LanguageExtensions
 import Numeric.Natural
 import Prelude
+import Foreign.ForeignPtr
 
 import qualified Control.Monad.Fail as Fail
 
@@ -178,7 +179,9 @@ runQ (Q m) = m
 instance Monad Q where
   Q m >>= k  = Q (m >>= \x -> unQ (k x))
   (>>) = (*>)
+#if !MIN_VERSION_base(4,13,0)
   fail       = Fail.fail
+#endif
 
 instance Fail.MonadFail Q where
   fail s     = report True s >> Q (Fail.fail "Q monad failure")
@@ -198,12 +201,53 @@ instance Applicative Q where
 -----------------------------------------------------
 
 type role TExp nominal   -- See Note [Role of TExp]
-newtype TExp a = TExp { unType :: Exp }
+newtype TExp a = TExp
+  { unType :: Exp -- ^ Underlying untyped Template Haskell expression
+  }
+-- ^ Represents an expression which has type @a@. Built on top of 'Exp', typed
+-- expressions allow for type-safe splicing via:
+--
+--   - typed quotes, written as @[|| ... ||]@ where @...@ is an expression; if
+--     that expression has type @a@, then the quotation has type
+--     @'Q' ('TExp' a)@
+--
+--   - typed splices inside of typed quotes, written as @$$(...)@ where @...@
+--     is an arbitrary expression of type @'Q' ('TExp' a)@
+--
+-- Traditional expression quotes and splices let us construct ill-typed
+-- expressions:
+--
+-- >>> fmap ppr $ runQ [| True == $( [| "foo" |] ) |]
+-- GHC.Types.True GHC.Classes.== "foo"
+-- >>> GHC.Types.True GHC.Classes.== "foo"
+-- <interactive> error:
+--     • Couldn't match expected type ‘Bool’ with actual type ‘[Char]’
+--     • In the second argument of ‘(==)’, namely ‘"foo"’
+--       In the expression: True == "foo"
+--       In an equation for ‘it’: it = True == "foo"
+--
+-- With typed expressions, the type error occurs when /constructing/ the
+-- Template Haskell expression:
+--
+-- >>> fmap ppr $ runQ [|| True == $$( [|| "foo" ||] ) ||]
+-- <interactive> error:
+--     • Couldn't match type ‘[Char]’ with ‘Bool’
+--       Expected type: Q (TExp Bool)
+--         Actual type: Q (TExp [Char])
+--     • In the Template Haskell quotation [|| "foo" ||]
+--       In the expression: [|| "foo" ||]
+--       In the Template Haskell splice $$([|| "foo" ||])
 
+-- | Discard the type annotation and produce a plain Template Haskell
+-- expression
 unTypeQ :: Q (TExp a) -> Q Exp
 unTypeQ m = do { TExp e <- m
                ; return e }
 
+-- | Annotate the Template Haskell expression with a type
+--
+-- This is unsafe because GHC cannot check for you that the expression
+-- really does have the type you claim it has.
 unsafeTExpCoerce :: Q Exp -> Q (TExp a)
 unsafeTExpCoerce m = do { e <- m
                         ; return (TExp e) }
@@ -211,7 +255,7 @@ unsafeTExpCoerce m = do { e <- m
 {- Note [Role of TExp]
 ~~~~~~~~~~~~~~~~~~~~~~
 TExp's argument must have a nominal role, not phantom as would
-be inferred (Trac #8459).  Consider
+be inferred (#8459).  Consider
 
   e :: TExp Age
   e = MkAge 3
@@ -501,11 +545,12 @@ addForeignFile = addForeignSource
 addForeignSource :: ForeignSrcLang -> String -> Q ()
 addForeignSource lang src = do
   let suffix = case lang of
-                 LangC -> "c"
-                 LangCxx -> "cpp"
-                 LangObjc -> "m"
+                 LangC      -> "c"
+                 LangCxx    -> "cpp"
+                 LangObjc   -> "m"
                  LangObjcxx -> "mm"
-                 RawObject -> "a"
+                 LangAsm    -> "s"
+                 RawObject  -> "a"
   path <- addTempFile suffix
   runIO $ writeFile path src
   addForeignFilePath lang path
@@ -632,8 +677,17 @@ class Lift t where
   -- | Turn a value into a Template Haskell expression, suitable for use in
   -- a splice.
   lift :: t -> Q Exp
-  default lift :: Data t => t -> Q Exp
-  lift = liftData
+  lift = unTypeQ . liftTyped
+
+  -- | Turn a value into a Template Haskell typed expression, suitable for use
+  -- in a typed splice.
+  --
+  -- @since 2.16.0.0
+  liftTyped :: t -> Q (TExp t)
+  liftTyped = unsafeTExpCoerce . lift
+
+  {-# MINIMAL lift | liftTyped #-}
+
 
 -- If you add any instances here, consider updating test th/TH_Lift
 instance Lift Integer where
@@ -858,12 +912,12 @@ function.  Two complications
 
 * In such a case, we must take care to build the Name using
   mkNameG_v (for values), not mkNameG_d (for data constructors).
-  See Trac #10796.
+  See #10796.
 
 * The pseudo-constructor is named only by its string, here "pack".
   But 'dataToQa' needs the TyCon of its defining module, and has
   to assume it's defined in the same module as the TyCon itself.
-  But nothing enforces that; Trac #12596 shows what goes wrong if
+  But nothing enforces that; #12596 shows what goes wrong if
   "pack" is defined in a different module than the data type "Text".
   -}
 
@@ -879,7 +933,7 @@ dataToExpQ = dataToQa varOrConE litE (foldl appE)
     where
           -- Make sure that VarE is used if the Constr value relies on a
           -- function underneath the surface (instead of a constructor).
-          -- See Trac #10796.
+          -- See #10796.
           varOrConE s =
             case nameSpace s of
                  Just VarName  -> return (VarE s)
@@ -1172,7 +1226,7 @@ mkName str
         --      mkName "&." = Name "&." NameS
         -- The 'is_rev_mod' guards ensure that
         --      mkName ".&" = Name ".&" NameS
-        --      mkName "^.." = Name "^.." NameS      -- Trac #8633
+        --      mkName "^.." = Name "^.." NameS      -- #8633
         --      mkName "Data.Bits..&" = Name ".&" (NameQ "Data.Bits")
         -- This rather bizarre case actually happened; (.&.) is in Data.Bits
     split occ (c:rev)   = split (c:occ) rev
@@ -1566,12 +1620,31 @@ data Lit = CharL Char
          | FloatPrimL Rational
          | DoublePrimL Rational
          | StringPrimL [Word8]  -- ^ A primitive C-style string, type Addr#
+         | BytesPrimL Bytes     -- ^ Some raw bytes, type Addr#:
          | CharPrimL Char
     deriving( Show, Eq, Ord, Data, Generic )
 
     -- We could add Int, Float, Double etc, as we do in HsLit,
     -- but that could complicate the
     -- supposedly-simple TH.Syntax literal type
+
+-- | Raw bytes embedded into the binary.
+--
+-- Avoid using Bytes constructor directly as it is likely to change in the
+-- future. Use helpers such as `mkBytes` in Language.Haskell.TH.Lib instead.
+data Bytes = Bytes
+   { bytesPtr    :: ForeignPtr Word8 -- ^ Pointer to the data
+   , bytesOffset :: Word             -- ^ Offset from the pointer
+   , bytesSize   :: Word             -- ^ Number of bytes
+   -- Maybe someday:
+   -- , bytesAlignement  :: Word -- ^ Alignement constraint
+   -- , bytesReadOnly    :: Bool -- ^ Shall we embed into a read-only
+   --                            --   section or not
+   -- , bytesInitialized :: Bool -- ^ False: only use `bytesSize` to allocate
+   --                            --   an uninitialized region
+   }
+   deriving (Eq,Ord,Data,Generic,Show)
+
 
 -- | Pattern in Haskell given in @{}@
 data Pat
@@ -1727,24 +1800,20 @@ data Dec
                (Maybe Kind)
          -- ^ @{ data family T a b c :: * }@
 
-  | DataInstD Cxt Name
-             (Maybe [TyVarBndr])  -- Quantified type vars
-             [Type]
+  | DataInstD Cxt (Maybe [TyVarBndr]) Type
              (Maybe Kind)         -- Kind signature
              [Con] [DerivClause]  -- ^ @{ data instance Cxt x => T [x]
                                   --       = A x | B (T x)
                                   --       deriving (Z,W)
                                   --       deriving stock Eq }@
 
-  | NewtypeInstD Cxt Name
-                 (Maybe [TyVarBndr])  -- Quantified type vars
-                 [Type]
+  | NewtypeInstD Cxt (Maybe [TyVarBndr]) Type -- Quantified type vars
                  (Maybe Kind)      -- Kind signature
                  Con [DerivClause] -- ^ @{ newtype instance Cxt x => T [x]
                                    --        = A (B x)
                                    --        deriving (Z,W)
                                    --        deriving stock Eq }@
-  | TySynInstD Name TySynEqn       -- ^ @{ type instance ... }@
+  | TySynInstD TySynEqn            -- ^ @{ type instance ... }@
 
   -- | open type families (may also appear in [Dec] of 'ClassD' and 'InstanceD')
   | OpenTypeFamilyD TypeFamilyHead
@@ -1855,9 +1924,23 @@ data TypeFamilyHead =
   deriving( Show, Eq, Ord, Data, Generic )
 
 -- | One equation of a type family instance or closed type family. The
--- arguments are the left-hand-side type patterns and the right-hand-side
--- result.
-data TySynEqn = TySynEqn (Maybe [TyVarBndr]) [Type] Type
+-- arguments are the left-hand-side type and the right-hand-side result.
+--
+-- For instance, if you had the following type family:
+--
+-- @
+-- type family Foo (a :: k) :: k where
+--   forall k (a :: k). Foo \@k a = a
+-- @
+--
+-- The @Foo \@k a = a@ equation would be represented as follows:
+--
+-- @
+-- 'TySynEqn' ('Just' ['PlainTV' k, 'KindedTV' a ('VarT' k)])
+--            ('AppT' ('AppKindT' ('ConT' ''Foo) ('VarT' k)) ('VarT' a))
+--            ('VarT' a)
+-- @
+data TySynEqn = TySynEqn (Maybe [TyVarBndr]) Type Type
   deriving( Show, Eq, Ord, Data, Generic )
 
 data FunDep = FunDep [Name] [Name]
@@ -2036,7 +2119,9 @@ data PatSynArgs
   deriving( Show, Eq, Ord, Data, Generic )
 
 data Type = ForallT [TyVarBndr] Cxt Type  -- ^ @forall \<vars\>. \<ctxt\> => \<type\>@
+          | ForallVisT [TyVarBndr] Type   -- ^ @forall \<vars\> -> \<type\>@
           | AppT Type Type                -- ^ @T a b@
+          | AppKindT Type Kind            -- ^ @T \@k t@
           | SigT Type Kind                -- ^ @t :: k@
           | VarT Name                     -- ^ @a@
           | ConT Name                     -- ^ @T@

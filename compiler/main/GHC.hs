@@ -96,11 +96,11 @@ module GHC (
         -- * Interactive evaluation
 
         -- ** Executing statements
-        execStmt, ExecOptions(..), execOptions, ExecResult(..),
+        execStmt, execStmt', ExecOptions(..), execOptions, ExecResult(..),
         resumeExec,
 
         -- ** Adding new declarations
-        runDecls, runDeclsWithLocation,
+        runDecls, runDeclsWithLocation, runParsedDecls,
 
         -- ** Get/set the current context
         parseImportDecl,
@@ -138,7 +138,7 @@ module GHC (
         getDocs, GetDocsFailure(..),
 
         -- ** Other
-        runTcInteractive,   -- Desired by some clients (Trac #8878)
+        runTcInteractive,   -- Desired by some clients (#8878)
         isStmt, hasImport, isImport, isDecl,
 
         -- ** The debugger
@@ -313,7 +313,7 @@ import NameSet
 import RdrName
 import HsSyn
 import Type     hiding( typeKind )
-import TcType           hiding( typeKind )
+import TcType
 import Id
 import TysPrim          ( alphaTyVars )
 import TyCon
@@ -337,7 +337,7 @@ import Annotations
 import Module
 import Panic
 import Platform
-import Bag              ( listToBag, unitBag )
+import Bag              ( listToBag )
 import ErrUtils
 import MonadUtils
 import Util
@@ -516,13 +516,13 @@ initGhcMonad mb_top_dir
 -- check should be more selective but there is currently no released
 -- version where this bug is fixed.
 -- See https://sourceware.org/bugzilla/show_bug.cgi?id=16177 and
--- https://ghc.haskell.org/trac/ghc/ticket/4210#comment:29
+-- https://gitlab.haskell.org/ghc/ghc/issues/4210#note_78333
 checkBrokenTablesNextToCode :: MonadIO m => DynFlags -> m ()
 checkBrokenTablesNextToCode dflags
   = do { broken <- checkBrokenTablesNextToCode' dflags
        ; when broken
          $ do { _ <- liftIO $ throwIO $ mkApiErr dflags invalidLdErr
-              ; fail "unsupported linker"
+              ; liftIO $ fail "unsupported linker"
               }
        }
   where
@@ -683,14 +683,12 @@ checkNewInteractiveDynFlags :: MonadIO m => DynFlags -> m DynFlags
 checkNewInteractiveDynFlags dflags0 = do
   -- We currently don't support use of StaticPointers in expressions entered on
   -- the REPL. See #12356.
-  dflags1 <-
-      if xopt LangExt.StaticPointers dflags0
-      then do liftIO $ printOrThrowWarnings dflags0 $ listToBag
-                [mkPlainWarnMsg dflags0 interactiveSrcSpan
-                 $ text "StaticPointers is not supported in GHCi interactive expressions."]
-              return $ xopt_unset dflags0 LangExt.StaticPointers
-      else return dflags0
-  return dflags1
+  if xopt LangExt.StaticPointers dflags0
+  then do liftIO $ printOrThrowWarnings dflags0 $ listToBag
+            [mkPlainWarnMsg dflags0 interactiveSrcSpan
+             $ text "StaticPointers is not supported in GHCi interactive expressions."]
+          return $ xopt_unset dflags0 LangExt.StaticPointers
+  else return dflags0
 
 
 -- %************************************************************************
@@ -1363,9 +1361,9 @@ getTokenStream mod = do
   let startLoc = mkRealSrcLoc (mkFastString sourceFile) 1 1
   case lexTokenStream source startLoc flags of
     POk _ ts  -> return ts
-    PFailed _ span err ->
+    PFailed pst ->
         do dflags <- getDynFlags
-           liftIO $ throwIO $ mkSrcErr (unitBag $ mkPlainErrMsg dflags span err)
+           throwErrors (getErrorMessages pst dflags)
 
 -- | Give even more information on the source than 'getTokenStream'
 -- This function allows reconstructing the source completely with
@@ -1376,9 +1374,9 @@ getRichTokenStream mod = do
   let startLoc = mkRealSrcLoc (mkFastString sourceFile) 1 1
   case lexTokenStream source startLoc flags of
     POk _ ts -> return $ addSourceToTokens startLoc source ts
-    PFailed _ span err ->
+    PFailed pst ->
         do dflags <- getDynFlags
-           liftIO $ throwIO $ mkSrcErr (unitBag $ mkPlainErrMsg dflags span err)
+           throwErrors (getErrorMessages pst dflags)
 
 -- | Given a source location and a StringBuffer corresponding to this
 -- location, return a rich token stream with the source associated to the
@@ -1553,9 +1551,9 @@ parser str dflags filename =
    in
    case unP Parser.parseModule (mkPState dflags buf loc) of
 
-     PFailed warnFn span err   ->
-         let (warns,_) = warnFn dflags in
-         (warns, Left $ unitBag (mkPlainErrMsg dflags span err))
+     PFailed pst ->
+         let (warns,errs) = getMessages pst dflags in
+         (warns, Left errs)
 
      POk pst rdr_module ->
          let (warns,_) = getMessages pst dflags in

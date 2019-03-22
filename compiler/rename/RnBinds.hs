@@ -38,7 +38,8 @@ import RnNames
 import RnEnv
 import RnFixity
 import RnUtils          ( HsDocContext(..), mapFvRn, extendTyVarEnvFVRn
-                        , checkDupRdrNames, warnUnusedLocalBinds
+                        , checkDupRdrNames, warnUnusedLocalBinds,
+                        checkUnusedRecordWildcard
                         , checkDupAndShadowedNames, bindLocalNamesFV )
 import DynFlags
 import Module
@@ -306,7 +307,7 @@ rnValBindsRHS ctxt (ValBinds _ mbinds sigs)
                 -- Note [Pattern synonym builders don't yield dependencies]
                 -- But psb_fvs /does/ include those builder fvs.  So we
                 -- add them back in here to avoid bogus warnings about
-                -- unused variables (Trac #12548)
+                -- unused variables (#12548)
 
              valbind'_dus = anal_dus `plusDU` usesOnly sig_fvs
                                      `plusDU` usesOnly patsyn_fvs
@@ -362,7 +363,12 @@ rnLocalValBindsAndThen binds@(ValBinds _ _ sigs) thing_inside
         ; let real_uses = findUses dus result_fvs
               -- Insert fake uses for variables introduced implicitly by
               -- wildcards (#4404)
-              implicit_uses = hsValBindsImplicits binds'
+              rec_uses = hsValBindsImplicits binds'
+              implicit_uses = mkNameSet $ concatMap snd
+                                        $ rec_uses
+        ; mapM_ (\(loc, ns) ->
+                    checkUnusedRecordWildcard loc real_uses (Just ns))
+                rec_uses
         ; warnUnusedLocalBinds bound_names
                                       (real_uses `unionNameSet` implicit_uses)
 
@@ -530,7 +536,7 @@ because they don't do anything!  But we have three exceptions:
 * A strict pattern binding; that is, one with an outermost bang
      !Just _ = e
   This can fail, so unlike the lazy variant, it is not a no-op.
-  Moreover, Trac #13646 argues that even for single constructor
+  Moreover, #13646 argues that even for single constructor
   types, you might want to write the constructor.  See also #9127.
 
 * A splice pattern
@@ -799,7 +805,7 @@ So:
    (which is then used for dependency analysis)
  * But we /do/ include them in the psb_fvs for the PatSynBind
  * In rnValBinds we record these builder uses, to avoid bogus
-   unused-variable warnings (Trac #12548)
+   unused-variable warnings (#12548)
 -}
 
 {- *********************************************************************

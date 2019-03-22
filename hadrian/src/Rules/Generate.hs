@@ -1,6 +1,7 @@
 module Rules.Generate (
-    isGeneratedCmmFile, generatePackageCode, generateRules, copyRules,
-    includesDependencies, generatedDependencies, ghcPrimDependencies
+    isGeneratedCmmFile, compilerDependencies, generatePackageCode,
+    generateRules, copyRules, generatedDependencies, generatedGhcDependencies,
+    ghcPrimDependencies
     ) where
 
 import Base
@@ -26,17 +27,8 @@ primopsSource = "compiler/prelude/primops.txt.pp"
 primopsTxt :: Stage -> FilePath
 primopsTxt stage = buildDir (vanillaContext stage compiler) -/- "primops.txt"
 
-platformH :: Stage -> FilePath
-platformH stage = buildDir (vanillaContext stage compiler) -/- "ghc_boot_platform.h"
-
 isGeneratedCmmFile :: FilePath -> Bool
 isGeneratedCmmFile file = takeBaseName file == "AutoApply"
-
-includesDependencies :: [FilePath]
-includesDependencies = fmap (generatedDir -/-)
-    [ "ghcautoconf.h"
-    , "ghcplatform.h"
-    , "ghcversion.h" ]
 
 ghcPrimDependencies :: Expr [FilePath]
 ghcPrimDependencies = do
@@ -58,10 +50,8 @@ compilerDependencies = do
     isGmp   <- (== integerGmp) <$> getIntegerPackage
     ghcPath <- expr $ buildPath (vanillaContext stage compiler)
     gmpPath <- expr gmpBuildPath
-    rtsPath <- expr rtsBuildPath
-    mconcat [ return [root -/- platformH stage]
-            , return ((root -/-) <$> includesDependencies)
-            , return ((root -/-) <$> derivedConstantsDependencies)
+    rtsPath <- expr (rtsBuildPath stage)
+    mconcat [ return ((root -/-) <$> derivedConstantsDependencies)
             , notStage0 ? isGmp ? return [gmpPath -/- gmpLibraryH]
             , notStage0 ? return ((rtsPath -/-) <$> libffiDependencies)
             , return $ fmap (ghcPath -/-)
@@ -83,14 +73,16 @@ compilerDependencies = do
 
 generatedDependencies :: Expr [FilePath]
 generatedDependencies = do
-    root    <- getBuildRoot
-    rtsPath <- expr rtsBuildPath
+    root     <- getBuildRoot
+    stage    <- getStage
+    rtsPath  <- expr (rtsBuildPath stage)
+    includes <- expr includesDependencies
     mconcat [ package compiler ? compilerDependencies
             , package ghcPrim  ? ghcPrimDependencies
             , package rts      ? return (fmap (rtsPath -/-) libffiDependencies
-                ++ fmap (root -/-) includesDependencies
+                ++ includes
                 ++ fmap (root -/-) derivedConstantsDependencies)
-            , stage0 ? return (fmap (root -/-) includesDependencies) ]
+            , stage0 ? return includes ]
 
 generate :: FilePath -> Context -> Expr String -> Action ()
 generate file context expr = do
@@ -110,40 +102,38 @@ generatePackageCode context@(Context stage pkg _) = do
         need [src]
         build $ target context builder [src] [file]
         let boot = src -<.> "hs-boot"
-        whenM (doesFileExist boot) . copyFile boot $ file -<.> "hs-boot"
+        whenM (doesFileExist boot) $ do
+            let target = file -<.> "hs-boot"
+            copyFile boot target
+            produces [target]
 
     priority 2.0 $ do
-        when (pkg == compiler) $ do root <//> dir -/- "Config.hs" %> go generateConfigHs
-                                    root <//> dir -/- "*.hs-incl" %> genPrimopCode context
-        when (pkg == ghcPrim) $ do (root <//> dir -/- "GHC/Prim.hs") %> genPrimopCode context
-                                   (root <//> dir -/- "GHC/PrimopWrappers.hs") %> genPrimopCode context
-        when (pkg == ghcPkg) $ do root <//> dir -/- "Version.hs" %> go generateVersionHs
+        when (pkg == compiler) $ do
+            root <//> dir -/- "Config.hs" %> go generateConfigHs
+            root <//> dir -/- "*.hs-incl" %> genPrimopCode context
+        when (pkg == ghcPrim) $ do
+            root <//> dir -/- "GHC/Prim.hs" %> genPrimopCode context
+            root <//> dir -/- "GHC/PrimopWrappers.hs" %> genPrimopCode context
+        when (pkg == ghcPkg) $
+            root <//> dir -/- "Version.hs" %> go generateVersionHs
 
-    -- TODO: needing platformH is ugly and fragile
     when (pkg == compiler) $ do
         root -/- primopsTxt stage %> \file -> do
-            root <- buildRoot
-            need $ [ root -/- platformH stage
-                   , primopsSource]
-                ++ fmap (root -/-) includesDependencies
+            includes <- includesDependencies
+            need $ [primopsSource] ++ includes
             build $ target context HsCpp [primopsSource] [file]
 
-        -- only generate this once! Until we have the include logic fixed.
-        -- See the note on `platformH`
-        when (stage == Stage0) $ do
-            root <//> "compiler/ghc_boot_platform.h" %> go generateGhcBootPlatformH
-        root <//> platformH stage %> go generateGhcBootPlatformH
+        root -/- stageString stage <//> "ghc_boot_platform.h" %>
+            go generateGhcBootPlatformH
 
     when (pkg == rts) $ do
         root <//> dir -/- "cmm/AutoApply.cmm" %> \file ->
             build $ target context GenApply [] [file]
-        -- XXX: this should be fixed properly, e.g. generated here on demand.
+        -- TODO: This should be fixed properly, e.g. generated here on demand.
         (root <//> dir -/- "DerivedConstants.h") <~ (buildRoot <&> (-/- generatedDir))
         (root <//> dir -/- "ghcautoconf.h") <~ (buildRoot <&> (-/- generatedDir))
         (root <//> dir -/- "ghcplatform.h") <~ (buildRoot <&> (-/- generatedDir))
         (root <//> dir -/- "ghcversion.h") <~ (buildRoot <&> (-/- generatedDir))
-    when (pkg == integerGmp) $ do
-        (root <//> dir -/- "ghc-gmp.h") <~ (buildRoot <&> (-/- "include"))
  where
     pattern <~ mdir = pattern %> \file -> do
         dir <- mdir
@@ -160,6 +150,12 @@ copyRules = do
     root <- buildRootRules
     forM_ [Stage0 ..] $ \stage -> do
         let prefix = root -/- stageString stage -/- "lib"
+
+            infixl 1 <~
+            pattern <~ mdir = pattern %> \file -> do
+                dir <- mdir
+                copyFile (dir -/- makeRelative prefix file) file
+
         prefix -/- "ghc-usage.txt"     <~ return "driver"
         prefix -/- "ghci-usage.txt"    <~ return "driver"
         prefix -/- "llvm-targets"      <~ return "."
@@ -167,11 +163,9 @@ copyRules = do
         prefix -/- "platformConstants" <~ (buildRoot <&> (-/- generatedDir))
         prefix -/- "settings"          <~ return "."
         prefix -/- "template-hsc.h"    <~ return (pkgPath hsc2hs)
-  where
-    infixl 1 <~
-    pattern <~ mdir = pattern %> \file -> do
-        dir <- mdir
-        copyFile (dir -/- takeFileName file) file
+
+        prefix -/- "html//*"           <~ return "utils/haddock/haddock-api/resources"
+        prefix -/- "latex//*"          <~ return "utils/haddock/haddock-api/resources"
 
 generateRules :: Rules ()
 generateRules = do
@@ -180,15 +174,10 @@ generateRules = do
     priority 2.0 $ (root -/- generatedDir -/- "ghcplatform.h") <~ generateGhcPlatformH
     priority 2.0 $ (root -/- generatedDir -/-  "ghcversion.h") <~ generateGhcVersionH
 
-    forM_ [Stage0 ..] $ \stage ->
-        root -/- ghcSplitPath stage %> \path -> do
-            generate path emptyTarget generateGhcSplit
-            makeExecutable path
-
     -- TODO: simplify, get rid of fake rts context
     root -/- generatedDir ++ "//*" %> \file -> do
         withTempDir $ \dir -> build $
-            target rtsContext DeriveConstants [] [file, dir]
+            target (rtsContext Stage1) DeriveConstants [] [file, dir]
   where
     file <~ gen = file %> \out -> generate out emptyTarget gen
 
@@ -205,26 +194,6 @@ emptyTarget = vanillaContext (error "Rules.Generate.emptyTarget: unknown stage")
 -- the resulting 'String' is a valid C preprocessor identifier.
 cppify :: String -> String
 cppify = replaceEq '-' '_' . replaceEq '.' '_'
-
-ghcSplitSource :: FilePath
-ghcSplitSource = "driver/split/ghc-split.pl"
-
--- ref: rules/build-perl.mk
--- | Generate the @ghc-split@ Perl script.
-generateGhcSplit :: Expr String
-generateGhcSplit = do
-    trackGenerateHs
-    targetPlatform <- getSetting TargetPlatform
-    ghcEnableTNC   <- expr $ yesNo <$> ghcEnableTablesNextToCode
-    perlPath       <- getBuilderPath Perl
-    contents       <- expr $ readFileLines ghcSplitSource
-    return . unlines $
-        [ "#!" ++ perlPath
-        , "my $TARGETPLATFORM = " ++ show targetPlatform ++ ";"
-        -- I don't see where the ghc-split tool uses TNC, but
-        -- it's in the build-perl macro.
-        , "my $TABLES_NEXT_TO_CODE = " ++ show ghcEnableTNC ++ ";"
-        ] ++ contents
 
 -- | Generate @ghcplatform.h@ header.
 generateGhcPlatformH :: Expr String
@@ -295,7 +264,6 @@ generateConfigHs = do
             | intLib == integerGmp    = "IntegerGMP"
             | intLib == integerSimple = "IntegerSimple"
             | otherwise = error $ "Unknown integer library: " ++ pkgName intLib
-    cSupportsSplitObjs         <- expr $ yesNo <$> supportsSplitObjects
     cGhcWithInterpreter        <- expr $ yesNo <$> ghcWithInterpreter
     cGhcWithNativeCodeGen      <- expr $ yesNo <$> ghcWithNativeCodeGen
     cGhcWithSMP                <- expr $ yesNo <$> ghcWithSMP
@@ -347,8 +315,6 @@ generateConfigHs = do
         , "cIntegerLibrary       = " ++ show (pkgName intLib)
         , "cIntegerLibraryType   :: IntegerLibrary"
         , "cIntegerLibraryType   = " ++ cIntegerLibraryType
-        , "cSupportsSplitObjs    :: String"
-        , "cSupportsSplitObjs    = " ++ show cSupportsSplitObjs
         , "cGhcWithInterpreter   :: String"
         , "cGhcWithInterpreter   = " ++ show cGhcWithInterpreter
         , "cGhcWithNativeCodeGen :: String"
@@ -363,8 +329,6 @@ generateConfigHs = do
         , "cLeadingUnderscore    = " ++ show cLeadingUnderscore
         , "cGHC_UNLIT_PGM        :: String"
         , "cGHC_UNLIT_PGM        = " ++ show cGHC_UNLIT_PGM
-        , "cGHC_SPLIT_PGM        :: String"
-        , "cGHC_SPLIT_PGM        = " ++ show "ghc-split"
         , "cLibFFI               :: Bool"
         , "cLibFFI               = " ++ show cLibFFI
         , "cGhcThreaded :: Bool"

@@ -137,7 +137,6 @@ import qualified TcMType as TcM
 import qualified ClsInst as TcM( matchGlobalInst, ClsInstResult(..) )
 import qualified TcEnv as TcM
        ( checkWellStaged, tcGetDefaultTys, tcLookupClass, tcLookupId, topIdLvl )
-import PrelNames( heqTyConKey, eqTyConKey )
 import ClsInst( InstanceWhat(..) )
 import Kind
 import TcType
@@ -212,7 +211,7 @@ It's very important to process equalities /first/:
   and then kicking it out later.  That's extra work compared to just
   doing the equality first.
 
-* (Avoiding fundep iteration) As Trac #14723 showed, it's possible to
+* (Avoiding fundep iteration) As #14723 showed, it's possible to
   get non-termination if we
       - Emit the Derived fundep equalities for a class constraint,
         generating some fresh unification variables.
@@ -245,7 +244,7 @@ see Note [The equality types story] in TysPrim.
 
 Failing to prioritise these is inefficient (more kick-outs etc).
 But, worse, it can prevent us spotting a "recursive knot" among
-Wanted constraints.  See comment:10 of Trac #12734 for a worked-out
+Wanted constraints.  See comment:10 of #12734 for a worked-out
 example.
 
 So we arrange to put these particular class constraints in the wl_eqs.
@@ -328,8 +327,7 @@ extendWorkListCt ct wl
        -> extendWorkListEq ct wl
 
      ClassPred cls _  -- See Note [Prioritise class equalities]
-       |  cls `hasKey` heqTyConKey
-       || cls `hasKey` eqTyConKey
+       |  isEqPredClass cls
        -> extendWorkListEq ct wl
 
      _ -> extendWorkListNonEq ct wl
@@ -980,7 +978,7 @@ head of the top-level application chain (a t1 .. tn).  See
 TcType.isTyVarHead. This is encoded in (K3b).
 
 Beware: if we make this test succeed too often, we kick out too much,
-and the solver might loop.  Consider (Trac #14363)
+and the solver might loop.  Consider (#14363)
   work item:   [G] a ~R f b
   inert item:  [G] b ~R f a
 In GHC 8.2 the completeness tests more aggressive, and kicked out
@@ -1236,7 +1234,7 @@ This is triggered by test case typecheck/should_compile/SplitWD.
 
 Note [Examples of how Derived shadows helps completeness]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Trac #10009, a very nasty example:
+#10009, a very nasty example:
 
     f :: (UnF (F b) ~ b) => F b -> ()
 
@@ -1276,7 +1274,7 @@ useful unification.
 
 But (a) I have been unable to come up with an example of this
         happening
-    (b) see Trac #12660 for how adding the derived shadows
+    (b) see #12660 for how adding the derived shadows
         of a Given led to an infinite loop.
     (c) It's unlikely that rewriting derived Givens will lead
         to a unification because Givens don't mention touchable
@@ -1316,7 +1314,7 @@ because we've already added its superclasses.  So we won't re-add
 them.  If we forget the pend_sc flag, our cunning scheme for avoiding
 generating superclasses repeatedly will fail.
 
-See Trac #11379 for a case of this.
+See #11379 for a case of this.
 
 Note [Do not do improvement for WOnly]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1347,7 +1345,7 @@ Reasons:
   with the inert [W] C Int b in the inert set; after all,
   it's the very constraint from which the [D] C Int Bool
   was split!  We can avoid this by not doing improvement
-  on [W] constraints. This came up in Trac #12860.
+  on [W] constraints. This came up in #12860.
 -}
 
 maybeEmitShadow :: InertCans -> Ct -> TcS Ct
@@ -1500,7 +1498,7 @@ addInertForAll new_qci
 
 {- Note [Do not add duplicate quantified instances]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Consider this (Trac #15244):
+Consider this (#15244):
 
   f :: (C g, D g) => ....
   class S g => C g where ...
@@ -1551,7 +1549,7 @@ rewrite the inerts. But we *must* kick out the first one, to get:
           [D] fmv1 ~ fmv2
 
 and now improvement will discover [D] alpha ~ beta. This is important;
-eg in Trac #9587.
+eg in #9587.
 
 So in kickOutRewritable we look at all the tyvars of the
 CFunEqCan, including the fsk.
@@ -1810,7 +1808,7 @@ constructors match.
 
 Similarly, if we have a CHoleCan, we'd like to rewrite it with any
 Givens, to give as informative an error messasge as possible
-(Trac #12468, #11325).
+(#12468, #11325).
 
 Hence:
  * In the main simlifier loops in TcSimplify (solveWanteds,
@@ -2157,7 +2155,7 @@ where beta is a unification variable that has already been unified
 to () in an outer scope.  Then we can float the (alpha ~ Int) out
 just fine. So when deciding whether the givens contain an equality,
 we should canonicalise first, rather than just looking at the original
-givens (Trac #8644).
+givens (#8644).
 
 So we simply look at the inert, canonical Givens and see if there are
 any equalities among them, the calculation of has_given_eqs.  There
@@ -2209,7 +2207,7 @@ b) 'a' will have been completely substituted out in the inert set,
    so we can safely discard it.  Notably, it doesn't need to be
    returned as part of 'fsks'
 
-For an example, see Trac #9211.
+For an example, see #9211.
 
 See also TcUnify Note [Deeper level on the left] for how we ensure
 that the right variable is on the left of the equality when both are
@@ -2217,7 +2215,7 @@ tyvars.
 
 You might wonder whether the skokem really needs to be bound "in the
 very same implication" as the equuality constraint.
-(c.f. Trac #15009) Consider this:
+(c.f. #15009) Consider this:
 
   data S a where
     MkS :: (a ~ Int) => S a
@@ -2402,7 +2400,7 @@ Consider
 
 The call to 'g' gives rise to a Wanted constraint (?x::Int, C a).
 We must /not/ solve this from the Given (?x::Int, C a), because of
-the intervening binding for (?x::Int).  Trac #14218.
+the intervening binding for (?x::Int).  #14218.
 
 We deal with this by arranging that we always fail when looking up a
 tuple constraint that hides an implicit parameter. Not that this applies
@@ -2611,7 +2609,9 @@ instance Applicative TcS where
   (<*>) = ap
 
 instance Monad TcS where
+#if !MIN_VERSION_base(4,13,0)
   fail = MonadFail.fail
+#endif
   m >>= k   = TcS (\ebs -> unTcS m ebs >>= \r -> unTcS (k r) ebs)
 
 instance MonadFail.MonadFail TcS where
@@ -2763,7 +2763,7 @@ checkForCyclicBinds ev_binds_map
     cycles = [c | CyclicSCC c <- stronglyConnCompFromEdgedVerticesUniq edges]
 
     coercion_cycles = [c | c <- cycles, any is_co_bind c]
-    is_co_bind (EvBind { eb_lhs = b }) = isEqPred (varType b)
+    is_co_bind (EvBind { eb_lhs = b }) = isEqPrimPred (varType b)
 
     edges :: [ Node EvVar EvBind ]
     edges = [ DigraphNode bind bndr (nonDetEltsUniqSet (evVarsOfTerm rhs))
@@ -3399,10 +3399,8 @@ newGivenEvVars loc pts = mapM (newGivenEvVar loc) pts
 emitNewWantedEq :: CtLoc -> Role -> TcType -> TcType -> TcS Coercion
 -- | Emit a new Wanted equality into the work-list
 emitNewWantedEq loc role ty1 ty2
-  | otherwise
   = do { (ev, co) <- newWantedEq loc role ty1 ty2
-       ; updWorkListTcS $
-         extendWorkListEq (mkNonCanonical ev)
+       ; updWorkListTcS (extendWorkListEq (mkNonCanonical ev))
        ; return co }
 
 -- | Make a new equality CtEvidence

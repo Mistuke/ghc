@@ -1,4 +1,4 @@
 test('determ021',
-     [normalise_fun(normalise_errmsg), extra_files(['A.hs'])],
-     run_command,
-     ['$MAKE -s --no-print-directory determ021'])
+     [normalise_fun(normalise_errmsg), normalise_version('base', 'ghc-prim'),
+     extra_files(['A.hs'])],
+     makefile_test, ['determ021'])

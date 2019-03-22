@@ -885,99 +885,27 @@ freeRegBase _ = True
 #elif defined(MACHREGS_powerpc)
 
 freeReg 0 = False -- Used by code setting the back chain pointer
-                  -- in stack reallocations on Linux
-                  -- r0 is not usable in all insns so also reserved
-                  -- on Darwin.
+                  -- in stack reallocations on Linux.
+                  -- Moreover r0 is not usable in all insns.
 freeReg 1 = False -- The Stack Pointer
-# if !defined(MACHREGS_darwin)
--- most non-darwin powerpc OSes use r2 as a TOC pointer or something like that
+-- most ELF PowerPC OSes use r2 as a TOC pointer
 freeReg 2 = False
 freeReg 13 = False -- reserved for system thread ID on 64 bit
 -- at least linux in -fPIC relies on r30 in PLT stubs
 freeReg 30 = False
 {- TODO: reserve r13 on 64 bit systems only and r30 on 32 bit respectively.
    For now we use r30 on 64 bit and r13 on 32 bit as a temporary register
-   in stack handling code. See compiler/nativeGen/PPC/Ppr.hs.
+   in stack handling code. See compiler/nativeGen/PPC/Instr.hs.
 
    Later we might want to reserve r13 and r30 only where it is required.
    Then use r12 as temporary register, which is also what the C ABI does.
 -}
 
-# endif
 # if defined(REG_Base)
 freeReg REG_Base  = False
 # endif
-# if defined(REG_R1)
-freeReg REG_R1    = False
-# endif
-# if defined(REG_R2)
-freeReg REG_R2    = False
-# endif
-# if defined(REG_R3)
-freeReg REG_R3    = False
-# endif
-# if defined(REG_R4)
-freeReg REG_R4    = False
-# endif
-# if defined(REG_R5)
-freeReg REG_R5    = False
-# endif
-# if defined(REG_R6)
-freeReg REG_R6    = False
-# endif
-# if defined(REG_R7)
-freeReg REG_R7    = False
-# endif
-# if defined(REG_R8)
-freeReg REG_R8    = False
-# endif
-# if defined(REG_R9)
-freeReg REG_R9    = False
-# endif
-# if defined(REG_R10)
-freeReg REG_R10   = False
-# endif
-# if defined(REG_F1)
-freeReg REG_F1    = False
-# endif
-# if defined(REG_F2)
-freeReg REG_F2    = False
-# endif
-# if defined(REG_F3)
-freeReg REG_F3    = False
-# endif
-# if defined(REG_F4)
-freeReg REG_F4    = False
-# endif
-# if defined(REG_F5)
-freeReg REG_F5    = False
-# endif
-# if defined(REG_F6)
-freeReg REG_F6    = False
-# endif
-# if defined(REG_D1)
-freeReg REG_D1    = False
-# endif
-# if defined(REG_D2)
-freeReg REG_D2    = False
-# endif
-# if defined(REG_D3)
-freeReg REG_D3    = False
-# endif
-# if defined(REG_D4)
-freeReg REG_D4    = False
-# endif
-# if defined(REG_D5)
-freeReg REG_D5    = False
-# endif
-# if defined(REG_D6)
-freeReg REG_D6    = False
-# endif
 # if defined(REG_Sp)
 freeReg REG_Sp    = False
-# endif
-# if defined(REG_Su)
-freeReg REG_Su    = False
 # endif
 # if defined(REG_SpLim)
 freeReg REG_SpLim = False
@@ -1121,9 +1049,6 @@ freeReg REG_D6_2  = False
 # endif
 # if defined(REG_Sp)
 freeReg REG_Sp    = False
-# endif
-# if defined(REG_Su)
-freeReg REG_Su    = False
 # endif
 # if defined(REG_SpLim)
 freeReg REG_SpLim = False

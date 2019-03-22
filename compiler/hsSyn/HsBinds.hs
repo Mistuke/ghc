@@ -549,7 +549,7 @@ case we'd prefer to generate the (more direct)
      (# fromInteger $dNum 3, fromInteger $dNum 4 #)
 
 A similar thing happens with representation-polymorphic defns
-(Trac #11405):
+(#11405):
 
   undef :: forall (r :: RuntimeRep) (a :: TYPE r). HasCallStack => a
   undef = error "undef"
@@ -798,7 +798,7 @@ instance (idR ~ GhcPass pr,OutputableBndrId idL, OutputableBndrId idR,
 
 pprTicks :: SDoc -> SDoc -> SDoc
 -- Print stuff about ticks only when -dppr-debug is on, to avoid
--- them appearing in error messages (from the desugarer); see Trac # 3263
+-- them appearing in error messages (from the desugarer); see # 3263
 -- Also print ticks in dumpStyle, so that -ddump-hpc actually does
 -- something useful.
 pprTicks pp_no_debug pp_when_debug
@@ -901,13 +901,13 @@ data Sig pass
       --
       -- > f :: Num a => a -> a
       --
-      -- After renaming, this list of Names contains the named and unnamed
+      -- After renaming, this list of Names contains the named
       -- wildcards brought into scope by this signature. For a signature
-      -- @_ -> _a -> Bool@, the renamer will give the unnamed wildcard @_@
-      -- a freshly generated name, e.g. @_w@. @_w@ and the named wildcard @_a@
-      -- are then both replaced with fresh meta vars in the type. Their names
-      -- are stored in the type signature that brought them into scope, in
-      -- this third field to be more specific.
+      -- @_ -> _a -> Bool@, the renamer will leave the unnamed wildcard @_@
+      -- untouched, and the named wildcard @_a@ is then replaced with
+      -- fresh meta vars in the type. Their names are stored in the type
+      -- signature that brought them into scope, in this third field to be
+      -- more specific.
       --
       --  - 'ApiAnnotation.AnnKeywordId' : 'ApiAnnotation.AnnDcolon',
       --          'ApiAnnotation.AnnComma'

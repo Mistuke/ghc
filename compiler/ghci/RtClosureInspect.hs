@@ -67,6 +67,9 @@ import Data.List
 import GHC.Exts
 import Data.Array.Base
 import GHC.Integer.GMP.Internals
+#elif defined(INTEGER_SIMPLE)
+import GHC.Exts
+import GHC.Integer.Simple.Internals
 #endif
 import qualified Data.Sequence as Seq
 import Data.Sequence (viewl, ViewL(..))
@@ -410,9 +413,36 @@ cPprTermBase y =
       let
         !(UArray _ _ _ arr#) = listArray (0,length ws-1) ws
         constr
-          | "Jp#" <- occNameString (nameOccName (dataConName con)) = Jp#
+          | "Jp#" <- getOccString (dataConName con) = Jp#
           | otherwise = Jn#
       return (Just (Ppr.integer (constr (BN# arr#))))
+#elif defined(INTEGER_SIMPLE)
+   -- As with the GMP case, this depends deeply on the integer-simple
+   -- representation.
+   --
+   -- @
+   -- data Integer = Positive !Digits | Negative !Digits | Naught
+   --
+   -- data Digits = Some !Word# !Digits
+   --             | None
+   -- @
+   --
+   -- NB: the above has some type synonyms expanded out for the sake of brevity
+   ppr_integer _ Term{subTerms=[]} =
+      return (Just (Ppr.integer Naught))
+   ppr_integer _ Term{dc=Right con, subTerms=[digitTerm]}
+        | Just digits <- get_digits digitTerm
+        = return (Just (Ppr.integer (constr digits)))
+      where
+        get_digits :: Term -> Maybe Digits
+        get_digits Term{subTerms=[]} = Just None
+        get_digits Term{subTerms=[Prim{valRaw=[W# w]},t]}
+          = Some w <$> get_digits t
+        get_digits _ = Nothing
+
+        constr
+          | "Positive" <- getOccString (dataConName con) = Positive
+          | otherwise = Negative
 #endif
    ppr_integer _ _ = return Nothing
 
@@ -722,9 +752,9 @@ cvObtainTerm hsc_env max_depth force old_ty hval = runTR hsc_env $ do
          traceTR (text "Following a MutVar")
          contents_tv <- newVar liftedTypeKind
          MASSERT(isUnliftedType my_ty)
-         (mutvar_ty,_) <- instScheme $ quantifyType $ mkFunTy
+         (mutvar_ty,_) <- instScheme $ quantifyType $ mkVisFunTy
                             contents_ty (mkTyConApp tycon [world,contents_ty])
-         addConstraint (mkFunTy contents_tv my_ty) mutvar_ty
+         addConstraint (mkVisFunTy contents_tv my_ty) mutvar_ty
          x <- go (pred max_depth) contents_tv contents_ty contents
          return (RefWrap my_ty x)
 
@@ -735,7 +765,7 @@ cvObtainTerm hsc_env max_depth force old_ty hval = runTR hsc_env $ do
                         then parens (text "already monomorphic: " <> ppr my_ty)
                         else Ppr.empty)
         Right dcname <- liftIO $ constrClosToName hsc_env clos
-        (_,mb_dc)    <- tryTc (tcLookupDataCon dcname)
+        (mb_dc, _)   <- tryTc (tcLookupDataCon dcname)
         case mb_dc of
           Nothing -> do -- This can happen for private constructors compiled -O0
                         -- where the .hi descriptor does not export them
@@ -951,7 +981,7 @@ cvReconstructType hsc_env max_depth old_ty hval = runTR_maybe hsc_env $ do
       ConstrClosure{ptrArgs=pArgs} -> do
         Right dcname <- liftIO $ constrClosToName hsc_env clos
         traceTR (text "Constr1" <+> ppr dcname)
-        (_,mb_dc) <- tryTc (tcLookupDataCon dcname)
+        (mb_dc, _) <- tryTc (tcLookupDataCon dcname)
         case mb_dc of
           Nothing-> do
             forM pArgs $ \x -> do
@@ -1026,7 +1056,7 @@ getDataConArgTys dc con_app_ty
 
 {- Note [Constructor arg types]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Consider a GADT (cf Trac #7386)
+Consider a GADT (cf #7386)
    data family D a b
    data instance D [a] a where
      MkT :: a -> D [a] (Maybe a)
@@ -1229,7 +1259,7 @@ congruenceNewtypes lhs rhs = go lhs rhs >>= \rhs' -> return (lhs,rhs')
     , Just (r1,r2) <- splitFunTy_maybe r
     = do r2' <- go l2 r2
          r1' <- go l1 r1
-         return (mkFunTy r1' r2')
+         return (mkVisFunTy r1' r2')
 -- TyconApp Inductive case; this is the interesting bit.
     | Just (tycon_l, _) <- tcSplitTyConApp_maybe lhs
     , Just (tycon_r, _) <- tcSplitTyConApp_maybe rhs

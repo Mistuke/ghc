@@ -55,6 +55,8 @@ import {-# SOURCE #-} TcSplice
     , tcTopSpliceExpr
     )
 
+import TcHsSyn
+
 import GHCi.RemoteTypes ( ForeignRef )
 import qualified Language.Haskell.TH as TH (Q)
 
@@ -300,12 +302,14 @@ runRnSplice flavour run_meta ppr_res splice
                 HsQuasiQuote _ _ q qs str -> mkQuasiQuoteExpr flavour q qs str
                 HsTypedSplice {}          -> pprPanic "runRnSplice" (ppr splice)
                 HsSpliced {}              -> pprPanic "runRnSplice" (ppr splice)
+                HsSplicedT {}             -> pprPanic "runRnSplice" (ppr splice)
                 XSplice {}                -> pprPanic "runRnSplice" (ppr splice)
 
              -- Typecheck the expression
        ; meta_exp_ty   <- tcMetaTy meta_ty_name
-       ; zonked_q_expr <- tcTopSpliceExpr Untyped $
-                          tcPolyExpr the_expr meta_exp_ty
+       ; zonked_q_expr <- zonkTopLExpr =<<
+                            tcTopSpliceExpr Untyped
+                              (tcPolyExpr the_expr meta_exp_ty)
 
              -- Run the expression
        ; mod_finalizers_ref <- newTcRef []
@@ -345,6 +349,8 @@ makePending flavour (HsQuasiQuote _ n quoter q_span quote)
 makePending _ splice@(HsTypedSplice {})
   = pprPanic "makePending" (ppr splice)
 makePending _ splice@(HsSpliced {})
+  = pprPanic "makePending" (ppr splice)
+makePending _ splice@(HsSplicedT {})
   = pprPanic "makePending" (ppr splice)
 makePending _ splice@(XSplice {})
   = pprPanic "makePending" (ppr splice)
@@ -400,6 +406,7 @@ rnSplice (HsQuasiQuote x splice_name quoter q_loc quote)
                                                              , unitFV quoter') }
 
 rnSplice splice@(HsSpliced {}) = pprPanic "rnSplice" (ppr splice)
+rnSplice splice@(HsSplicedT {}) = pprPanic "rnSplice" (ppr splice)
 rnSplice splice@(XSplice {})   = pprPanic "rnSplice" (ppr splice)
 
 ---------------------
@@ -440,16 +447,16 @@ rnSpliceExpr splice
 {- Note [Running splices in the Renamer]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Splices used to be run in the typechecker, which led to (Trac #4364). Since the
+Splices used to be run in the typechecker, which led to (#4364). Since the
 renamer must decide which expressions depend on which others, and it cannot
 reliably do this for arbitrary splices, we used to conservatively say that
 splices depend on all other expressions in scope. Unfortunately, this led to
-the problem of cyclic type declarations seen in (Trac #4364). Instead, by
+the problem of cyclic type declarations seen in (#4364). Instead, by
 running splices in the renamer, we side-step the problem of determining
 dependencies: by the time the dependency analysis happens, any splices have
 already been run, and expression dependencies can be determined as usual.
 
-However, see (Trac #9813), for an example where we would like to run splices
+However, see (#9813), for an example where we would like to run splices
 *after* performing dependency analysis (that is, after renaming). It would be
 desirable to typecheck "non-splicy" expressions (those expressions that do not
 contain splices directly or via dependence on an expression that does) before
@@ -470,7 +477,7 @@ we wish to first determine dependencies and typecheck certain expressions,
 making them available to reify, but cannot accurately determine dependencies
 without running splices in the renamer!
 
-Indeed, the conclusion of (Trac #9813) was that it is not worth the complexity
+Indeed, the conclusion of (#9813) was that it is not worth the complexity
 to try and
  a) implement and maintain the code for renaming/typechecking non-splicy
     expressions before splicy expressions,
@@ -483,7 +490,7 @@ to try and
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 When splices run in the renamer, 'reify' does not have access to the local
-type environment (Trac #11832, [1]).
+type environment (#11832, [1]).
 
 For instance, in
 
@@ -709,6 +716,7 @@ spliceCtxt splice
              HsTypedSplice   {} -> text "typed splice:"
              HsQuasiQuote    {} -> text "quasi-quotation:"
              HsSpliced       {} -> text "spliced expression:"
+             HsSplicedT      {} -> text "spliced expression:"
              XSplice         {} -> text "spliced expression:"
 
 -- | The splice data to be logged
@@ -848,7 +856,7 @@ ensures that 'f' stays as a top level binding.
 
 This must be done by the renamer, not the type checker (as of old),
 because the type checker doesn't typecheck the body of untyped
-brackets (Trac #8540).
+brackets (#8540).
 
 A thing can have a bind_lvl of outerLevel, but have an internal name:
    foo = [d| op = 3

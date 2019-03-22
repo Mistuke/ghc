@@ -4,7 +4,7 @@ Result size of Tidy Core
   = {terms: 63, types: 43, coercions: 1, joins: 0/0}
 
 -- RHS size: {terms: 2, types: 4, coercions: 1, joins: 0/0}
-T2431.$WRefl [InlPrag=INLINE[2]] :: forall a. a :~: a
+T2431.$WRefl [InlPrag=INLINE[0]] :: forall a. a :~: a
 [GblId[DataConWrapper],
  Caf=NoCafRefs,
  Str=m,
@@ -17,7 +17,7 @@ T2431.$WRefl
 
 -- RHS size: {terms: 4, types: 8, coercions: 0, joins: 0/0}
 absurd :: forall a. (Int :~: Bool) -> a
-[GblId, Arity=1, Caf=NoCafRefs, Str=<L,U>x, Unf=OtherCon []]
+[GblId, Arity=1, Caf=NoCafRefs, Str=<L,U>b, Unf=OtherCon []]
 absurd = \ (@ a) (x :: Int :~: Bool) -> case x of { }
 
 -- RHS size: {terms: 1, types: 0, coercions: 0, joins: 0/0}
@@ -110,6 +110,3 @@ T2431.$tc'Refl
       $tc'Refl2
       1#
       $krep3
-
-
-

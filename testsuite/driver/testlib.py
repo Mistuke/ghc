@@ -18,8 +18,9 @@ from pathlib import PurePath
 import collections
 import subprocess
 
-from testglobals import config, ghc_env, default_testopts, brokens, t
-from testutil import strip_quotes, lndir, link_or_copy_file, passed, failBecause, str_fail, str_pass
+from testglobals import config, ghc_env, default_testopts, brokens, t, TestResult
+from testutil import strip_quotes, lndir, link_or_copy_file, passed, failBecause, failBecauseStderr, str_fail, str_pass
+from cpu_features import have_cpu_feature
 import perf_notes as Perf
 from perf_notes import MetricChange
 extra_src_files = {'T4198': ['exitminus1.c']} # TODO: See #12223
@@ -64,7 +65,7 @@ def isCompilerStatsTest():
 
 def isStatsTest():
     opts = getTestOpts()
-    return bool(opts.stats_range_fields)
+    return opts.is_stats_test
 
 
 # This can be called at the top of a file of tests, to set default test options
@@ -188,6 +189,28 @@ def ignore_stderr(name, opts):
 def combined_output( name, opts ):
     opts.combined_output = True
 
+def use_specs( specs ):
+    """
+    use_specs allows one to override files based on suffixes. e.g. 'stdout',
+    'stderr', 'asm', 'prof.sample', etc.
+
+    Example use_specs({'stdout' : 'prof002.stdout'}) to make the test re-use
+    prof002.stdout.
+
+    Full Example:
+    test('T5889', [only_ways(['normal']), req_profiling,
+                   extra_files(['T5889/A.hs', 'T5889/B.hs']),
+                   use_specs({'stdout' : 'prof002.stdout'})],
+         multimod_compile,
+         ['A B', '-O -prof -fno-prof-count-entries -v0'])
+
+    """
+    return lambda name, opts, s=specs: _use_specs( name, opts, s )
+
+def _use_specs( name, opts, specs ):
+    opts.extra_files.extend(specs.values ())
+    opts.use_specs = specs
+
 # -----
 
 def expect_fail_for( ways ):
@@ -221,6 +244,30 @@ def _expect_pass(way):
     # Helper function. Not intended for use in .T files.
     opts = getTestOpts()
     return opts.expect == 'pass' and way not in opts.expect_fail_for
+
+# -----
+
+def fragile( bug ):
+    """
+    Indicates that the test should be skipped due to fragility documented in
+    the given ticket.
+    """
+    def helper( name, opts, bug=bug ):
+        record_broken(name, opts, bug)
+        opts.skip = True
+
+    return helper
+
+def fragile_for( name, opts, bug, ways ):
+    """
+    Indicates that the test should be skipped due to fragility in the given
+    test ways as documented in the given ticket.
+    """
+    def helper( name, opts, bug=bug, ways=ways ):
+        record_broken(name, opts, bug)
+        opts.omit_ways = ways
+
+    return helper
 
 # -----
 
@@ -347,29 +394,18 @@ def testing_metrics():
 # measures the performance numbers of the compiler.
 # As this is a fairly rare case in the testsuite, it defaults to false to
 # indicate that it is a 'normal' performance test.
-def _collect_stats(name, opts, metric, deviation, is_compiler_stats_test=False):
+def _collect_stats(name, opts, metrics, deviation, is_compiler_stats_test=False):
     if not re.match('^[0-9]*[a-zA-Z][a-zA-Z0-9._-]*$', name):
         failBecause('This test has an invalid name.')
 
-    tests = Perf.get_perf_stats('HEAD^')
+    # Normalize metrics to a list of strings.
+    if isinstance(metrics, str):
+        if metrics == 'all':
+            metrics = testing_metrics()
+        else:
+            metrics = [metrics]
 
-    # Might have multiple metrics being measured for a single test.
-    test = [t for t in tests if t.test == name]
-
-    if tests == [] or test == []:
-        # There are no prior metrics for this test.
-        if isinstance(metric, str):
-            if metric == 'all':
-                for field in testing_metrics():
-                    opts.stats_range_fields[field] = None
-            else:
-                opts.stats_range_fields[metric] = None
-        if isinstance(metric, list):
-            for field in metric:
-                opts.stats_range_fields[field] = None
-
-        return
-
+    opts.is_stats_test = True
     if is_compiler_stats_test:
         opts.is_compiler_stats_test = True
 
@@ -378,24 +414,12 @@ def _collect_stats(name, opts, metric, deviation, is_compiler_stats_test=False):
     if config.compiler_debugged and is_compiler_stats_test:
         opts.skip = 1
 
-    # get the average value of the given metric from test
-    def get_avg_val(metric_2):
-        metric_2_metrics = [float(t.value) for t in test if t.metric == metric_2]
-        return sum(metric_2_metrics) / len(metric_2_metrics)
+    for metric in metrics:
+        def baselineByWay(way, target_commit, metric=metric):
+            return Perf.baseline_metric( \
+                              target_commit, name, config.test_env, metric, way)
 
-    # 'all' is a shorthand to test for bytes allocated, peak megabytes allocated, and max bytes used.
-    if isinstance(metric, str):
-        if metric == 'all':
-            for field in testing_metrics():
-                opts.stats_range_fields[field] = (get_avg_val(field), deviation)
-                return
-        else:
-            opts.stats_range_fields[metric] = (get_avg_val(metric), deviation)
-            return
-
-    if isinstance(metric, list):
-        for field in metric:
-            opts.stats_range_fields[field] = (get_avg_val(field), deviation)
+        opts.stats_range_fields[metric] = (baselineByWay, deviation)
 
 # -----
 
@@ -440,6 +464,9 @@ def cygwin( ):
 def have_vanilla( ):
     return config.have_vanilla
 
+def have_ncg( ):
+    return config.have_ncg
+
 def have_dynamic( ):
     return config.have_dynamic
 
@@ -464,8 +491,14 @@ def have_gdb( ):
 def have_readelf( ):
     return config.have_readelf
 
-# Many tests sadly break with integer-simple due to GHCi's ignorance of it.
-broken_without_gmp = unless(have_library('integer-gmp'), expect_broken(16043))
+def integer_gmp( ):
+    return have_library("integer-gmp")
+
+def integer_simple( ):
+    return have_library("integer-simple")
+
+def llvm_build ( ):
+    return config.ghc_built_by_llvm
 
 # ---
 
@@ -881,6 +914,8 @@ def do_test(name, way, func, args, files):
         if os.path.isfile(src):
             link_or_copy_file(src, dst)
         elif os.path.isdir(src):
+            if os.path.exists(dst):
+                shutil.rmtree(dst)
             os.mkdir(dst)
             lndir(src, dst)
         else:
@@ -893,7 +928,7 @@ def do_test(name, way, func, args, files):
                 framework_fail(name, way,
                     'extra_file does not exist: ' + extra_file)
 
-    if func.__name__ == 'run_command' or opts.pre_cmd:
+    if func.__name__ == 'run_command' or func.__name__ == 'makefile_test' or opts.pre_cmd:
         # When running 'MAKE' make sure 'TOP' still points to the
         # root of the testsuite.
         src_makefile = in_srcdir('Makefile')
@@ -928,24 +963,25 @@ def do_test(name, way, func, args, files):
 
     if passFail == 'pass':
         if _expect_pass(way):
-            t.expected_passes.append((directory, name, way))
+            t.expected_passes.append(TestResult(directory, name, "", way))
             t.n_expected_passes += 1
         else:
             if_verbose(1, '*** unexpected pass for %s' % full_name)
-            t.unexpected_passes.append((directory, name, 'unexpected', way))
+            t.unexpected_passes.append(TestResult(directory, name, 'unexpected', way))
     elif passFail == 'fail':
         if _expect_pass(way):
             reason = result['reason']
             tag = result.get('tag')
             if tag == 'stat':
                 if_verbose(1, '*** unexpected stat test failure for %s' % full_name)
-                t.unexpected_stat_failures.append((directory, name, reason, way))
+                t.unexpected_stat_failures.append(TestResult(directory, name, reason, way))
             else:
                 if_verbose(1, '*** unexpected failure for %s' % full_name)
-                t.unexpected_failures.append((directory, name, reason, way))
+                result = TestResult(directory, name, reason, way, stderr=result.get('stderr'))
+                t.unexpected_failures.append(result)
         else:
             if opts.expect == 'missing-lib':
-                t.missing_libs.append((directory, name, 'missing-lib', way))
+                t.missing_libs.append(TestResult(directory, name, 'missing-lib', way))
             else:
                 t.n_expected_failures += 1
     else:
@@ -968,14 +1004,14 @@ def framework_fail(name, way, reason):
     directory = re.sub('^\\.[/\\\\]', '', opts.testdir)
     full_name = name + '(' + way + ')'
     if_verbose(1, '*** framework failure for %s %s ' % (full_name, reason))
-    t.framework_failures.append((directory, name, way, reason))
+    t.framework_failures.append(TestResult(directory, name, reason, way))
 
 def framework_warn(name, way, reason):
     opts = getTestOpts()
     directory = re.sub('^\\.[/\\\\]', '', opts.testdir)
     full_name = name + '(' + way + ')'
     if_verbose(1, '*** framework warning for %s %s ' % (full_name, reason))
-    t.framework_warnings.append((directory, name, way, reason))
+    t.framework_warnings.append(TestResult(directory, name, reason, way))
 
 def badResult(result):
     try:
@@ -998,6 +1034,13 @@ def badResult(result):
 
 def run_command( name, way, cmd ):
     return simple_run( name, '', override_options(cmd), '' )
+
+def makefile_test( name, way, target=None ):
+    if target is None:
+        target = name
+
+    cmd = '$MAKE -s --no-print-directory {target}'.format(target=target)
+    return run_command(name, way, cmd)
 
 # -----------------------------------------------------------------------------
 # GHCi tests
@@ -1070,15 +1113,20 @@ def do_compile(name, way, should_fail, top_mod, extra_mods, extra_hc_opts, **kwa
 
     expected_stderr_file = find_expected_file(name, 'stderr')
     actual_stderr_file = add_suffix(name, 'comp.stderr')
+    diff_file_name = in_testdir(add_suffix(name, 'comp.diff'))
 
     if not compare_outputs(way, 'stderr',
                            join_normalisers(getTestOpts().extra_errmsg_normaliser,
                                             normalise_errmsg),
                            expected_stderr_file, actual_stderr_file,
+                           diff_file=diff_file_name,
                            whitespace_normaliser=getattr(getTestOpts(),
                                                          "whitespace_normaliser",
                                                          normalise_whitespace)):
-        return failBecause('stderr mismatch')
+        stderr = open(diff_file_name, 'rb').read()
+        os.remove(diff_file_name)
+        return failBecauseStderr('stderr mismatch', stderr=stderr )
+
 
     # no problems found, this test passed
     return passed()
@@ -1154,10 +1202,11 @@ def metric_dict(name, way, metric, value):
 # name: name of the test.
 # way: the way.
 # stats_file: the path of the stats_file containing the stats for the test.
-# range_fields
+# range_fields: see TestOptions.stats_range_fields
 # Returns a pass/fail object. Passes if the stats are withing the expected value ranges.
 # This prints the results for the user.
 def check_stats(name, way, stats_file, range_fields):
+    head_commit = Perf.commit_hash('HEAD') if Perf.inside_git_repo() else None
     result = passed()
     if range_fields:
         try:
@@ -1167,27 +1216,29 @@ def check_stats(name, way, stats_file, range_fields):
         stats_file_contents = f.read()
         f.close()
 
-        for (metric, range_val_dev) in range_fields.items():
+        for (metric, baseline_and_dev) in range_fields.items():
             field_match = re.search('\("' + metric + '", "([0-9]+)"\)', stats_file_contents)
             if field_match == None:
                 print('Failed to find metric: ', metric)
                 metric_result = failBecause('no such stats metric')
             else:
                 actual_val = int(field_match.group(1))
-                
+
                 # Store the metric so it can later be stored in a git note.
                 perf_stat = metric_dict(name, way, metric, actual_val)
                 change = None
 
                 # If this is the first time running the benchmark, then pass.
-                if range_val_dev == None:
+                baseline = baseline_and_dev[0](way, head_commit) \
+                    if Perf.inside_git_repo() else None
+                if baseline == None:
                     metric_result = passed()
                     change = MetricChange.NewMetric
                 else:
-                    (expected_val, tolerance_dev) = range_val_dev
+                    tolerance_dev = baseline_and_dev[1]
                     (change, metric_result) = Perf.check_stats_change(
                         perf_stat,
-                        expected_val,
+                        baseline,
                         tolerance_dev,
                         config.allowed_perf_changes,
                         config.verbose >= 4)
@@ -1272,10 +1323,11 @@ def simple_build(name, way, extra_hc_opts, should_fail, top_mod, link, addsuf, b
 
     exit_code = runCmd(cmd, None, stdout, stderr, opts.compile_timeout_multiplier)
 
+    actual_stderr_path = in_testdir(name, 'comp.stderr')
+
     if exit_code != 0 and not should_fail:
         if config.verbose >= 1 and _expect_pass(way):
             print('Compile failed (exit code {0}) errors were:'.format(exit_code))
-            actual_stderr_path = in_testdir(name, 'comp.stderr')
             dump_file(actual_stderr_path)
 
     # ToDo: if the sub-shell was killed by ^C, then exit
@@ -1287,10 +1339,12 @@ def simple_build(name, way, extra_hc_opts, should_fail, top_mod, link, addsuf, b
 
     if should_fail:
         if exit_code == 0:
-            return failBecause('exit code 0')
+            stderr_contents = open(actual_stderr_path, 'rb').read()
+            return failBecauseStderr('exit code 0', stderr_contents)
     else:
         if exit_code != 0:
-            return failBecause('exit code non-0')
+            stderr_contents = open(actual_stderr_path, 'rb').read()
+            return failBecauseStderr('exit code non-0', stderr_contents)
 
     return passed()
 
@@ -1320,8 +1374,13 @@ def simple_run(name, way, prog, extra_run_opts):
 
     my_rts_flags = rts_flags(way)
 
+    # Collect stats if necessary:
+    # isStatsTest and not isCompilerStatsTest():
+    #   assume we are running a ghc compiled program. Collect stats.
+    # isStatsTest and way == 'ghci':
+    #   assume we are running a program via ghci. Collect stats
     stats_file = name + '.stats'
-    if isStatsTest() and not isCompilerStatsTest():
+    if isStatsTest() and (not isCompilerStatsTest() or way == 'ghci'):
         stats_args = ' +RTS -V0 -t' + stats_file + ' --machine-readable -RTS'
     else:
         stats_args = ''
@@ -1343,7 +1402,7 @@ def simple_run(name, way, prog, extra_run_opts):
             print('Wrong exit code for ' + name + '(' + way + ')' + '(expected', opts.exit_code, ', actual', exit_code, ')')
             dump_stdout(name)
             dump_stderr(name)
-        return failBecause('bad exit code')
+        return failBecause('bad exit code (%d)' % exit_code)
 
     if not (opts.ignore_stderr or stderr_ok(name, way) or opts.combined_output):
         return failBecause('bad stderr')
@@ -1566,7 +1625,7 @@ def check_hp_ok(name):
                 if (gsResult == 0):
                     return (True)
                 else:
-                    print("hp2ps output for " + name + "is not valid PostScript")
+                    print("hp2ps output for " + name + " is not valid PostScript")
             else: return (True) # assume postscript is valid without ghostscript
         else:
             print("hp2ps did not generate PostScript for " + name)
@@ -1603,7 +1662,7 @@ def check_prof_ok(name, way):
 # new output. Returns true if output matched or was accepted, false
 # otherwise. See Note [Output comparison] for the meaning of the
 # normaliser and whitespace_normaliser parameters.
-def compare_outputs(way, kind, normaliser, expected_file, actual_file,
+def compare_outputs(way, kind, normaliser, expected_file, actual_file, diff_file=None,
                     whitespace_normaliser=lambda x:x):
 
     expected_path = in_srcdir(expected_file)
@@ -1638,6 +1697,7 @@ def compare_outputs(way, kind, normaliser, expected_file, actual_file,
             # See Note [Output comparison].
             r = runCmd('diff -uw "{0}" "{1}"'.format(expected_normalised_path,
                                                         actual_normalised_path),
+                        stdout=diff_file,
                         print_output=True)
 
             # If for some reason there were no non-whitespace differences,
@@ -1645,7 +1705,10 @@ def compare_outputs(way, kind, normaliser, expected_file, actual_file,
             if r == 0:
                 r = runCmd('diff -u "{0}" "{1}"'.format(expected_normalised_path,
                                                            actual_normalised_path),
+                           stdout=diff_file,
                            print_output=True)
+        elif diff_file: open(diff_file, 'ab').close() # Make sure the file exists still as
+                                            # we will try to read it later
 
         if config.accept and (getTestOpts().expect == 'fail' or
                               way in getTestOpts().expect_fail_for):
@@ -1757,7 +1820,7 @@ def normalise_errmsg( str ):
     str = str.replace(bullet, '')
 
     # Windows only, this is a bug in hsc2hs but it is preventing
-    # stable output for the testsuite. See Trac #9775. For now we filter out this
+    # stable output for the testsuite. See #9775. For now we filter out this
     # warning message to get clean output.
     if config.msys:
         str = re.sub('Failed to remove file (.*); error= (.*)$', '', str)
@@ -1985,6 +2048,10 @@ def in_srcdir(name, suffix=''):
 #
 def find_expected_file(name, suff):
     basename = add_suffix(name, suff)
+    # Override the basename if the user has specified one, this will then be
+    # subjected to the same name mangling scheme as normal to allow platform
+    # specific overrides to work.
+    basename = getTestOpts().use_specs.get (suff, basename)
 
     files = [basename + ws + plat
              for plat in ['-' + config.platform, '-' + config.os, '']
@@ -2024,7 +2091,7 @@ if config.msys:
         # still locked then abort the current test by throwing an exception, this so it won't fail
         # with an even more cryptic error.
         #
-        # See Trac #13162
+        # See #13162
         exception = None
         while retries > 0 and os.path.exists(testdir):
             time.sleep((max_attempts-retries)*6)
@@ -2075,6 +2142,7 @@ def summary(t, file, short=False, color=False):
     if color:
         if len(t.unexpected_failures) > 0 or \
             len(t.unexpected_stat_failures) > 0 or \
+            len(t.unexpected_passes) > 0 or \
             len(t.framework_failures) > 0:
             colorize = str_fail
         else:
@@ -2135,19 +2203,22 @@ def summary(t, file, short=False, color=False):
         file.write('WARNING: Testsuite run was terminated early\n')
 
 def printUnexpectedTests(file, testInfoss):
-    unexpected = set(name for testInfos in testInfoss
-                       for (_, name, _, _) in testInfos
-                       if not name.endswith('.T'))
+    unexpected = set(result.testname
+                     for testInfos in testInfoss
+                     for result in testInfos
+                     if not result.testname.endswith('.T'))
     if unexpected:
         file.write('Unexpected results from:\n')
         file.write('TEST="' + ' '.join(sorted(unexpected)) + '"\n')
         file.write('\n')
 
 def printTestInfosSummary(file, testInfos):
-    maxDirLen = max(len(directory) for (directory, _, _, _) in testInfos)
-    for (directory, name, reason, way) in testInfos:
-        directory = directory.ljust(maxDirLen)
-        file.write('   {directory}  {name} [{reason}] ({way})\n'.format(**locals()))
+    maxDirLen = max(len(tr.directory) for tr in testInfos)
+    for result in sorted(testInfos, key=lambda r: (r.testname.lower(), r.way, r.directory)):
+        directory = result.directory.ljust(maxDirLen)
+        file.write('   {directory}  {r.testname} [{r.reason}] ({r.way})\n'.format(
+            r = result,
+            directory = directory))
     file.write('\n')
 
 def modify_lines(s, f):

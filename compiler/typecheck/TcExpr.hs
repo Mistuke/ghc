@@ -382,10 +382,10 @@ tcExpr expr@(OpApp fix arg1 op arg2) res_ty
 
        -- Make sure that the argument type has kind '*'
        --   ($) :: forall (r:RuntimeRep) (a:*) (b:TYPE r). (a->b) -> a -> b
-       -- Eg we do not want to allow  (D#  $  4.0#)   Trac #5570
+       -- Eg we do not want to allow  (D#  $  4.0#)   #5570
        --    (which gives a seg fault)
        --
-       -- The *result* type can have any kind (Trac #8739),
+       -- The *result* type can have any kind (#8739),
        -- so we don't need to check anything for that
        ; _ <- unifyKind (Just (XHsType $ NHsCoreTy arg2_sigma))
                         (tcTypeKind arg2_sigma) liftedTypeKind
@@ -439,7 +439,7 @@ tcExpr expr@(SectionR x op arg2) res_ty
        ; (wrap_fun, [arg1_ty, arg2_ty], op_res_ty)
                   <- matchActualFunTys (mk_op_msg op) fn_orig (Just (unLoc op)) 2 op_ty
        ; wrap_res <- tcSubTypeHR SectionOrigin (Just expr)
-                                 (mkFunTy arg1_ty op_res_ty) res_ty
+                                 (mkVisFunTy arg1_ty op_res_ty) res_ty
        ; arg2' <- tcArg op arg2 arg2_ty 2
        ; return ( mkHsWrap wrap_res $
                   SectionR x (mkLHsWrap wrap_fun op') arg2' ) }
@@ -447,7 +447,7 @@ tcExpr expr@(SectionR x op arg2) res_ty
     fn_orig = lexprCtOrigin op
     -- It's important to use the origin of 'op', so that call-stacks
     -- come out right; they are driven by the OccurrenceOf CtOrigin
-    -- See Trac #13285
+    -- See #13285
 
 tcExpr expr@(SectionL x arg1 op) res_ty
   = do { (op', op_ty) <- tcInferFun op
@@ -459,7 +459,7 @@ tcExpr expr@(SectionL x arg1 op) res_ty
            <- matchActualFunTys (mk_op_msg op) fn_orig (Just (unLoc op))
                                 n_reqd_args op_ty
        ; wrap_res <- tcSubTypeHR SectionOrigin (Just expr)
-                                 (mkFunTys arg_tys op_res_ty) res_ty
+                                 (mkVisFunTys arg_tys op_res_ty) res_ty
        ; arg1' <- tcArg op arg1 arg1_ty 1
        ; return ( mkHsWrap wrap_res $
                   SectionL x arg1' (mkLHsWrap wrap_fn op') ) }
@@ -467,7 +467,7 @@ tcExpr expr@(SectionL x arg1 op) res_ty
     fn_orig = lexprCtOrigin op
     -- It's important to use the origin of 'op', so that call-stacks
     -- come out right; they are driven by the OccurrenceOf CtOrigin
-    -- See Trac #13285
+    -- See #13285
 
 tcExpr expr@(ExplicitTuple x tup_args boxity) res_ty
   | all tupArgPresent tup_args
@@ -491,7 +491,7 @@ tcExpr expr@(ExplicitTuple x tup_args boxity) res_ty
            { Boxed   -> newFlexiTyVarTys arity liftedTypeKind
            ; Unboxed -> replicateM arity newOpenFlexiTyVarTy }
        ; let actual_res_ty
-                 = mkFunTys [ty | (ty, (L _ (Missing _))) <- arg_tys `zip` tup_args]
+                 = mkVisFunTys [ty | (ty, (L _ (Missing _))) <- arg_tys `zip` tup_args]
                             (mkTupleTy boxity arg_tys)
 
        ; wrap <- tcSubTypeHR (Shouldn'tHappenOrigin "ExpTuple")
@@ -700,7 +700,7 @@ The result type should be (T a b' c)
 not (T a b c),   because 'b' *is not* mentioned in a non-updated field
 not (T a b' c'), because 'c' *is*     mentioned in a non-updated field
 NB that it's not good enough to look at just one constructor; we must
-look at them all; cf Trac #3219
+look at them all; cf #3219
 
 After all, upd should be equivalent to:
         upd t x = case t of
@@ -1093,38 +1093,16 @@ arithSeqEltType (Just fl) res_ty
 ************************************************************************
 -}
 
-data HsArg tm ty
-  = HsValArg tm   -- Argument is an ordinary expression     (f arg)
-  | HsTypeArg  ty -- Argument is a visible type application (f @ty)
-  | HsArgPar SrcSpan -- See Note [HsArgPar]
-
-{-
-Note [HsArgPar]
-A HsArgPar indicates that everything to the left of this in the argument list is
-enclosed in parentheses together with the function itself. It is necessary so
-that we can recreate the parenthesis structure in the original source after
-typechecking the arguments.
-
-The SrcSpan is the span of the original HsPar
-
-((f arg1) arg2 arg3) results in an input argument list of
-[HsValArg arg1, HsArgPar span1, HsValArg arg2, HsValArg arg3, HsArgPar span2]
-
--}
+-- HsArg is defined in HsTypes.hs
 
 wrapHsArgs :: (NoGhcTc (GhcPass id) ~ GhcRn)
            => LHsExpr (GhcPass id)
            -> [HsArg (LHsExpr (GhcPass id)) (LHsWcType GhcRn)]
            -> LHsExpr (GhcPass id)
-wrapHsArgs f []                   = f
-wrapHsArgs f (HsValArg  a : args) = wrapHsArgs (mkHsApp f a)     args
-wrapHsArgs f (HsTypeArg t : args) = wrapHsArgs (mkHsAppType f t) args
-wrapHsArgs f (HsArgPar sp : args) = wrapHsArgs (L sp $ HsPar noExt f) args
-
-instance (Outputable tm, Outputable ty) => Outputable (HsArg tm ty) where
-  ppr (HsValArg tm)  = text "HsValArg"  <+> ppr tm
-  ppr (HsTypeArg ty) = text "HsTypeArg" <+> ppr ty
-  ppr (HsArgPar sp)  = text "HsArgPar"  <+> ppr sp
+wrapHsArgs f []                     = f
+wrapHsArgs f (HsValArg  a : args)   = wrapHsArgs (mkHsApp f a)          args
+wrapHsArgs f (HsTypeArg _ t : args) = wrapHsArgs (mkHsAppType f t)      args
+wrapHsArgs f (HsArgPar sp : args)   = wrapHsArgs (L sp $ HsPar noExt f) args
 
 isHsValArg :: HsArg tm ty -> Bool
 isHsValArg (HsValArg {})  = True
@@ -1165,7 +1143,7 @@ tcApp m_herald (L _ (HsApp _ fun arg1)) args res_ty
   = tcApp m_herald fun (HsValArg arg1 : args) res_ty
 
 tcApp m_herald (L _ (HsAppType _ fun ty1)) args res_ty
-  = tcApp m_herald fun (HsTypeArg ty1 : args) res_ty
+  = tcApp m_herald fun (HsTypeArg noSrcSpan ty1 : args) res_ty
 
 tcApp m_herald fun@(L loc (HsRecFld _ fld_lbl)) args res_ty
   | Ambiguous _ lbl        <- fld_lbl  -- Still ambiguous
@@ -1191,7 +1169,7 @@ tcApp m_herald fun@(L loc (HsVar _ (L _ fun_id))) args res_ty
   = do { rep <- newFlexiTyVarTy runtimeRepTy
        ; let [alpha, beta] = mkTemplateTyVars [liftedTypeKind, tYPE rep]
              seq_ty = mkSpecForAllTys [alpha,beta]
-                      (mkTyVarTy alpha `mkFunTy` mkTyVarTy beta `mkFunTy` mkTyVarTy beta)
+                      (mkTyVarTy alpha `mkVisFunTy` mkTyVarTy beta `mkVisFunTy` mkTyVarTy beta)
              seq_fun = L loc (HsVar noExt (L loc seqId))
              -- seq_ty = forall (a:*) (b:TYPE r). a -> b -> b
              -- where 'r' is a meta type variable
@@ -1199,7 +1177,7 @@ tcApp m_herald fun@(L loc (HsVar _ (L _ fun_id))) args res_ty
   where
     n_val_args = count isHsValArg args
 
-tcApp _ (L loc (ExplicitList _ Nothing [])) [HsTypeArg ty_arg] res_ty
+tcApp _ (L loc (ExplicitList _ Nothing [])) [HsTypeArg _ ty_arg] res_ty
   -- See Note [Visible type application for the empty list constructor]
   = do { ty_arg' <- tcHsTypeApp ty_arg liftedTypeKind
        ; let list_ty = TyConApp listTyCon [ty_arg']
@@ -1255,7 +1233,7 @@ mk_app_msg fun args = sep [ text "The" <+> text what <+> quotes (ppr expr)
     -- Include visible type arguments (but not other arguments) in the herald.
     -- See Note [Herald for matchExpectedFunTys] in TcUnify.
     expr = mkHsAppTypes fun type_app_args
-    type_app_args = [hs_ty | HsTypeArg hs_ty <- args]
+    type_app_args = [hs_ty | HsTypeArg _ hs_ty <- args]
 
 mk_op_msg :: LHsExpr GhcRn -> SDoc
 mk_op_msg op = text "The operator" <+> quotes (ppr op) <+> text "takes"
@@ -1296,7 +1274,7 @@ tcInferFun (L loc (HsRecFld _ f))
 tcInferFun fun
   = tcInferSigma fun
       -- NB: tcInferSigma; see TcUnify
-      -- Note [Deep instantiation of InferResult]
+      -- Note [Deep instantiation of InferResult] in TcUnify
 
 
 ----------------
@@ -1325,7 +1303,7 @@ tcArgs fun orig_fun_ty fun_orig orig_args herald
            ; return (inner_wrap, HsArgPar sp : args', res_ty)
            }
 
-    go acc_args n fun_ty (HsTypeArg hs_ty_arg : args)
+    go acc_args n fun_ty (HsTypeArg l hs_ty_arg : args)
       = do { (wrap1, upsilon_ty) <- topInstantiateInferred fun_orig fun_ty
                -- wrap1 :: fun_ty "->" upsilon_ty
            ; case tcSplitForAllTy_maybe upsilon_ty of
@@ -1340,8 +1318,8 @@ tcArgs fun orig_fun_ty fun_orig orig_args herald
 
                     ; inner_ty <- zonkTcType inner_ty
                           -- See Note [Visible type application zonk]
-
                     ; let in_scope  = mkInScopeSet (tyCoVarsOfTypes [upsilon_ty, ty_arg])
+
                           insted_ty = substTyWithInScope in_scope [tv] [ty_arg] inner_ty
                                       -- NB: tv and ty_arg have the same kind, so this
                                       --     substitution is kind-respecting
@@ -1356,7 +1334,7 @@ tcArgs fun orig_fun_ty fun_orig orig_args herald
                    -- inner_wrap :: insted_ty "->" (map typeOf args') -> res_ty
                     ; let inst_wrap = mkWpTyApps [ty_arg]
                     ; return ( inner_wrap <.> inst_wrap <.> wrap1
-                             , HsTypeArg hs_ty_arg : args'
+                             , HsTypeArg l hs_ty_arg : args'
                              , res_ty ) }
                _ -> ty_app_err upsilon_ty hs_ty_arg }
 
@@ -1384,7 +1362,7 @@ tcArgs fun orig_fun_ty fun_orig orig_args herald
 
 {- Note [Required quantifiers in the type of a term]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Consider (Trac #15859)
+Consider (#15859)
 
   data A k :: k -> Type      -- A      :: forall k -> k -> Type
   type KindOf (a :: k) = k   -- KindOf :: forall k. k -> Type
@@ -1412,7 +1390,7 @@ Note [Visible type application zonk]
 
 So we must zonk inner_ty as well, to guarantee consistency between zonk(tv)
 and inner_ty.  Otherwise we can build an ill-kinded type.  An example was
-Trac #14158, where we had:
+#14158, where we had:
    id :: forall k. forall (cat :: k -> k -> *). forall (a :: k). cat a a
 and we had the visible type application
   id @(->)
@@ -1427,7 +1405,7 @@ and we had the visible type application
   but we must first zonk the inner_ty to get
       forall (a :: TYPE q1). cat a a
   so that the result of substitution is well-kinded
-  Failing to do so led to Trac #14158.
+  Failing to do so led to #14158.
 -}
 
 ----------------
@@ -1473,9 +1451,11 @@ tcSyntaxOpGen :: CtOrigin
               -> TcM (a, SyntaxExpr GhcTcId)
 tcSyntaxOpGen orig op arg_tys res_ty thing_inside
   = do { (expr, sigma) <- tcInferSigma $ noLoc $ syn_expr op
+       ; traceTc "tcSyntaxOpGen" (ppr op $$ ppr expr $$ ppr sigma)
        ; (result, expr_wrap, arg_wraps, res_wrap)
            <- tcSynArgA orig sigma arg_tys res_ty $
               thing_inside
+       ; traceTc "tcSyntaxOpGen" (ppr op $$ ppr expr $$ ppr sigma )
        ; return (result, SyntaxExpr { syn_expr = mkHsWrap expr_wrap $ unLoc expr
                                     , syn_arg_wraps = arg_wraps
                                     , syn_res_wrap  = res_wrap }) }
@@ -1724,7 +1704,7 @@ So for partial signatures we apply the MR if no context is given.  So
    e :: _ => IO _     do not apply the MR
 just like in TcBinds.decideGeneralisationPlan
 
-This makes a difference (Trac #11670):
+This makes a difference (#11670):
    peek :: Ptr a -> IO CLong
    peek ptr = peekElemOff undefined 0 :: _
 from (peekElemOff undefined 0) we get
@@ -1864,7 +1844,7 @@ tcUnboundId :: HsExpr GhcRn -> UnboundVar -> ExpRhoType -> TcM (HsExpr GhcTcId)
 -- Id; and indeed the evidence for the CHoleCan does bind it, so it's
 -- not unbound any more!
 tcUnboundId rn_expr unbound res_ty
- = do { ty <- newOpenFlexiTyVarTy  -- Allow Int# etc (Trac #12531)
+ = do { ty <- newOpenFlexiTyVarTy  -- Allow Int# etc (#12531)
       ; let occ = unboundVarOcc unbound
       ; name <- newSysName occ
       ; let ev = mkLocalId name ty
@@ -1937,7 +1917,7 @@ tcTagToEnum loc fun_name args res_ty
              (before, _:after) = break isHsValArg args
 
        ; arg <- case filterOut isArgPar args of
-           [HsTypeArg hs_ty_arg, HsValArg term_arg]
+           [HsTypeArg _ hs_ty_arg, HsValArg term_arg]
              -> do { ty_arg <- tcHsTypeApp hs_ty_arg liftedTypeKind
                    ; _ <- tcSubTypeDS (OccurrenceOf fun_name) GenSigCtxt ty_arg res_ty
                      -- other than influencing res_ty, we just
@@ -1995,8 +1975,8 @@ too_many_args fun args
        2 (sep (map pp args))
   where
     pp (HsValArg e)                             = ppr e
-    pp (HsTypeArg (HsWC { hswc_body = L _ t })) = pprHsType t
-    pp (HsTypeArg (XHsWildCardBndrs _)) = panic "too_many_args"
+    pp (HsTypeArg _ (HsWC { hswc_body = L _ t })) = pprHsType t
+    pp (HsTypeArg _ (XHsWildCardBndrs _)) = panic "too_many_args"
     pp (HsArgPar _) = empty
 
 
@@ -2711,7 +2691,7 @@ with update
    r { x=e1, y=e2, z=e3 }, we
 
 Finding the smallest subset is hard, so the code here makes
-a decent stab, no more.  See Trac #7989.
+a decent stab, no more.  See #7989.
 -}
 
 naughtyRecordSel :: RdrName -> SDoc

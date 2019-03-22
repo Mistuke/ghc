@@ -679,7 +679,7 @@ View patterns
 
 View patterns are enabled by the language extension :extension:`ViewPatterns`. More
 information and examples of view patterns can be found on the
-:ghc-wiki:`Wiki page <ViewPatterns>`.
+:ghc-wiki:`Wiki page <view-patterns>`.
 
 View patterns are somewhat like pattern guards that can be nested inside
 of other patterns. They are a convenient way of pattern-matching against
@@ -2236,9 +2236,10 @@ The following syntax is stolen:
     .. index::
        single: forall
 
-    Stolen (in types) by: :extension:`ExplicitForAll`, and hence by
-    :extension:`ScopedTypeVariables`, :extension:`LiberalTypeSynonyms`,
-    :extension:`RankNTypes`, :extension:`ExistentialQuantification`
+    Stolen (in types) by default (see :ref:`infelicities-lexical`). ``forall`` is
+    a reserved keyword and never a type variable, in accordance with `GHC Proposal #43
+    <https://github.com/ghc-proposals/ghc-proposals/blob/master/proposals/0043-forall-keyword.rst>`__.
+
 
 ``mdo``
     .. index::
@@ -4458,7 +4459,7 @@ types containing a function type on the right-hand side.
 
 For a full specification of the algorithms used in :extension:`DeriveFunctor`,
 :extension:`DeriveFoldable`, and :extension:`DeriveTraversable`, see
-:ghc-wiki:`this wiki page <Commentary/Compiler/DeriveFunctor>`.
+:ghc-wiki:`this wiki page <commentary/compiler/derive-functor>`.
 
 .. _deriving-data:
 
@@ -5332,7 +5333,7 @@ Pattern synonyms
 
 Pattern synonyms are enabled by the language extension :extension:`PatternSynonyms`, which is
 required for defining them, but *not* for using them. More information and
-examples of pattern synonyms can be found on the :ghc-wiki:`Wiki page <PatternSynonyms>`.
+examples of pattern synonyms can be found on the :ghc-wiki:`Wiki page <pattern-synonyms>`.
 
 Pattern synonyms enable giving names to parametrized pattern schemes.
 They can also be thought of as abstract constructors that don't have a
@@ -5534,7 +5535,7 @@ following subsections.
 There are also lots more details in the `paper
 <https://www.microsoft.com/en-us/research/wp-content/uploads/2016/08/pattern-synonyms-Haskell16.pdf>`_.
 
-See the :ghc-wiki:`Wiki page <PatternSynonyms>` for more
+See the :ghc-wiki:`Wiki page <pattern-synonyms>` for more
 details.
 
 Syntax and scoping of pattern synonyms
@@ -5643,7 +5644,7 @@ incompatible with ``T``.
 A module which imports ``MyNum(..)`` from ``Example`` and then re-exports
 ``MyNum(..)`` will also export any pattern synonyms bundled with ``MyNum`` in
 ``Example``. A more complete specification can be found on the
-:ghc-wiki:`wiki. <PatternSynonyms/AssociatingSynonyms>`
+:ghc-wiki:`wiki. <pattern-synonyms/associating-synonyms>`
 
 
 .. _patsyn-typing:
@@ -5736,7 +5737,7 @@ Note also the following points
          pattern P x y v <- MkT True x y (v::a)
 
    Here the universal type variable `a` scopes over the definition of `P`,
-   but the existential `b` does not.  (c.f. discussion on Trac #14998.)
+   but the existential `b` does not.  (c.f. discussion on #14998.)
 
 -  For a bidirectional pattern synonym, a use of the pattern synonym as
    an expression has the type
@@ -5879,8 +5880,7 @@ The superclasses of a class declaration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. extension:: FlexibleContexts
-    :shortdesc: Enable flexible contexts. Implied by
-        :extension:`ImplicitParams`.
+    :shortdesc: Enable flexible contexts.
 
     :since: 6.8.1
 
@@ -6464,7 +6464,6 @@ Relaxed rules for the instance head
 .. extension:: FlexibleInstances
     :shortdesc: Enable flexible instances.
         Implies :extension:`TypeSynonymInstances`.
-        Implied by :extension:`ImplicitParams`.
 
     :implies: :extension:`TypeSynonymInstances`
     :since: 6.8.1
@@ -7423,7 +7422,7 @@ But superclass constraints like these are sometimes useful, and the conservative
 check is annoying where no actual recursion is involved.
 
 Moreover genuninely-recursive superclasses are sometimes useful. Here's a real-life
-example (Trac #10318) ::
+example (#10318) ::
 
      class (Frac (Frac a) ~ Frac a,
             Fractional (Frac a),
@@ -7575,16 +7574,16 @@ instance for ``GMap`` is ::
 In this example, the declaration has only one variant. In general, it
 can be any number.
 
-When :extension:`ExplicitForAll` is enabled, type or kind variables used on
+When :extension:`ExplicitForAll` is enabled, type and kind variables used on
 the left hand side can be explicitly bound. For example: ::
 
     data instance forall a (b :: Proxy a). F (Proxy b) = FProxy Bool
 
-When an explicit ``forall`` is present, all *type* variables mentioned which
-are not already in scope must be bound by the ``forall``. Kind variables will
-be implicitly bound if necessary, for example: ::
+When an explicit ``forall`` is present, *all* type and kind variables mentioned
+which are not already in scope must be bound by the ``forall``:
 
-    data instance forall (a :: k). F a = FOtherwise
+    data instance forall   (a :: k). F a = FOtherwise  -- rejected: k not in scope
+    data instance forall k (a :: k). F a = FOtherwise  -- accepted
 
 When the flag :ghc-flag:`-Wunused-type-patterns` is enabled, type
 variables that are mentioned in the patterns on the left hand side, but not
@@ -8883,18 +8882,18 @@ using kind signatures: ::
 
 The general principle is this:
 
--  *When there is a right-hand side, GHC infers the most polymorphic
-   kind consistent with the right-hand side.* Examples: ordinary data
+-  When there is a right-hand side, GHC infers the most polymorphic
+   kind consistent with the right-hand side. Examples: ordinary data
    type and GADT declarations, class declarations. In the case of a
    class declaration the role of "right hand side" is played by the
    class method signatures.
 
--  *When there is no right hand side, GHC defaults argument and result
-   kinds to ``Type``, except when directed otherwise by a kind signature*.
+-  When there is no right hand side, GHC defaults argument and result
+   kinds to ``Type``, except when directed otherwise by a kind signature.
    Examples: data and open type family declarations.
 
 This rule has occasionally-surprising consequences (see
-:ghc-ticket:`10132`. ::
+:ghc-ticket:`10132`). ::
 
     class C a where    -- Class declarations are generalised
                        -- so C :: forall k. k -> Constraint
@@ -8958,21 +8957,21 @@ is implicitly declared in ``c``\'s kind. Thus, according to our general
 principle, ``b`` must come *before* ``k``. However, ``b`` *depends on*
 ``k``. We thus reject ``T2`` with a suitable error message.
 
-In keeping with the way that class methods list their class variables
-first, associated types also list class variables before others. This
-means that the inferred variables from the class come before the
-specified variables from the class, which come before other implicitly
-bound variables. Here is an example::
+In associated types, we order the type variables as if the type family was a
+top-level declaration, ignoring the visibilities of the class's type variable
+binders. Here is an example: ::
 
   class C (a :: k) b where
     type F (c :: j) (d :: Proxy m) a b
 
 We infer these kinds::
 
-  C :: forall {k2 :: Type} (k :: Type). k -> k2 -> Constraint
-  F :: forall {k2 :: Type} (k :: Type)
-              {k3 :: Type} (j :: Type) (m :: k3).
-	      j -> Proxy m -> k -> k2 -> Type
+  C :: forall {k1 :: Type} (k :: Type). k -> k1 -> Constraint
+  F :: forall {k1 :: Type} {k2 :: Type} {k3 :: Type} j (m :: k1).
+       j -> Proxy m -> k2 -> k3 -> Type
+
+Note that the kind of ``a`` is specified in the kind of ``C`` but inferred in
+the kind of ``F``.
 
 The "general principle" described here is meant to make all this more
 predictable for users. It would not be hard to extend GHC to relax
@@ -9171,6 +9170,8 @@ GHC reports an error, saying that the kind of ``a`` should be a kind variable
 restricted to be ``Type``. The function definition is then rejected for being
 more specific than its type signature.
 
+.. _explicit-kind-quantification:
+
 Explicit kind quantification
 ----------------------------
 
@@ -9185,17 +9186,121 @@ a type variable ``a`` of kind ``k``. In general, there is no limit to how
 deeply nested this sort of dependency can work. However, the dependency must
 be well-scoped: ``forall (a :: k) k. ...`` is an error.
 
-For backward compatibility, kind variables *do not* need to be bound explicitly,
-even if the type starts with ``forall``.
+Implicit quantification in type synonyms and type family instances
+------------------------------------------------------------------
 
-Accordingly, the rule for kind quantification in higher-rank contexts has
-changed slightly. In GHC 7, if a kind variable was mentioned for the first
-time in the kind of a variable bound in a non-top-level ``forall``, the kind
-variable was bound there, too.
-That is, in ``f :: (forall (a :: k). ...) -> ...``, the ``k`` was bound
-by the same ``forall`` as the ``a``. In GHC 8, however, all kind variables
-mentioned in a type are bound at the outermost level. If you want one bound
-in a higher-rank ``forall``, include it explicitly.
+Consider the scoping rules for type synonyms and type family instances, such as
+these::
+
+   type          TS a (b :: k) = <rhs>
+   type instance TF a (b :: k) = <rhs>
+
+The basic principle is that all variables mentioned on the right hand side
+``<rhs>`` must be bound on the left hand side::
+
+  type TS a (b :: k) = (k, a, Proxy b)    -- accepted
+  type TS a (b :: k) = (k, a, Proxy b, z) -- rejected: z not in scope
+
+But there is one exception: free variables mentioned in the outermost kind
+signature on the right hand side are quantified implicitly. Thus, in the
+following example the variables ``a``, ``b``, and ``k`` are all in scope on the
+right hand side of ``S``::
+
+  type S a b = <rhs> :: k -> k
+
+The reason for this exception is that there may be no other way to bind ``k``.
+For example, suppose we wanted ``S`` to have the the following kind with an
+*invisible* parameter ``k``::
+
+  S :: forall k. Type -> Type -> k -> k
+
+In this case, we could not simply bind ``k`` on the left-hand side, as ``k``
+would become a *visible* parameter::
+
+  type S k a b = <rhs> :: k -> k
+  S :: forall k -> Type -> Type -> k -> k
+
+Note that we only look at the *outermost* kind signature to decide which
+variables to quantify implicitly. As a counter-example, consider ``M1``: ::
+
+  type M1 = 'Just ('Nothing :: Maybe k)    -- rejected: k not in scope
+
+Here, the kind signature is hidden inside ``'Just``, and there is no outermost
+kind signature. We can fix this example by providing an outermost kind signature: ::
+
+  type M2 = 'Just ('Nothing :: Maybe k) :: Maybe (Maybe k)
+
+Here, ``k`` is brought into scope by ``:: Maybe (Maybe k)``.
+
+A kind signature is considered to be outermost regardless of redundant
+parentheses: ::
+
+  type P =    'Nothing :: Maybe a    -- accepted
+  type P = ((('Nothing :: Maybe a))) -- accepted
+
+Closed type family instances are subject to the same rules: ::
+
+  type family F where
+    F = 'Nothing :: Maybe k            -- accepted
+
+  type family F where
+    F = 'Just ('Nothing :: Maybe k)    -- rejected: k not in scope
+
+  type family F where
+    F = 'Just ('Nothing :: Maybe k) :: Maybe (Maybe k)  -- accepted
+
+  type family F :: Maybe (Maybe k) where
+    F = 'Just ('Nothing :: Maybe k)    -- rejected: k not in scope
+
+  type family F :: Maybe (Maybe k) where
+    F @k = 'Just ('Nothing :: Maybe k) -- accepted
+
+Kind variables can also be quantified in *visible* positions. Consider the
+following two examples: ::
+
+  data ProxyKInvis (a :: k)
+  data ProxyKVis k (a :: k)
+
+In the first example, the kind variable ``k`` is an *invisible* argument to
+``ProxyKInvis``. In other words, a user does not need to instantiate ``k``
+explicitly, as kind inference automatically determines what ``k`` should be.
+For instance, in ``ProxyKInvis True``, ``k`` is inferred to be ``Bool``.
+This is reflected in the kind of ``ProxyKInvis``: ::
+
+  ProxyKInvis :: forall k. k -> Type
+
+In the second example, ``k`` is a *visible* argument to ``ProxyKVis``. That is
+to say, ``k`` is an argument that users must provide explicitly when applying
+``ProxyKVis``. For example, ``ProxyKVis Bool True`` is a well formed type.
+
+What is the kind of ``ProxyKVis``? One might say
+``forall k. Type -> k -> Type``, but this isn't quite right, since this would
+allow incorrect things like ``ProxyKVis Bool Int``, which should be rejected
+due to the fact that ``Int`` is not of kind ``Bool``. The key observation is that
+the kind of the second argument *depend* on the first argument. GHC indicates
+this dependency in the syntax that it gives for the kind of ``ProxyKVis``: ::
+
+  ProxyKVis :: forall k -> k -> Type
+
+This kind is similar to the kind of ``ProxyKInvis``, but with a key difference:
+the type variables quantified by the ``forall`` are followed by an arrow
+(``->``), not a dot (``.``). This is a visible, dependent quantifier. It is
+visible in that it the user must pass in a type for ``k`` explicitly, and it is
+dependent in the sense that ``k`` appears later in the kind of ``ProxyKVis``.
+As a counterpart, the ``k`` binder in ``forall k. k -> Type`` can be thought
+of as an *invisible*, dependent quantifier.
+
+GHC permits writing kinds with this syntax, provided that the
+``ExplicitForAll`` and ``PolyKinds`` language extensions are enabled. Just
+like the invisible ``forall``, one can put explicit kind signatures on visibly
+bound kind variables, so the following is syntactically valid: ::
+
+  ProxyKVis :: forall (k :: Type) -> k -> Type
+
+Currently, the ability to write visible, dependent quantifiers is limited to
+kinds. Consequently, visible dependent quantifiers are rejected in any context
+that is unambiguously the type of a term. They are also rejected in the types
+of data constructors.
 
 Kind-indexed GADTs
 ------------------
@@ -9277,6 +9382,28 @@ variable ``k`` is to be inferred, not specified by the user. (See
 distinction). GHC does not consider ``forall k. k -> Type`` and
 ``forall {k}. k -> Type`` to be equal at the kind level, and thus rejects
 ``Foo Proxy`` as ill-kinded.
+
+Constraints in kinds
+--------------------
+
+As kinds and types are the same, kinds can (with :extension:`TypeInType`)
+contain type constraints. However, only equality constraints are supported.
+
+Here is an example of a constrained kind: ::
+
+  type family IsTypeLit a where
+    IsTypeLit Nat    = 'True
+    IsTypeLit Symbol = 'True
+    IsTypeLit a      = 'False
+
+  data T :: forall a. (IsTypeLit a ~ 'True) => a -> Type where
+    MkNat    :: T 42
+    MkSymbol :: T "Don't panic!"
+
+The declarations above are accepted. However, if we add ``MkOther :: T Int``,
+we get an error that the equality constraint is not satisfied; ``Int`` is
+not a type literal. Note that explicitly quantifying with ``forall a`` is
+not necessary here.
 
 The kind ``Type``
 -----------------
@@ -9413,8 +9540,8 @@ Here are the key definitions, all available from ``GHC.Exts``: ::
   data RuntimeRep = LiftedRep     -- for things like `Int`
                   | UnliftedRep   -- for things like `Array#`
                   | IntRep        -- for `Int#`
-		  | TupleRep [RuntimeRep]  -- unboxed tuples, indexed by the representations of the elements
-		  | SumRep [RuntimeRep]    -- unboxed sums, indexed by the representations of the disjuncts
+                  | TupleRep [RuntimeRep]  -- unboxed tuples, indexed by the representations of the elements
+                  | SumRep [RuntimeRep]    -- unboxed sums, indexed by the representations of the disjuncts
                   | ...
 
   type Type = TYPE LiftedRep    -- Type is just an ordinary type synonym
@@ -9918,7 +10045,7 @@ Notes:
    instance (forall xx. c (Free c xx)) => Monad (Free c) where
        Free f >>= g = f g
 
-  See `Iceland Jack's summary <https://ghc.haskell.org/trac/ghc/ticket/14733#comment:6>`_.  The key point is that the bit to the right of the ``=>`` may be headed by a type *variable* (``c`` in this case), rather than a class.  It should not be one of the forall'd variables, though.
+  See `Iceland Jack's summary <https://gitlab.haskell.org/ghc/ghc/issues/14733#note_148352>`_.  The key point is that the bit to the right of the ``=>`` may be headed by a type *variable* (``c`` in this case), rather than a class.  It should not be one of the forall'd variables, though.
 
   (NB: this goes beyond what is described in `the paper <http://i.cs.hku.hk/~bruno//papers/hs2017.pdf>`_, but does not seem to introduce any new technical difficulties.)
 
@@ -10084,9 +10211,6 @@ in :ref:`data-instance-declarations`, :ref:`type-instance-declarations`,
 :ref:`closed-type-families`, :ref:`assoc-inst`, and :ref:`rewrite-rules`.
 
 Notes:
-
-- With :extension:`ExplicitForAll`, ``forall`` becomes a keyword; you can't use ``forall`` as a
-  type variable any more!
 
 - As well in type signatures, you can also use an explicit ``forall``
   in an instance declaration: ::
@@ -10686,7 +10810,7 @@ Visible type application
 ========================
 
 .. extension:: TypeApplications
-    :shortdesc: Enable type application syntax.
+    :shortdesc: Enable type application syntax in terms and types.
 
     :since: 8.0.1
 
@@ -10706,6 +10830,10 @@ the full polymorphic type of the function is known. If the function
 is an identifier (the common case), its type is considered known only when
 the identifier has been given a type signature. If the identifier does
 not have a type signature, visible type application cannot be used.
+
+GHC also permits visible kind application, where users can declare the kind
+arguments to be instantiated in kind-polymorphic cases. Its usage parallels
+visible type application in the term level, as specified above.
 
 .. _inferred-vs-specified:
 
@@ -10795,10 +10923,10 @@ application. This isn't true, however! Be sure to use :ghci-cmd:`:type +v`
 if you want the most accurate information with respect to visible type
 application properties.
 
-.. _ScopedSort:
-
 .. index::
    single: ScopedSort
+
+.. _ScopedSort:
 
 Ordering of specified variables
 -------------------------------
@@ -10810,19 +10938,6 @@ the rules in the subtler cases:
 - If an identifier's type has a ``forall``, then the order of type variables
   as written in the ``forall`` is retained.
 
-- If the type signature includes any kind annotations (either on variable
-  binders or as annotations on types), any variables used in kind
-  annotations come before any variables never used in kind annotations.
-  This rule is not recursive: if there is an annotation within an annotation,
-  then the variables used therein are on equal footing. Examples::
-
-    f :: Proxy (a :: k) -> Proxy (b :: j) -> ()
-      -- as if f :: forall k j a b. ...
-
-    g :: Proxy (b :: j) -> Proxy (a :: (Proxy :: (k -> Type) -> Type) Proxy) -> ()
-      -- as if g :: forall j k b a. ...
-      -- NB: k is in a kind annotation within a kind annotation
-
 - If any of the variables depend on other variables (that is, if some
   of the variables are *kind* variables), the variables are reordered
   so that kind variables come before type variables, preserving the
@@ -10832,13 +10947,11 @@ the rules in the subtler cases:
     h :: Proxy (a :: (j, k)) -> Proxy (b :: Proxy a) -> ()
       -- as if h :: forall j k a b. ...
 
-  In this example, all of ``a``, ``j``, and ``k`` are considered kind
-  variables and will always be placed before ``b``, a lowly type variable.
-  (Note that ``a`` is used in ``b``\'s kind.) Yet, even though ``a`` appears
-  lexically before ``j`` and ``k``, ``j`` and ``k`` are quantified first,
-  because ``a`` depends on ``j`` and ``k``. Note further that ``j`` and ``k``
-  are not reordered with respect to each other, even though doing so would
-  not violate dependency conditions.
+  In this example, ``a`` depends on ``j`` and ``k``, and ``b`` depends on ``a``.
+  Even though ``a`` appears lexically before ``j`` and ``k``, ``j`` and ``k``
+  are quantified first, because ``a`` depends on ``j`` and ``k``. Note further
+  that ``j`` and ``k`` are not reordered with respect to each other, even
+  though doing so would not violate dependency conditions.
 
   A "stable topological sort" here, we mean that we perform this algorithm
   (which we call *ScopedSort*):
@@ -10864,8 +10977,8 @@ the rules in the subtler cases:
   application. If you want to specify only the second type argument to
   ``wurble``, then you can say ``wurble @_ @Int``.
   The first argument is a wildcard, just like in a partial type signature.
-  However, if used in a visible type application, it is *not*
-  necessary to specify :extension:`PartialTypeSignatures` and your
+  However, if used in a visible type application/visible kind application,
+  it is *not* necessary to specify :extension:`PartialTypeSignatures` and your
   code will not generate a warning informing you of the omitted type.
 
 The section in this manual on kind polymorphism describes how variables
@@ -10878,7 +10991,6 @@ Implicit parameters
 
 .. extension:: ImplicitParams
     :shortdesc: Enable Implicit Parameters.
-        Implies :extension:`FlexibleContexts` and :extension:`FlexibleInstances`.
 
     :since: 6.8.1
 
@@ -11386,7 +11498,7 @@ Notice here that the ``Maybe`` type is parameterised by the
 should be considered highly experimental, and certainly un-supported*.
 You are welcome to try it, but please don't rely on it working
 consistently, or working the same in subsequent releases. See
-:ghc-wiki:`this wiki page <ImpredicativePolymorphism>` for more details.
+:ghc-wiki:`this wiki page <impredicative-polymorphism>` for more details.
 
 If you want impredicative polymorphism, the main workaround is to use a
 newtype wrapper. The ``id runST`` example can be written using this
@@ -12251,10 +12363,10 @@ Anonymous and named wildcards *can* occur on the left hand side of a
 type or data instance declaration;
 see :ref:`type-wildcards-lhs`.
 
-Anonymous wildcards are also allowed in visible type applications
-(:ref:`visible-type-application`). If you want to specify only the second type
-argument to ``wurble``, then you can say ``wurble @_ @Int`` where the first
-argument is a wildcard.
+Anonymous wildcards are also allowed in visible type applications/ visible kind
+applications (:ref:`visible-type-application`). If you want to specify only the
+second type argument to ``wurble``, then you can say ``wurble @_ @Int`` where
+the first argument is a wildcard.
 
 Standalone ``deriving`` declarations permit the use of a single,
 extra-constraints wildcard, like so: ::
@@ -12392,7 +12504,7 @@ that we're interested in is ``main`` it can be useful to be able to
 ignore the problems in ``a``.
 
 For more motivation and details please refer to the
-:ghc-wiki:`Wiki <DeferErrorsToRuntime>` page or the `original
+:ghc-wiki:`Wiki <defer-errors-to-runtime>` page or the `original
 paper <http://dreixel.net/research/pdf/epdtecp.pdf>`__.
 
 Enabling deferring of type errors
@@ -12488,7 +12600,7 @@ In a few cases, even equality constraints cannot be deferred.  Specifically:
 
   This type signature contains a kind error which cannot be deferred.
 
-- Type equalities under a forall cannot be deferred (c.f. Trac #14605).
+- Type equalities under a forall cannot be deferred (c.f. #14605).
 
 .. _template-haskell:
 
@@ -14634,7 +14746,7 @@ See also the ``NOINLINE`` (:ref:`noinline-pragma`) and ``INLINABLE``
 ``INLINABLE`` pragma
 ~~~~~~~~~~~~~~~~~~~~
 
-.. pragma:: INLINEABLE ⟨name⟩
+.. pragma:: INLINABLE ⟨name⟩
 
     :where: top-level
 

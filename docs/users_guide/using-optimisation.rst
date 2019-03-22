@@ -509,7 +509,7 @@ by saying ``-fno-wombat``.
     that were not visible earlier; and optimisations like
     :ghc-flag:`-fspec-constr` can create functions with unused arguments which
     are eliminated by late demand analysis. Improvements are modest, but
-    so is the cost. See notes on the :ghc-wiki:`Trac wiki page <LateDmd>`.
+    so is the cost. See notes on the :ghc-wiki:`wiki page <late-dmd>`.
 
 .. ghc-flag:: -fliberate-case
     :shortdesc: Turn on the liberate-case transformation. Implied by :ghc-flag:`-O2`.
@@ -999,10 +999,10 @@ by saying ``-fno-wombat``.
 
     :default: off
 
-    Turn on the static argument transformation, which turns a recursive
-    function into a non-recursive one with a local recursive loop. See
-    Chapter 7 of `Andre Santos's PhD
-    thesis <http://research.microsoft.com/en-us/um/people/simonpj/papers/santos-thesis.ps.gz>`__
+    Turn on the static argument transformation, which turns a recursive function
+    into a non-recursive one with a local recursive loop. See Chapter 7 of
+    `Andre Santos's PhD thesis
+    <https://www.microsoft.com/en-us/research/publication/compilation-transformation-non-strict-functional-languages/>`__.
 
 .. ghc-flag:: -fstg-lift-lams
     :shortdesc: Enable late lambda lifting on the STG intermediate
@@ -1065,8 +1065,9 @@ by saying ``-fno-wombat``.
 
     :default: on
 
-    Switch on the strictness analyser. The
-    implementation is described in the paper `Theory and Practice of Demand Analysis in Haskell`<https://www.microsoft.com/en-us/research/wp-content/uploads/2017/03/demand-jfp-draft.pdf>`__.
+    Switch on the strictness analyser. The implementation is described in the
+    paper `Theory and Practice of Demand Analysis in Haskell
+    <https://www.microsoft.com/en-us/research/wp-content/uploads/2017/03/demand-jfp-draft.pdf>`__.
 
     The strictness analyser figures out when arguments and variables in
     a function can be treated 'strictly' (that is they are always
@@ -1237,3 +1238,19 @@ by saying ``-fno-wombat``.
     if a function definition will be inlined *at a call site*. The other option
     determines if a function definition will be kept around at all for
     potential inlining.
+
+.. ghc-flag:: -fbinary-blob-threshold=⟨n⟩
+    :shortdesc: *default: 500K.* Tweak assembly generator for binary blobs.
+    :type: dynamic
+    :category: optimization
+
+    :default: 500000
+
+    The native code-generator can either dump binary blobs (e.g. string
+    literals) into the assembly file (by using ".asciz" or ".string" assembler
+    directives) or it can dump them as binary data into a temporary file which
+    is then included by the assembler (using the ".incbin" assembler directive).
+
+    This flag sets the size (in bytes) threshold above which the second approach
+    is used. You can disable the second approach entirely by setting the
+    threshold to 0.

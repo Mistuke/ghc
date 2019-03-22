@@ -107,7 +107,7 @@ import {-# SOURCE #-} TysWiredIn
   , doubleElemRepDataConTy
   , mkPromotedListTy )
 
-import Var              ( TyVar, VarBndr(Bndr), mkTyVar )
+import Var              ( TyVar, mkTyVar )
 import Name
 import TyCon
 import SrcLoc
@@ -133,8 +133,8 @@ primTyCons = unexposedPrimTyCons ++ exposedPrimTyCons
 
 -- | Primitive 'TyCon's that are defined in "GHC.Prim" but not exposed.
 -- It's important to keep these separate as we don't want users to be able to
--- write them (see Trac #15209) or see them in GHCi's @:browse@ output
--- (see Trac #12023).
+-- write them (see #15209) or see them in GHCi's @:browse@ output
+-- (see #12023).
 unexposedPrimTyCons :: [TyCon]
 unexposedPrimTyCons
   = [ eqPrimTyCon
@@ -323,10 +323,10 @@ mkTemplateKindTyConBinders :: [Kind] -> [TyConBinder]
 mkTemplateKindTyConBinders kinds = [mkNamedTyConBinder Specified tv | tv <- mkTemplateKindVars kinds]
 
 mkTemplateAnonTyConBinders :: [Kind] -> [TyConBinder]
-mkTemplateAnonTyConBinders kinds = map mkAnonTyConBinder (mkTemplateTyVars kinds)
+mkTemplateAnonTyConBinders kinds = mkAnonTyConBinders VisArg (mkTemplateTyVars kinds)
 
 mkTemplateAnonTyConBindersFrom :: Int -> [Kind] -> [TyConBinder]
-mkTemplateAnonTyConBindersFrom n kinds = map mkAnonTyConBinder (mkTemplateTyVarsFrom n kinds)
+mkTemplateAnonTyConBindersFrom n kinds = mkAnonTyConBinders VisArg (mkTemplateTyVarsFrom n kinds)
 
 alphaTyVars :: [TyVar]
 alphaTyVars = mkTemplateTyVars $ repeat liftedTypeKind
@@ -386,9 +386,8 @@ funTyConName = mkPrimTyConName (fsLit "->") funTyConKey funTyCon
 funTyCon :: TyCon
 funTyCon = mkFunTyCon funTyConName tc_bndrs tc_rep_nm
   where
-    tc_bndrs = [ Bndr runtimeRep1TyVar (NamedTCB Inferred)
-               , Bndr runtimeRep2TyVar (NamedTCB Inferred)
-               ]
+    tc_bndrs = [ mkNamedTyConBinder Inferred runtimeRep1TyVar
+               , mkNamedTyConBinder Inferred runtimeRep2TyVar ]
                ++ mkTemplateAnonTyConBinders [ tYPE runtimeRep1Ty
                                              , tYPE runtimeRep2Ty
                                              ]
@@ -683,7 +682,7 @@ Let's take these one at a time:
     --------------------------
 This is The Type Of Equality in GHC. It classifies nominal coercions.
 This type is used in the solver for recording equality constraints.
-It responds "yes" to Type.isEqPred and classifies as an EqPred in
+It responds "yes" to Type.isEqPrimPred and classifies as an EqPred in
 Type.classifyPredType.
 
 All wanted constraints of this type are built with coercion holes.
@@ -858,10 +857,10 @@ mkProxyPrimTy :: Type -> Type -> Type
 mkProxyPrimTy k ty = TyConApp proxyPrimTyCon [k, ty]
 
 proxyPrimTyCon :: TyCon
-proxyPrimTyCon = mkPrimTyCon proxyPrimTyConName binders res_kind [Nominal,Nominal]
+proxyPrimTyCon = mkPrimTyCon proxyPrimTyConName binders res_kind [Nominal,Phantom]
   where
-     -- Kind: forall k. k -> Void#
-     binders = mkTemplateTyConBinders [liftedTypeKind] (\ks-> ks)
+     -- Kind: forall k. k -> TYPE (Tuple '[])
+     binders = mkTemplateTyConBinders [liftedTypeKind] id
      res_kind = unboxedTupleKind []
 
 
@@ -876,8 +875,8 @@ eqPrimTyCon :: TyCon  -- The representation type for equality predicates
                       -- See Note [The equality types story]
 eqPrimTyCon  = mkPrimTyCon eqPrimTyConName binders res_kind roles
   where
-    -- Kind :: forall k1 k2. k1 -> k2 -> Void#
-    binders  = mkTemplateTyConBinders [liftedTypeKind, liftedTypeKind] (\ks -> ks)
+    -- Kind :: forall k1 k2. k1 -> k2 -> TYPE (Tuple '[])
+    binders  = mkTemplateTyConBinders [liftedTypeKind, liftedTypeKind] id
     res_kind = unboxedTupleKind []
     roles    = [Nominal, Nominal, Nominal, Nominal]
 
@@ -887,8 +886,8 @@ eqPrimTyCon  = mkPrimTyCon eqPrimTyConName binders res_kind roles
 eqReprPrimTyCon :: TyCon   -- See Note [The equality types story]
 eqReprPrimTyCon = mkPrimTyCon eqReprPrimTyConName binders res_kind roles
   where
-    -- Kind :: forall k1 k2. k1 -> k2 -> Void#
-    binders  = mkTemplateTyConBinders [liftedTypeKind, liftedTypeKind] (\ks -> ks)
+    -- Kind :: forall k1 k2. k1 -> k2 -> TYPE (Tuple '[])
+    binders  = mkTemplateTyConBinders [liftedTypeKind, liftedTypeKind] id
     res_kind = unboxedTupleKind []
     roles    = [Nominal, Nominal, Representational, Representational]
 
@@ -898,8 +897,8 @@ eqReprPrimTyCon = mkPrimTyCon eqReprPrimTyConName binders res_kind roles
 eqPhantPrimTyCon :: TyCon
 eqPhantPrimTyCon = mkPrimTyCon eqPhantPrimTyConName binders res_kind roles
   where
-    -- Kind :: forall k1 k2. k1 -> k2 -> Void#
-    binders  = mkTemplateTyConBinders [liftedTypeKind, liftedTypeKind] (\ks -> ks)
+    -- Kind :: forall k1 k2. k1 -> k2 -> TYPE (Tuple '[])
+    binders  = mkTemplateTyConBinders [liftedTypeKind, liftedTypeKind] id
     res_kind = unboxedTupleKind []
     roles    = [Nominal, Nominal, Phantom, Phantom]
 

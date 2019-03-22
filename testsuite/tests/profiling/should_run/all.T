@@ -6,8 +6,7 @@ test('heapprof002',
       extra_run_opts('7')],
      compile_and_run, [''])
 
-test('T11489', [req_profiling], run_command,
-     ['$MAKE -s --no-print-directory T11489'])
+test('T11489', [req_profiling], makefile_test, ['T11489'])
 
 # Below this line, run tests only with profiling ways.
 setTestOpts(req_profiling)
@@ -24,7 +23,7 @@ expect_broken_for_10037 = expect_broken_for(
 
 test('heapprof001',
      [when(have_profiling(), extra_ways(extra_prof_ways)),
-      when(arch('i386'), expect_broken_for(15382, ['prof_hc_hb'])),
+      fragile(15382),
       extra_run_opts('7')],
      compile_and_run, [''])
 
@@ -59,7 +58,7 @@ test('T5654b-O0', [only_ways(['prof'])], compile_and_run, [''])
 
 test('T5654b-O1', [only_ways(['profasm'])], compile_and_run, [''])
 
-test('scc005', [], compile_and_run, [''])
+test('scc005', [], compile_and_run, ['-fno-worker-wrapper'])
 
 test('T5314', [extra_ways(extra_prof_ways)], compile_and_run, [''])
 
@@ -88,7 +87,7 @@ test('prof-doc-fib', [], compile_and_run, [''])
 test('prof-doc-last', [], compile_and_run, ['-fno-full-laziness'])
 
 # unicode in cost centre names
-test('T5559', [], compile_and_run, [''])
+test('T5559', fragile(16350), compile_and_run, [''])
 
 # Note [consistent stacks]
 #  Certain optimisations can change the stacks we get out of the
@@ -144,4 +143,10 @@ test('toplevel_scc_1',
 
 test('T12962', [], compile_and_run, [''])
 
-test('T14257', [], run_command, ['$MAKE -s --no-print-directory T14257'])
+test('T14257', [], makefile_test, ['T14257'])
+
+test('T15897',
+     [extra_ways(['profasm']), only_ways(['profasm']),
+      run_timeout_multiplier(2),
+      fragile(15467)],
+     makefile_test, ['T15897'])

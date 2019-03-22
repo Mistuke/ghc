@@ -98,10 +98,7 @@ test('T3064',
      compile,
      [''])
 
-test('T4007',
-     normal,
-     run_command,
-     ['$MAKE -s --no-print-directory T4007'])
+test('T4007', normal, makefile_test, ['T4007'])
 
 test('T5030',
      [collect_compiler_stats('bytes allocated', 10),
@@ -358,8 +355,10 @@ test('T13719',
 
 test('T14697',
      [ collect_compiler_stats('bytes allocated',10),
-       # This generates too large of a command-line for poor Windows
-       when(opsys('mingw32'), expect_broken(15072)),
+       # This generates too large of a command-line for poor Windows and
+       # Darwin. The solution is to teach the testsuite driver to
+       # invoke GHC with a response file.
+       when(opsys('mingw32') or opsys('darwin'), fragile(15072)),
        pre_cmd('./genT14697'),
        extra_files(['genT14697']),
        extra_hc_opts('$(cat T14697-flags)'), # 10k -optP arguments
@@ -393,3 +392,10 @@ test ('T15164',
       ],
       compile,
       ['-v0 -O'])
+
+test('T16190',
+      [ collect_stats(),
+        when(opsys('mingw32'), expect_broken(16389))
+      ],
+      multimod_compile,
+      ['T16190.hs', '-v0'])

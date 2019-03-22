@@ -2,7 +2,7 @@
 --
 -- FamInstEnv: Type checked family instance declarations
 
-{-# LANGUAGE CPP, GADTs, ScopedTypeVariables, BangPatterns #-}
+{-# LANGUAGE CPP, GADTs, ScopedTypeVariables, BangPatterns, TupleSections #-}
 
 module FamInstEnv (
         FamInst(..), FamFlavor(..), famInstAxiom, famInstTyCon, famInstRHS,
@@ -60,7 +60,6 @@ import Var
 import Pair
 import SrcLoc
 import FastString
-import MonadUtils
 import Control.Monad
 import Data.List( mapAccumL )
 import Data.Array( Array, assocs )
@@ -590,7 +589,7 @@ Like types and classes, we build axioms fully quantified over all
 their variables, and tidy them when we build them. For example,
 we print out axioms and don't want to print stuff like
     F k k a b = ...
-Instead we must tidy those kind variables.  See Trac #7524.
+Instead we must tidy those kind variables.  See #7524.
 
 We could instead tidy when we print, but that makes it harder to get
 things like injectivity errors to come out right. Danger of
@@ -615,10 +614,11 @@ If we're not careful during tidying, then when this program is compiled with
     axiom DataFamilyInstanceLHS.D:R:SingMyKind_0 ::
       Sing _ = DataFamilyInstanceLHS.R:SingMyKind_ _
 
-Its misleading to have a wildcard type appearing on the RHS like
-that. To avoid this issue, during tidying, we always opt to add a
-numeric suffix to types that are simply `_`. That way, you instead end
-up with:
+It's misleading to have a wildcard type appearing on the RHS like
+that. To avoid this issue, when building a CoAxiom (which is what eventually
+gets printed above), we tidy all the variables in an env that already contains
+'_'. Thus, any variable named '_' will be renamed, giving us the nicer output
+here:
 
   COERCION AXIOMS
     axiom DataFamilyInstanceLHS.D:R:SingMyKind_0 ::
@@ -626,7 +626,9 @@ up with:
 
 Which is at least legal syntax.
 
-See also Note [CoAxBranch type variables] in CoAxiom
+See also Note [CoAxBranch type variables] in CoAxiom; note that we
+are tidying (changing OccNames only), not freshening, in accordance with
+that Note.
 -}
 
 -- all axiom roles are Nominal, as this is only used with type families
@@ -1231,7 +1233,7 @@ That's what the CoercionTy case is doing within normalise_type.
 Note [Normalisation and type synonyms]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 We need to be a bit careful about normalising in the presence of type
-synonyms (Trac #13035).  Suppose S is a type synonym, and we have
+synonyms (#13035).  Suppose S is a type synonym, and we have
    S t1 t2
 If S is family-free (on its RHS) we can just normalise t1 and t2 and
 reconstruct (S t1' t2').   Expanding S could not reveal any new redexes
@@ -1239,7 +1241,7 @@ because type families are saturated.
 
 But if S has a type family on its RHS we expand /before/ normalising
 the args t1, t2.  If we normalise t1, t2 first, we'll re-normalise them
-after expansion, and that can lead to /exponential/ behavour; see Trac #13035.
+after expansion, and that can lead to /exponential/ behavour; see #13035.
 
 Notice, though, that expanding first can in principle duplicate t1,t2,
 which might contain redexes. I'm sure you could conjure up an exponential
@@ -1265,16 +1267,33 @@ topNormaliseType_maybe :: FamInstEnvs -> Type -> Maybe (Coercion, Type)
 --
 -- However, ty' can be something like (Maybe (F ty)), where
 -- (F ty) is a redex.
-
+--
+-- Always operates homogeneously: the returned type has the same kind as the
+-- original type, and the returned coercion is always homogeneous.
 topNormaliseType_maybe env ty
-  = topNormaliseTypeX stepper mkTransCo ty
+  = do { ((co, mkind_co), nty) <- topNormaliseTypeX stepper combine ty
+       ; return $ case mkind_co of
+           MRefl       -> (co, nty)
+           MCo kind_co -> let nty_casted = nty `mkCastTy` mkSymCo kind_co
+                              final_co   = mkCoherenceRightCo Representational nty
+                                                              (mkSymCo kind_co) co
+                          in (final_co, nty_casted) }
   where
-    stepper = unwrapNewTypeStepper `composeSteppers` tyFamStepper
+    stepper = unwrapNewTypeStepper' `composeSteppers` tyFamStepper
 
+    combine (c1, mc1) (c2, mc2) = (c1 `mkTransCo` c2, mc1 `mkTransMCo` mc2)
+
+    unwrapNewTypeStepper' :: NormaliseStepper (Coercion, MCoercionN)
+    unwrapNewTypeStepper' rec_nts tc tys
+      = mapStepResult (, MRefl) $ unwrapNewTypeStepper rec_nts tc tys
+
+      -- second coercion below is the kind coercion relating the original type's kind
+      -- to the normalised type's kind
+    tyFamStepper :: NormaliseStepper (Coercion, MCoercionN)
     tyFamStepper rec_nts tc tys  -- Try to step a type/data family
-      = let (args_co, ntys) = normaliseTcArgs env Representational tc tys in
+      = let (args_co, ntys, res_co) = normaliseTcArgs env Representational tc tys in
         case reduceTyFamApp_maybe env Representational tc ntys of
-          Just (co, rhs) -> NS_Step rec_nts rhs (args_co `mkTransCo` co)
+          Just (co, rhs) -> NS_Step rec_nts rhs (args_co `mkTransCo` co, MCo res_co)
           _              -> NS_Done
 
 ---------------
@@ -1298,21 +1317,36 @@ normalise_tc_app tc tys
   = -- A type-family application
     do { env <- getEnv
        ; role <- getRole
-       ; (args_co, ntys) <- normalise_tc_args tc tys
+       ; (args_co, ntys, res_co) <- normalise_tc_args tc tys
        ; case reduceTyFamApp_maybe env role tc ntys of
            Just (first_co, ty')
              -> do { (rest_co,nty) <- normalise_type ty'
-                   ; return ( args_co `mkTransCo` first_co `mkTransCo` rest_co
-                            , nty ) }
+                   ; return (assemble_result role nty
+                                             (args_co `mkTransCo` first_co `mkTransCo` rest_co)
+                                             res_co) }
            _ -> -- No unique matching family instance exists;
                 -- we do not do anything
-                return (args_co, mkTyConApp tc ntys) }
+                return (assemble_result role (mkTyConApp tc ntys) args_co res_co) }
 
   | otherwise
   = -- A synonym with no type families in the RHS; or data type etc
     -- Just normalise the arguments and rebuild
-    do { (args_co, ntys) <- normalise_tc_args tc tys
-       ; return (args_co, mkTyConApp tc ntys) }
+    do { (args_co, ntys, res_co) <- normalise_tc_args tc tys
+       ; role <- getRole
+       ; return (assemble_result role (mkTyConApp tc ntys) args_co res_co) }
+
+  where
+    assemble_result :: Role       -- r, ambient role in NormM monad
+                    -> Type       -- nty, result type, possibly of changed kind
+                    -> Coercion   -- orig_ty ~r nty, possibly heterogeneous
+                    -> CoercionN  -- typeKind(orig_ty) ~N typeKind(nty)
+                    -> (Coercion, Type)   -- (co :: orig_ty ~r nty_casted, nty_casted)
+                                          -- where nty_casted has same kind as orig_ty
+    assemble_result r nty orig_to_nty kind_co
+      = ( final_co, nty_old_kind )
+      where
+        nty_old_kind = nty `mkCastTy` mkSymCo kind_co
+        final_co     = mkCoherenceRightCo r nty (mkSymCo kind_co) orig_to_nty
 
 ---------------
 -- | Normalise arguments to a tycon
@@ -1320,21 +1354,23 @@ normaliseTcArgs :: FamInstEnvs          -- ^ env't with family instances
                 -> Role                 -- ^ desired role of output coercion
                 -> TyCon                -- ^ tc
                 -> [Type]               -- ^ tys
-                -> (Coercion, [Type])   -- ^ co :: tc tys ~ tc new_tys
+                -> (Coercion, [Type], CoercionN)
+                                        -- ^ co :: tc tys ~ tc new_tys
+                                        -- NB: co might not be homogeneous
+                                        -- last coercion :: kind(tc tys) ~ kind(tc new_tys)
 normaliseTcArgs env role tc tys
   = initNormM env role (tyCoVarsOfTypes tys) $
     normalise_tc_args tc tys
 
 normalise_tc_args :: TyCon -> [Type]             -- tc tys
-                  -> NormM (Coercion, [Type])    -- (co, new_tys), where
-                                                 -- co :: tc tys ~ tc new_tys
+                  -> NormM (Coercion, [Type], CoercionN)
+                  -- (co, new_tys), where
+                  -- co :: tc tys ~ tc new_tys; might not be homogeneous
+                  -- res_co :: typeKind(tc tys) ~N typeKind(tc new_tys)
 normalise_tc_args tc tys
   = do { role <- getRole
-       ; (cois, ntys) <- zipWithAndUnzipM normalise_type_role
-                                          tys (tyConRolesX role tc)
-       ; return (mkTyConAppCo role tc cois, ntys) }
-  where
-    normalise_type_role ty r = withRole r $ normalise_type ty
+       ; (args_cos, nargs, res_co) <- normalise_args (tyConKind tc) (tyConRolesX role tc) tys
+       ; return (mkTyConAppCo role tc args_cos, nargs, res_co) }
 
 ---------------
 normaliseType :: FamInstEnvs
@@ -1360,15 +1396,14 @@ normalise_type ty
     go (TyConApp tc tys) = normalise_tc_app tc tys
     go ty@(LitTy {})     = do { r <- getRole
                               ; return (mkReflCo r ty, ty) }
-    go (AppTy ty1 ty2)
-      = do { (co,  nty1) <- go ty1
-           ; (arg, nty2) <- withRole Nominal $ go ty2
-           ; return (mkAppCo co arg, mkAppTy nty1 nty2) }
-    go (FunTy ty1 ty2)
+
+    go (AppTy ty1 ty2) = go_app_tys ty1 [ty2]
+
+    go ty@(FunTy { ft_arg = ty1, ft_res = ty2 })
       = do { (co1, nty1) <- go ty1
            ; (co2, nty2) <- go ty2
            ; r <- getRole
-           ; return (mkFunCo r co1 co2, mkFunTy nty1 nty2) }
+           ; return (mkFunCo r co1 co2, ty { ft_arg = nty1, ft_res = nty2 }) }
     go (ForAllTy (Bndr tcvar vis) ty)
       = do { (lc', tv', h, ki') <- normalise_var_bndr tcvar
            ; (co, nty)          <- withLC lc' $ normalise_type ty
@@ -1389,6 +1424,57 @@ normalise_type ty
                          (liftCoSubst Nominal lc (coercionType co))
                          co right_co
                     , mkCoercionTy right_co ) }
+
+    go_app_tys :: Type   -- function
+               -> [Type] -- args
+               -> NormM (Coercion, Type)
+    -- cf. TcFlatten.flatten_app_ty_args
+    go_app_tys (AppTy ty1 ty2) tys = go_app_tys ty1 (ty2 : tys)
+    go_app_tys fun_ty arg_tys
+      = do { (fun_co, nfun) <- go fun_ty
+           ; case tcSplitTyConApp_maybe nfun of
+               Just (tc, xis) ->
+                 do { (second_co, nty) <- go (mkTyConApp tc (xis ++ arg_tys))
+                   -- flatten_app_ty_args avoids redundantly processing the xis,
+                   -- but that's a much more performance-sensitive function.
+                   -- This type normalisation is not called in a loop.
+                    ; return (mkAppCos fun_co (map mkNomReflCo arg_tys) `mkTransCo` second_co, nty) }
+               Nothing ->
+                 do { (args_cos, nargs, res_co) <- normalise_args (typeKind nfun)
+                                                                  (repeat Nominal)
+                                                                  arg_tys
+                    ; role <- getRole
+                    ; let nty = mkAppTys nfun nargs
+                          nco = mkAppCos fun_co args_cos
+                          nty_casted = nty `mkCastTy` mkSymCo res_co
+                          final_co = mkCoherenceRightCo role nty (mkSymCo res_co) nco
+                    ; return (final_co, nty_casted) } }
+
+normalise_args :: Kind    -- of the function
+               -> [Role]  -- roles at which to normalise args
+               -> [Type]  -- args
+               -> NormM ([Coercion], [Type], Coercion)
+-- returns (cos, xis, res_co), where each xi is the normalised
+-- version of the corresponding type, each co is orig_arg ~ xi,
+-- and the res_co :: kind(f orig_args) ~ kind(f xis)
+-- NB: The xis might *not* have the same kinds as the input types,
+-- but the resulting application *will* be well-kinded
+-- cf. TcFlatten.flatten_args_slow
+normalise_args fun_ki roles args
+  = do { normed_args <- zipWithM normalise1 roles args
+       ; let (xis, cos, res_co) = simplifyArgsWorker ki_binders inner_ki fvs roles normed_args
+       ; return (map mkSymCo cos, xis, mkSymCo res_co) }
+  where
+    (ki_binders, inner_ki) = splitPiTys fun_ki
+    fvs = tyCoVarsOfTypes args
+
+    -- flattener conventions are different from ours
+    impedance_match :: NormM (Coercion, Type) -> NormM (Type, Coercion)
+    impedance_match action = do { (co, ty) <- action
+                                ; return (ty, mkSymCo co) }
+
+    normalise1 role ty
+      = impedance_match $ withRole role $ normalise_type ty
 
 normalise_tyvar :: TyVar -> NormM (Coercion, Type)
 normalise_tyvar tv
@@ -1536,9 +1622,10 @@ coreFlattenTy = go
       = let (env', tys') = coreFlattenTys env tys in
         (env', mkTyConApp tc tys')
 
-    go env (FunTy ty1 ty2) = let (env1, ty1') = go env  ty1
-                                 (env2, ty2') = go env1 ty2 in
-                             (env2, mkFunTy ty1' ty2')
+    go env ty@(FunTy { ft_arg = ty1, ft_res = ty2 })
+      = let (env1, ty1') = go env  ty1
+            (env2, ty2') = go env1 ty2 in
+        (env2, ty { ft_arg = ty1', ft_res = ty2' })
 
     go env (ForAllTy (Bndr tv vis) ty)
       = let (env1, tv') = coreFlattenVarBndr env tv
@@ -1619,7 +1706,7 @@ allTyCoVarsInTy = go
     go (TyVarTy tv)      = unitVarSet tv
     go (TyConApp _ tys)  = allTyCoVarsInTys tys
     go (AppTy ty1 ty2)   = (go ty1) `unionVarSet` (go ty2)
-    go (FunTy ty1 ty2)   = (go ty1) `unionVarSet` (go ty2)
+    go (FunTy _ ty1 ty2) = (go ty1) `unionVarSet` (go ty2)
     go (ForAllTy (Bndr tv _) ty) = unitVarSet tv     `unionVarSet`
                                    go (tyVarKind tv) `unionVarSet`
                                    go ty

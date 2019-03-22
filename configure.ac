@@ -13,7 +13,7 @@ dnl
 # see what flags are available. (Better yet, read the documentation!)
 #
 
-AC_INIT([The Glorious Glasgow Haskell Compilation System], [8.7], [glasgow-haskell-bugs@haskell.org], [ghc-AC_PACKAGE_VERSION])
+AC_INIT([The Glorious Glasgow Haskell Compilation System], [8.9], [glasgow-haskell-bugs@haskell.org], [ghc-AC_PACKAGE_VERSION])
 
 # Set this to YES for a released version, otherwise NO
 : ${RELEASE=NO}
@@ -87,14 +87,12 @@ dnl use either is considered a Feature.
 dnl ** What command to use to compile compiler sources ?
 dnl --------------------------------------------------------------
 
+AC_ARG_VAR(GHC,[Use as the path to GHC [default=autodetect]])
+AC_PATH_PROG([GHC], [ghc])
 AC_ARG_WITH([ghc],
-[AC_HELP_STRING([--with-ghc=ARG],
-  [Use ARG as the path to GHC  [default=autodetect]])],
-  [WithGhc="$withval"],
-  [if test "$GHC" = ""; then
-    AC_PATH_PROG([GHC], [ghc])
-  fi
-  WithGhc="$GHC"])
+        AS_HELP_STRING([--with-ghc=ARG], [Use ARG as the path to ghc (obsolete, use GHC=ARG instead) [default=autodetect]]),
+        AC_MSG_ERROR([--with-ghc=$withval is obsolete (use './configure GHC=$withval' or 'GHC=$withval ./configure' instead)]))
+AC_SUBST(WithGhc,$GHC)
 
 dnl ** Tell the make system which OS we are using
 dnl $OSTYPE is set by the operating system to "msys" or "cygwin" or something
@@ -388,20 +386,6 @@ then
     fp_prog_ar="${mingwbin}ar.exe"
 
     AC_PATH_PROG([Genlib],[genlib])
-
-    # NB. Download the perl binaries if required
-    if ! test -d inplace/perl ||
-         test inplace/perl -ot ghc-tarballs/perl/ghc-perl*.tar.gz
-    then
-        AC_MSG_NOTICE([Making in-tree perl tree])
-        rm -rf inplace/perl
-        mkdir inplace/perl
-        (
-            cd inplace/perl &&
-            tar -zxf ../../ghc-tarballs/perl/ghc-perl*.tar.gz
-        )
-        AC_MSG_NOTICE([In-tree perl tree created])
-    fi
 fi
 
 # We don't want to bundle a MinGW-w64 toolchain
@@ -574,14 +558,14 @@ if test "$TargetOS_CPP" = "darwin"
 then
     AC_MSG_CHECKING(whether nm program is broken)
     # Some versions of XCode ship a broken version of `nm`. Detect and work
-    # around this issue. See : https://ghc.haskell.org/trac/ghc/ticket/11744
+    # around this issue. See : https://gitlab.haskell.org/ghc/ghc/issues/11744
     nmver=$(${NM} --version | grep version | sed 's/ //g')
     case "$nmver" in
         LLVMversion7.3.0|LLVMversion7.3.1)
             AC_MSG_RESULT(yes)
             echo "The detected nm program is broken."
             echo
-            echo "See: https://ghc.haskell.org/trac/ghc/ticket/11744"
+            echo "See: https://gitlab.haskell.org/ghc/ghc/issues/11744"
             echo
             echo "Try re-running configure with:"
             echo
@@ -650,18 +634,21 @@ AC_DEFINE_UNQUOTED([sUPPORTED_LLVM_VERSION], ${sUPPORTED_LLVM_VERSION}, [The sup
 
 dnl ** Which LLVM clang to use?
 dnl --------------------------------------------------------------
+AC_ARG_VAR(CLANG,[Use as the path to clang [default=autodetect]])
 AC_CHECK_TARGET_TOOL([CLANG], [clang])
 ClangCmd="$CLANG"
 AC_SUBST([ClangCmd])
 
 dnl ** Which LLVM llc to use?
 dnl --------------------------------------------------------------
+AC_ARG_VAR(LLC,[Use as the path to LLVM's llc [default=autodetect]])
 FIND_LLVM_PROG([LLC], [llc], [$LlvmVersion])
 LlcCmd="$LLC"
 AC_SUBST([LlcCmd])
 
 dnl ** Which LLVM opt to use?
 dnl --------------------------------------------------------------
+AC_ARG_VAR(OPT,[Use as the path to LLVM's opt [default=autodetect]])
 FIND_LLVM_PROG([OPT], [opt], [$LlvmVersion])
 OptCmd="$OPT"
 AC_SUBST([OptCmd])
@@ -694,36 +681,6 @@ AC_SUBST([GhcLibsWithUnix])
 
 dnl ** does #! work?
 AC_SYS_INTERPRETER()
-
-# Check for split-objs
-SplitObjsBroken=NO
-dnl ** look for `perl'
-case $HostOS_CPP in
-cygwin32|mingw32)
-  if test "$EnableDistroToolchain" = "NO"; then
-    PerlCmd=$hardtop/inplace/perl/perl
-  else
-    AC_PATH_PROG([PerlCmd],[perl])
-  fi
-  # because of Trac #15051 SplitObjs is useless on Windows.  It regresses
-  # build times to days for a build, and this effect is also there for end users
-  # of GHC.  So unfortunately we have to disable it, even without having
-  # split-sections.  Though the compile time hit for split-sections should be
-  # tiny compared to this so maybe we should enable it for x86_64.
-  SplitObjsBroken=YES
-  ;;
-*)
-    AC_PATH_PROG([PerlCmd],[perl])
-    if test -z "$PerlCmd"
-    then
-        AC_MSG_WARN([No Perl on PATH, disabling split object support])
-        SplitObjsBroken=YES
-    else
-        FPTOOLS_CHECK_PERL_VERSION
-    fi
-    ;;
-esac
-AC_SUBST([SplitObjsBroken])
 
 dnl ** look for GCC and find out which version
 dnl     Figure out which C compiler to use.  Gcc is preferred.
@@ -816,6 +773,9 @@ dnl ** check for patch
 dnl if GNU patch is named gpatch, look for it first
 AC_PATH_PROGS(PatchCmd,gpatch patch, patch)
 
+dnl ** check for autoreconf
+AC_PATH_PROG(AutoreconfCmd, autoreconf, autoreconf)
+
 dnl ** check for dtrace (currently only implemented for Mac OS X)
 AC_ARG_ENABLE(dtrace,
     [AC_HELP_STRING([--enable-dtrace],
@@ -867,9 +827,13 @@ dnl ** check for ghc-pkg command
 FP_PROG_GHC_PKG
 
 dnl ** check for installed happy binary + version
+
+AC_ARG_VAR(HAPPY,[Use as the path to happy [default=autodetect]])
 FPTOOLS_HAPPY
 
 dnl ** check for installed alex binary + version
+
+AC_ARG_VAR(ALEX,[Use as the path to alex [default=autodetect]])
 FPTOOLS_ALEX
 
 dnl --------------------------------------------------
@@ -972,7 +936,7 @@ dnl ** check for math library
 dnl    Keep that check as early as possible.
 dnl    as we need to know whether we need libm
 dnl    for math functions or not
-dnl    (see http://ghc.haskell.org/trac/ghc/ticket/3730)
+dnl    (see https://gitlab.haskell.org/ghc/ghc/issues/3730)
 AC_CHECK_LIB(m, atan, HaveLibM=YES, HaveLibM=NO)
 if test $HaveLibM = YES
 then
@@ -1221,16 +1185,7 @@ case ${TargetOS} in
         RtsLinkerUseMmap=1
         ;;
     darwin|ios|watchos|tvos)
-        # Don't use mmap on powerpc/darwin as the mmap there doesn't support
-        # reallocating. Reallocating is needed to allocate jump islands just
-        # after each object image. Jumps to these jump islands use relative
-        # branches which are limited to offsets that can be represented in
-        # 24-bits.
-        if test "$TargetArch" != "powerpc" ; then
-            RtsLinkerUseMmap=1
-        else
-            RtsLinkerUseMmap=0
-        fi
+        RtsLinkerUseMmap=1
         ;;
     *)
         # Windows (which doesn't have mmap) and everything else.
@@ -1336,7 +1291,7 @@ checkMake380() {
 checkMake380 make
 checkMake380 gmake
 
-AC_CONFIG_FILES([mk/config.mk mk/install.mk mk/project.mk rts/rts.cabal compiler/ghc.cabal ghc/ghc-bin.cabal utils/iserv/iserv.cabal utils/iserv-proxy/iserv-proxy.cabal utils/runghc/runghc.cabal utils/gen-dll/gen-dll.cabal libraries/ghc-boot/ghc-boot.cabal libraries/ghc-boot-th/ghc-boot-th.cabal libraries/ghci/ghci.cabal libraries/ghc-heap/ghc-heap.cabal libraries/libiserv/libiserv.cabal settings docs/users_guide/ghc_config.py docs/index.html libraries/prologue.txt distrib/configure.ac])
+AC_CONFIG_FILES([mk/config.mk mk/install.mk mk/project.mk rts/rts.cabal compiler/ghc.cabal ghc/ghc-bin.cabal utils/iserv/iserv.cabal utils/iserv-proxy/iserv-proxy.cabal utils/remote-iserv/remote-iserv.cabal utils/runghc/runghc.cabal utils/gen-dll/gen-dll.cabal libraries/ghc-boot/ghc-boot.cabal libraries/ghc-boot-th/ghc-boot-th.cabal libraries/ghci/ghci.cabal libraries/ghc-heap/ghc-heap.cabal libraries/libiserv/libiserv.cabal libraries/template-haskell/template-haskell.cabal settings docs/users_guide/ghc_config.py docs/index.html libraries/prologue.txt distrib/configure.ac])
 AC_OUTPUT
 [
 if test "$print_make_warning" = "true"; then
@@ -1392,7 +1347,6 @@ echo "\
    genlib       : $GenlibCmd
    Happy        : $HappyCmd ($HappyVersion)
    Alex         : $AlexCmd ($AlexVersion)
-   Perl         : $PerlCmd
    sphinx-build : $SPHINXBUILD
    xelatex      : $XELATEX
 

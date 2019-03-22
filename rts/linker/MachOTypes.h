@@ -6,18 +6,12 @@
 
 #include <mach-o/loader.h>
 
-#if defined(x86_64_HOST_ARCH) || defined(powerpc64_HOST_ARCH) \
+#if defined(x86_64_HOST_ARCH) \
  || defined(aarch64_HOST_ARCH) || defined(arm64_HOST_ARCH)
 typedef struct mach_header_64     MachOHeader;
 typedef struct segment_command_64 MachOSegmentCommand;
 typedef struct section_64         MachOSection;
 typedef struct nlist_64           MachONList;
-#elif defined(i386_HOST_ARCH) || defined(powerpc_HOST_ARCH) \
- || defined(arm_HOST_ARCH)
-typedef struct mach_header     MachOHeader;
-typedef struct segment_command MachOSegmentCommand;
-typedef struct section         MachOSection;
-typedef struct nlist           MachONList;
 #else
 #error Unknown Darwin architecture
 #endif

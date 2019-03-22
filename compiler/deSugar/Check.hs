@@ -335,8 +335,8 @@ checkSingle' locn var p = do
   fam_insts <- liftD dsGetFamInstEnvs
   clause    <- liftD $ translatePat fam_insts p
   missing   <- mkInitialUncovered [var]
-  tracePm "checkSingle: missing" (vcat (map pprValVecDebug missing))
-                                 -- no guards
+  tracePm "checkSingle': missing" (vcat (map pprValVecDebug missing))
+                                  -- no guards
   PartialResult prov cs us ds <- runMany (pmcheckI clause []) missing
   let us' = UncoveredPatterns us
   return $ case (cs,ds) of
@@ -403,12 +403,12 @@ checkMatches' vars matches
               , [LMatch GhcTc (LHsExpr GhcTc)])
     go []     missing = return (mempty, [], missing, [])
     go (m:ms) missing = do
-      tracePm "checMatches': go" (ppr m $$ ppr missing)
+      tracePm "checkMatches': go" (ppr m $$ ppr missing)
       fam_insts          <- liftD dsGetFamInstEnvs
       (clause, guards)   <- liftD $ translateMatch fam_insts m
       r@(PartialResult prov cs missing' ds)
         <- runMany (pmcheckI clause guards) missing
-      tracePm "checMatches': go: res" (ppr r)
+      tracePm "checkMatches': go: res" (ppr r)
       (ms_prov, rs, final_u, is)  <- go ms missing'
       let final_prov = prov `mappend` ms_prov
       return $ case (cs, ds) of
@@ -421,7 +421,7 @@ checkMatches' vars matches
 
     hsLMatchToLPats :: LMatch id body -> Located [LPat id]
     hsLMatchToLPats (dL->L l (Match { m_pats = pats })) = cL l pats
-    hsLMatchToLPats _                                   = panic "checMatches'"
+    hsLMatchToLPats _                                   = panic "checkMatches'"
 
 -- | Check an empty case expression. Since there are no clauses to process, we
 --   only compute the uncovered set. See Note [Checking EmptyCase Expressions]
@@ -491,6 +491,10 @@ pmTopNormaliseType_maybe :: FamInstEnvs -> Bag EvVar -> Type
 -- Behaves exactly like `topNormaliseType_maybe`, but instead of returning a
 -- coercion, it returns useful information for issuing pattern matching
 -- warnings. See Note [Type normalisation for EmptyCase] for details.
+--
+-- NB: Normalisation can potentially change kinds, if the head of the type
+-- is a type family with a variable result kind. I (Richard E) can't think
+-- of a way to cause trouble here, though.
 pmTopNormaliseType_maybe env ty_cs typ
   = do (_, mb_typ') <- liftD $ initTcDsForSolver $ tcNormalise ty_cs typ
          -- Before proceeding, we chuck typ into the constraint solver, in case
@@ -536,7 +540,7 @@ pmTopNormaliseType_maybe env ty_cs typ
 
     tyFamStepper :: NormaliseStepper ([Type] -> [Type], [DataCon] -> [DataCon])
     tyFamStepper rec_nts tc tys  -- Try to step a type/data family
-      = let (_args_co, ntys) = normaliseTcArgs env Representational tc tys in
+      = let (_args_co, ntys, _res_co) = normaliseTcArgs env Representational tc tys in
           -- NB: It's OK to use normaliseTcArgs here instead of
           -- normalise_tc_args (which takes the LiftingContext described
           -- in Note [Normalising types]) because the reduceTyFamApp below
@@ -747,7 +751,7 @@ then
       type we get if we rewrite type families but not data families or
       newtypes.
   (b) dcs is the list of data constructors "skipped", every time we normalise a
-      newtype to it's core representation, we keep track of the source data
+      newtype to its core representation, we keep track of the source data
       constructor.
   (c) core_ty is the rewritten type. That is,
         pmTopNormaliseType_maybe env ty_cs ty = Just (src_ty, dcs, core_ty)
@@ -1026,7 +1030,7 @@ translatePat fam_insts pat = case pat of
     --
     --     - Otherwise, we treat the `ListPat` as ordinary view pattern.
     --
-    -- See Trac #14547, especially comment#9 and comment#10.
+    -- See #14547, especially comment#9 and comment#10.
     --
     -- Here we construct CanFailPmPat directly, rather can construct a view
     -- pattern and do further translation as an optimization, for the reason,
@@ -1096,7 +1100,7 @@ from translation in pattern matcher.
     `HsOverLit` inside `NPat` to HsIntPrim/HsWordPrim. If we do
     the same thing in `translatePat` as in `tidyNPat`, the exhaustiveness
     checker will fail to match the literals patterns correctly. See
-    Trac #14546.
+    #14546.
 
   In Note [Undecidable Equality for Overloaded Literals], we say: "treat
   overloaded literals that look different as different", but previously we
@@ -1117,7 +1121,7 @@ from translation in pattern matcher.
     in value position as PmOLit, but translate the 0 and 1 in pattern position
     as PmSLit. The inconsistency leads to the failure of eqPmLit to detect the
     equality and report warning of "Pattern match is redundant" on pattern 0,
-    as reported in Trac #14546. In this patch we remove the specialization of
+    as reported in #14546. In this patch we remove the specialization of
     OverLit patterns, and keep the overloaded number literal in pattern as it
     is to maintain the consistency. We know nothing about the `fromInteger`
     method (see Note [Undecidable Equality for Overloaded Literals]). Now we
@@ -1137,7 +1141,7 @@ from translation in pattern matcher.
     non-overloaded string values are translated to PmSLit. However the string
     patterns, both overloaded and non-overloaded, are translated to list of
     characters. The inconsistency leads to wrong warnings about redundant and
-    non-exhaustive pattern matching warnings, as reported in Trac #14546.
+    non-exhaustive pattern matching warnings, as reported in #14546.
 
     In order to catch the redundant pattern in following case:
 
@@ -1163,7 +1167,7 @@ from translation in pattern matcher.
 
   We must ensure that doing the same translation to literal values and patterns
   in `translatePat` and `hsExprToPmExpr`. The previous inconsistent work led to
-  Trac #14546.
+  #14546.
 -}
 
 -- | Translate a list of patterns (Note: each pattern is translated
@@ -2507,7 +2511,7 @@ dsPmWarn dflags ctx@(DsMatchContext kind loc) pm_result
 
 {- Note [Inaccessible warnings for record updates]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Consider (Trac #12957)
+Consider (#12957)
   data T a where
     T1 :: { x :: Int } -> T Bool
     T2 :: { x :: Int } -> T a

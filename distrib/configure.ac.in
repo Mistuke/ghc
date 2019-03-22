@@ -51,16 +51,6 @@ Unregisterised="@Unregisterised@"
 AC_SUBST(Unregisterised)
 
 #
-dnl ** Check Perl installation **
-#
-AC_PATH_PROG(PerlCmd,perl)
-if test -z "$PerlCmd"; then
-   echo "You must install perl before you can continue"
-   echo "Perhaps it is already installed, but not in your PATH?"
-   exit 1
-fi
-
-#
 dnl ** figure out how to do a BSD-ish install **
 #
 AC_PROG_INSTALL
@@ -128,12 +118,14 @@ LlvmVersion=@LlvmVersion@
 
 dnl ** Which LLVM llc to use?
 dnl --------------------------------------------------------------
+AC_ARG_VAR(LLC,[Use as the path to LLVM's llc [default=autodetect]])
 FIND_LLVM_PROG([LLC], [llc], [$LlvmVersion])
 LlcCmd="$LLC"
 AC_SUBST([LlcCmd])
 
 dnl ** Which LLVM opt to use?
 dnl --------------------------------------------------------------
+AC_ARG_VAR(OPT,[Use as the path to LLVM's opt [default=autodetect]])
 FIND_LLVM_PROG([OPT], [opt], [$LlvmVersion])
 OptCmd="$OPT"
 AC_SUBST([OptCmd])

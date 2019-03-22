@@ -588,6 +588,11 @@ The GHC API exposes functions for reading and writing these files.
     that are being written out. These include testing things properties such as
     variables not occuring outside of their expected scopes.
 
+The format in which GHC currently stores its typechecked AST, makes it costly
+to collect the types for some expressions nodes. For the sake of performance,
+GHC currently chooses to skip over these, so not all expression nodes should be
+expected to have type information on them. See :ghc-ticket:`16233` for more.
+
 .. _recomp:
 
 The recompilation checker
@@ -652,9 +657,7 @@ this time with the fingerprints on the things it needed last time
 are all the same it stops compiling early in the process saying
 “Compilation IS NOT required”. What a beautiful sight!
 
-You can read about `how all this
-works <http://ghc.haskell.org/trac/ghc/wiki/Commentary/Compiler/RecompilationAvoidance>`__
-in the GHC commentary.
+You can read about :ghc-wiki:`how all this works <commentary/compiler/recompilation-avoidance>` in the GHC commentary.
 
 .. _mutual-recursion:
 

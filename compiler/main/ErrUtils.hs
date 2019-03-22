@@ -22,6 +22,7 @@ module ErrUtils (
         errMsgSpan, errMsgContext,
         errorsFound, isEmptyMessages,
         isWarnMsgFatal,
+        warningsToMessages,
 
         -- ** Formatting
         pprMessageBag, pprErrMsgBagWithLoc,
@@ -359,6 +360,15 @@ isEmptyMessages (warns, errs) = isEmptyBag warns && isEmptyBag errs
 errorsFound :: DynFlags -> Messages -> Bool
 errorsFound _dflags (_warns, errs) = not (isEmptyBag errs)
 
+warningsToMessages :: DynFlags -> WarningMessages -> Messages
+warningsToMessages dflags =
+  partitionBagWith $ \warn ->
+    case isWarnMsgFatal dflags warn of
+      Nothing -> Left warn
+      Just err_reason ->
+        Right warn{ errMsgSeverity = SevError
+                  , errMsgReason = ErrReason err_reason }
+
 printBagOfErrors :: DynFlags -> Bag ErrMsg -> IO ()
 printBagOfErrors dflags bag_of_errors
   = sequence_ [ let style = mkErrStyle dflags unqual
@@ -475,7 +485,7 @@ withDumpFileHandle dflags flag action = do
             -- We do not want the dump file to be affected by
             -- environment variables, but instead to always use
             -- UTF8. See:
-            -- https://ghc.haskell.org/trac/ghc/ticket/10762
+            -- https://gitlab.haskell.org/ghc/ghc/issues/10762
             hSetEncoding handle utf8
 
             action (Just handle)

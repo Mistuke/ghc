@@ -1,5 +1,11 @@
 # Hadrian for Make users
 
+This is a cheatsheet-style document meant to succinctly show how to use
+Hadrian for any GHC developer familiar with the Make build system, by showing
+the Make command(s) to achieve some goal and then the Hadrian equivalent. If you
+are looking for a more verbose and comprehensive document, you should head to
+[Hadrian's README](../README.md).
+
 ## tl;dr
 
 For GHC hackers already used to the Make build system, here is what you need to
@@ -86,6 +92,7 @@ time you fire up a build. This is not possible with the Make build system.
   # Hadrian
   build --flavour=quickest
   ```
+  See [flavours documentation](https://gitlab.haskell.org/ghc/ghc/blob/master/hadrian/doc/flavours.md) for info on flavours.
 
 - Building with `integer-simple` as the integer library
 
@@ -166,6 +173,22 @@ time you fire up a build. This is not possible with the Make build system.
 
   # Hadrian
   build docs
+  ```
+
+- Build documentation, but without haddocks (resp. without HTML or PDF manuals)
+
+  ``` sh
+  # Make
+  echo 'HADDOCKS_DOCS = NO' > mk/build.mk
+  # For HTML manuals: BUILD_SPHINX_HTML = NO
+  # For PDF manuals: BUILD_SPHINX_PDF = NO
+  make
+
+  # Hadrian
+  build docs --docs=no-haddocks
+  # Append --docs=no-sphinx-pdfs, --docs=no-sphinx-html or
+  # --docs=no-sphinx-man (or --docs=no-sphinx to encompass them all)
+  # to further reduce or even completely disable documentation targets.
   ```
 
 - Running nofib

@@ -34,7 +34,7 @@ module TcHsSyn (
         zonkTopBndrs,
         ZonkEnv, ZonkFlexi(..), emptyZonkEnv, mkEmptyZonkEnv, initZonkEnv,
         zonkTyVarBinders, zonkTyVarBindersX, zonkTyVarBinderX,
-        zonkTyBndrs, zonkTyBndrsX,
+        zonkTyBndrs, zonkTyBndrsX, zonkRecTyVarBndrs,
         zonkTcTypeToType,  zonkTcTypeToTypeX,
         zonkTcTypesToTypes, zonkTcTypesToTypesX,
         zonkTyVarOcc,
@@ -80,6 +80,8 @@ import Outputable
 import Util
 import UniqFM
 import CoreSyn
+
+import {-# SOURCE #-} TcSplice (runTopSplice)
 
 import Control.Monad
 import Data.List  ( partition )
@@ -202,6 +204,7 @@ data ZonkEnv  -- See Note [The ZonkEnv]
             , ze_tv_env :: TyCoVarEnv TyCoVar
             , ze_id_env :: IdEnv      Id
             , ze_meta_tv_env :: TcRef (TyVarEnv Type) }
+
 {- Note [The ZonkEnv]
 ~~~~~~~~~~~~~~~~~~~~~
 * ze_flexi :: ZonkFlexi says what to do with a
@@ -275,7 +278,11 @@ data ZonkFlexi   -- See Note [Un-unified unification variables]
   | RuntimeUnkFlexi -- Used in the GHCi debugger
 
 instance Outputable ZonkEnv where
-  ppr (ZonkEnv { ze_id_env =  var_env}) = pprUFM var_env (vcat . map ppr)
+  ppr (ZonkEnv { ze_tv_env = tv_env
+               , ze_id_env = id_env })
+    = text "ZE" <+> braces (vcat
+         [ text "ze_tv_env =" <+> ppr tv_env
+         , text "ze_id_env =" <+> ppr id_env ])
 
 -- The EvBinds have to already be zonked, but that's usually the case.
 emptyZonkEnv :: TcM ZonkEnv
@@ -289,9 +296,9 @@ mkEmptyZonkEnv flexi
                          , ze_id_env = emptyVarEnv
                          , ze_meta_tv_env = mtv_env_ref }) }
 
-initZonkEnv :: (ZonkEnv -> a -> TcM b) -> a -> TcM b
-initZonkEnv do_it x = do { ze <- mkEmptyZonkEnv DefaultFlexi
-                         ; do_it ze x }
+initZonkEnv :: (ZonkEnv -> TcM b) -> TcM b
+initZonkEnv thing_inside = do { ze <- mkEmptyZonkEnv DefaultFlexi
+                              ; thing_inside ze }
 
 -- | Extend the knot-tied environment.
 extendIdZonkEnvRec :: ZonkEnv -> [Var] -> ZonkEnv
@@ -320,6 +327,12 @@ extendIdZonkEnv1 ze@(ZonkEnv { ze_id_env = id_env }) id
 extendTyZonkEnv1 :: ZonkEnv -> TyVar -> ZonkEnv
 extendTyZonkEnv1 ze@(ZonkEnv { ze_tv_env = ty_env }) tv
   = ze { ze_tv_env = extendVarEnv ty_env tv tv }
+
+extendTyZonkEnvN :: ZonkEnv -> [(Name,TyVar)] -> ZonkEnv
+extendTyZonkEnvN ze@(ZonkEnv { ze_tv_env = ty_env }) pairs
+  = ze { ze_tv_env = foldl add ty_env pairs }
+  where
+    add env (name, tv) = extendVarEnv_Directly env (getUnique name) tv
 
 setZonkType :: ZonkEnv -> ZonkFlexi -> ZonkEnv
 setZonkType ze flexi = ze { ze_flexi = flexi }
@@ -371,7 +384,7 @@ zonkIdBndrs :: ZonkEnv -> [TcId] -> TcM [Id]
 zonkIdBndrs env ids = mapM (zonkIdBndr env) ids
 
 zonkTopBndrs :: [TcId] -> TcM [Id]
-zonkTopBndrs ids = initZonkEnv zonkIdBndrs ids
+zonkTopBndrs ids = initZonkEnv $ \ ze -> zonkIdBndrs ze ids
 
 zonkFieldOcc :: ZonkEnv -> FieldOcc GhcTcId -> TcM (FieldOcc GhcTc)
 zonkFieldOcc env (FieldOcc sel lbl)
@@ -416,7 +429,7 @@ zonkCoreBndrsX :: ZonkEnv -> [Var] -> TcM (ZonkEnv, [Var])
 zonkCoreBndrsX = mapAccumLM zonkCoreBndrX
 
 zonkTyBndrs :: [TcTyVar] -> TcM (ZonkEnv, [TyVar])
-zonkTyBndrs = initZonkEnv zonkTyBndrsX
+zonkTyBndrs tvs = initZonkEnv $ \ze -> zonkTyBndrsX ze tvs
 
 zonkTyBndrsX :: ZonkEnv -> [TcTyVar] -> TcM (ZonkEnv, [TyVar])
 zonkTyBndrsX = mapAccumLM zonkTyBndrX
@@ -433,7 +446,7 @@ zonkTyBndrX env tv
 
 zonkTyVarBinders ::  [VarBndr TcTyVar vis]
                  -> TcM (ZonkEnv, [VarBndr TyVar vis])
-zonkTyVarBinders = initZonkEnv zonkTyVarBindersX
+zonkTyVarBinders tvbs = initZonkEnv $ \ ze -> zonkTyVarBindersX ze tvbs
 
 zonkTyVarBindersX :: ZonkEnv -> [VarBndr TcTyVar vis]
                              -> TcM (ZonkEnv, [VarBndr TyVar vis])
@@ -446,11 +459,27 @@ zonkTyVarBinderX env (Bndr tv vis)
   = do { (env', tv') <- zonkTyBndrX env tv
        ; return (env', Bndr tv' vis) }
 
+zonkRecTyVarBndrs :: [Name] -> [TcTyVar] -> TcM (ZonkEnv, [TyVar])
+-- This rather specialised function is used in exactly one place.
+-- See Note [Tricky scoping in generaliseTcTyCon] in TcTyClsDecls.
+zonkRecTyVarBndrs names tc_tvs
+  = initZonkEnv $ \ ze ->
+    fixM $ \ ~(_, rec_new_tvs) ->
+    do { let ze' = extendTyZonkEnvN ze $
+                   zipWithLazy (\ tc_tv new_tv -> (getName tc_tv, new_tv))
+                               tc_tvs rec_new_tvs
+       ; new_tvs <- zipWithM (zonk_one ze') names tc_tvs
+       ; return (ze', new_tvs) }
+  where
+    zonk_one ze name tc_tv
+      = do { ki <- zonkTcTypeToTypeX ze (tyVarKind tc_tv)
+           ; return (mkTyVar name ki) }
+
 zonkTopExpr :: HsExpr GhcTcId -> TcM (HsExpr GhcTc)
-zonkTopExpr e = initZonkEnv zonkExpr e
+zonkTopExpr e = initZonkEnv $ \ ze -> zonkExpr ze e
 
 zonkTopLExpr :: LHsExpr GhcTcId -> TcM (LHsExpr GhcTc)
-zonkTopLExpr e = initZonkEnv zonkLExpr e
+zonkTopLExpr e = initZonkEnv $ \ ze -> zonkLExpr ze e
 
 zonkTopDecls :: Bag EvBind
              -> LHsBinds GhcTcId
@@ -463,7 +492,7 @@ zonkTopDecls :: Bag EvBind
                      [LTcSpecPrag],
                      [LRuleDecl    GhcTc])
 zonkTopDecls ev_binds binds rules imp_specs fords
-  = do  { (env1, ev_binds') <- initZonkEnv zonkEvBinds ev_binds
+  = do  { (env1, ev_binds') <- initZonkEnv $ \ ze -> zonkEvBinds ze ev_binds
         ; (env2, binds')    <- zonkRecMonoBinds env1 binds
                         -- Top level is implicitly recursive
         ; rules' <- zonkRules env2 rules
@@ -772,6 +801,9 @@ zonkExpr env (HsTcBracketOut x body bs)
   where
     zonk_b (PendingTcSplice n e) = do e' <- zonkLExpr env e
                                       return (PendingTcSplice n e')
+
+zonkExpr env (HsSpliceE _ (HsSplicedT s)) =
+  runTopSplice s >>= zonkExpr env
 
 zonkExpr _ (HsSpliceE x s) = WARN( True, ppr s ) -- Should not happen
                            return (HsSpliceE x s)
@@ -1654,7 +1686,7 @@ zonkEvBind env bind@(EvBind { eb_lhs = var, eb_rhs = term })
 
          -- Optimise the common case of Refl coercions
          -- See Note [Optimise coercion zonking]
-         -- This has a very big effect on some programs (eg Trac #5030)
+         -- This has a very big effect on some programs (eg #5030)
 
        ; term' <- case getEqPredTys_maybe (idType var') of
            Just (r, ty1, ty2) | ty1 `eqType` ty2
@@ -1676,7 +1708,7 @@ Rather, we can zonk the variable, and if its type is (ty ~ ty), we can just
 use Refl on the right, ignoring the actual coercion on the RHS.
 
 This can have a very big effect, because the constraint solver sometimes does go
-to a lot of effort to prove Refl!  (Eg when solving  10+3 = 10+3; cf Trac #5030)
+to a lot of effort to prove Refl!  (Eg when solving  10+3 = 10+3; cf #5030)
 
 
 ************************************************************************
@@ -1692,7 +1724,7 @@ Problem:
 
     In TcMType.zonkTcTyVar, we short-circuit (Indirect ty) to
     (Indirect zty), see Note [Sharing in zonking] in TcMType. But we
-    /can't/ do this when zonking a TcType to a Type (Trac #15552, esp
+    /can't/ do this when zonking a TcType to a Type (#15552, esp
     comment:3).  Suppose we have
 
        alpha -> alpha
@@ -1720,7 +1752,7 @@ Problem:
     the same as zonkTcTypeToType. (If we distinguished TcType from
     Type, this issue would have been a type error!)
 
-Solution: (see Trac #15552 for other variants)
+Solution: (see #15552 for other variants)
 
     One possible solution is simply not to do the short-circuiting.
     That has less sharing, but maybe sharing is rare. And indeed,
@@ -1738,9 +1770,9 @@ Solution: (see Trac #15552 for other variants)
 
     * The map is of course stateful, held in a TcRef. (That is unlike
       the treatment of lexically-scoped variables in ze_tv_env and
-      ze_id_env.
+      ze_id_env.)
 
-    Is the extra work worth it.  Some non-sytematic perf measurements
+    Is the extra work worth it?  Some non-sytematic perf measurements
     suggest that compiler allocation is reduced overall (by 0.5% or so)
     but compile time really doesn't change.
 -}
@@ -1842,12 +1874,11 @@ zonkCoHole env hole@(CoercionHole { ch_ref = ref, ch_co_var = cv })
 
 zonk_tycomapper :: TyCoMapper ZonkEnv TcM
 zonk_tycomapper = TyCoMapper
-  { tcm_smart = True   -- Establish type invariants
-  , tcm_tyvar = zonkTyVarOcc
-  , tcm_covar = zonkCoVarOcc
-  , tcm_hole  = zonkCoHole
+  { tcm_tyvar      = zonkTyVarOcc
+  , tcm_covar      = zonkCoVarOcc
+  , tcm_hole       = zonkCoHole
   , tcm_tycobinder = \env tv _vis -> zonkTyBndrX env tv
-  , tcm_tycon = zonkTcTyConToTyCon }
+  , tcm_tycon      = zonkTcTyConToTyCon }
 
 -- Zonk a TyCon by changing a TcTyCon to a regular TyCon
 zonkTcTyConToTyCon :: TcTyCon -> TcM TyCon
@@ -1860,13 +1891,13 @@ zonkTcTyConToTyCon tc
 
 -- Confused by zonking? See Note [What is zonking?] in TcMType.
 zonkTcTypeToType :: TcType -> TcM Type
-zonkTcTypeToType = initZonkEnv zonkTcTypeToTypeX
+zonkTcTypeToType ty = initZonkEnv $ \ ze -> zonkTcTypeToTypeX ze ty
 
 zonkTcTypeToTypeX :: ZonkEnv -> TcType -> TcM Type
 zonkTcTypeToTypeX = mapType zonk_tycomapper
 
 zonkTcTypesToTypes :: [TcType] -> TcM [Type]
-zonkTcTypesToTypes = initZonkEnv zonkTcTypesToTypesX
+zonkTcTypesToTypes tys = initZonkEnv $ \ ze -> zonkTcTypesToTypesX ze tys
 
 zonkTcTypesToTypesX :: ZonkEnv -> [TcType] -> TcM [Type]
 zonkTcTypesToTypesX env tys = mapM (zonkTcTypeToTypeX env) tys

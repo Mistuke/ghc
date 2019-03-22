@@ -1,6 +1,6 @@
 module Oracles.Flag (
     Flag (..), flag, getFlag, platformSupportsSharedLibs, ghcWithSMP,
-    ghcWithNativeCodeGen, supportsSplitObjects
+    ghcWithNativeCodeGen
     ) where
 
 import Hadrian.Oracles.TextFile
@@ -13,9 +13,10 @@ data Flag = ArSupportsAtFile
           | CrossCompiling
           | GccIsClang
           | GhcUnregisterised
+          | GmpInTree
+          | GmpFrameworkPref
           | LeadingUnderscore
           | SolarisBrokenShld
-          | SplitObjectsBroken
           | WithLibdw
           | HaveLibMingwEx
           | UseSystemFfi
@@ -29,9 +30,10 @@ flag f = do
             CrossCompiling     -> "cross-compiling"
             GccIsClang         -> "gcc-is-clang"
             GhcUnregisterised  -> "ghc-unregisterised"
+            GmpInTree          -> "intree-gmp"
+            GmpFrameworkPref   -> "gmp-framework-preferred"
             LeadingUnderscore  -> "leading-underscore"
             SolarisBrokenShld  -> "solaris-broken-shld"
-            SplitObjectsBroken -> "split-objects-broken"
             WithLibdw          -> "with-libdw"
             HaveLibMingwEx     -> "have-lib-mingw-ex"
             UseSystemFfi       -> "use-system-ffi"
@@ -65,12 +67,3 @@ ghcWithNativeCodeGen = do
     badOs    <- anyTargetOs ["ios", "aix"]
     ghcUnreg <- flag GhcUnregisterised
     return $ goodArch && not badOs && not ghcUnreg
-
-supportsSplitObjects :: Action Bool
-supportsSplitObjects = do
-    broken   <- flag SplitObjectsBroken
-    ghcUnreg <- flag GhcUnregisterised
-    goodArch <- anyTargetArch [ "i386", "x86_64", "powerpc", "sparc" ]
-    goodOs   <- anyTargetOs [ "mingw32", "cygwin32", "linux", "darwin", "solaris2"
-                            , "freebsd", "dragonfly", "netbsd", "openbsd" ]
-    return $ not broken && not ghcUnreg && goodArch && goodOs

@@ -3,17 +3,15 @@ module Rules.Library (libraryRules) where
 import Hadrian.BuildPath
 import Hadrian.Haskell.Cabal
 import Hadrian.Haskell.Cabal.Type
-import qualified System.Directory as IO
 import qualified Text.Parsec      as Parsec
 
 import Base
 import Context
 import Expression hiding (way, package)
-import Flavour
 import Oracles.ModuleFiles
 import Packages
 import Rules.Gmp
-import Settings
+import Rules.Libffi (libffiDependencies)
 import Target
 import Utilities
 
@@ -25,7 +23,9 @@ libraryRules = do
     root -/- "//libHS*-*.dylib"       %> buildDynamicLibUnix root "dylib"
     root -/- "//libHS*-*.so"          %> buildDynamicLibUnix root "so"
     root -/- "//*.a"                  %> buildStaticLib      root
-    priority 2 $ root -/- "//HS*-*.o" %> buildGhciLibO       root
+    priority 2 $ do
+        root -/- "//HS*-*.o" %> buildGhciLibO root
+        root -/- "//HS*-*.p_o" %> buildGhciLibO root
 
 -- * 'Action's for building libraries
 
@@ -55,6 +55,14 @@ buildDynamicLibUnix root suffix dynlibpath = do
     let context = libDynContext dynlib
     deps <- contextDependencies context
     need =<< mapM pkgLibraryFile deps
+
+    -- TODO should this be somewhere else?
+    -- Custom build step to generate libffi.so* in the rts build directory.
+    when (package context == rts) . interpretInContext context $ do
+        stage   <- getStage
+        rtsPath <- expr (rtsBuildPath stage)
+        expr $ need ((rtsPath -/-) <$> libffiDependencies)
+
     objs <- libraryObjects context
     build $ target context (Ghc LinkHs $ Context.stage context) objs [dynlibpath]
 
@@ -101,11 +109,8 @@ cObjects context = do
 -- 'Context' is @integer-gmp@.
 extraObjects :: Context -> Action [FilePath]
 extraObjects context
-    | package context == integerGmp = do
-        gmpPath <- gmpBuildPath
-        need [gmpPath -/- gmpLibraryH]
-        map unifyPath <$> getDirectoryFiles "" [gmpPath -/- gmpObjectsDir -/- "*.o"]
-    | otherwise         = return []
+    | package context == integerGmp = gmpObjects
+    | otherwise                     = return []
 
 -- | Return all the object files to be put into the library we're building for
 -- the given 'Context'.
@@ -113,18 +118,8 @@ libraryObjects :: Context -> Action [FilePath]
 libraryObjects context@Context{..} = do
     hsObjs   <- hsObjects    context
     noHsObjs <- nonHsObjects context
-
-    -- This will create split objects if required (we don't track them
-    -- explicitly as this would needlessly bloat the Shake database).
     need $ noHsObjs ++ hsObjs
-
-    split <- interpretInContext context =<< splitObjects <$> flavour
-    let getSplitObjs = concatForM hsObjs $ \obj -> do
-            let dir = dropExtension obj ++ "_" ++ osuf way ++ "_split"
-            contents <- liftIO $ IO.getDirectoryContents dir
-            return . map (dir -/-) $ filter (not . all (== '.')) contents
-
-    (noHsObjs ++) <$> if split then getSplitObjs else return hsObjs
+    return (noHsObjs ++ hsObjs)
 
 -- * Library paths types and parsers
 
@@ -193,8 +188,9 @@ parseLibGhciFilename :: Parsec.Parsec String () LibGhci
 parseLibGhciFilename = do
     _ <- Parsec.string "HS"
     (pkgname, pkgver) <- parsePkgId
-    way <- parseWaySuffix vanilla
-    _ <- Parsec.string ".o"
+    _ <- Parsec.string "."
+    way <- parseWayPrefix vanilla
+    _ <- Parsec.string "o"
     return (LibGhci pkgname pkgver way)
 
 -- | Parse the filename of a dynamic library to be built into a 'LibDyn' value.

@@ -110,14 +110,14 @@ If type inference for a pattern synonym fails, we can't continue with
 the rest of tc_patsyn_finish, because we may get knock-on errors, or
 even a crash.  E.g. from
    pattern What = True :: Maybe
-we get a kind error; and we must stop right away (Trac #15289).
+we get a kind error; and we must stop right away (#15289).
 
 We stop if there are /any/ unsolved constraints, not just insoluble
 ones; because pattern synonyms are top-level things, we will never
 solve them later if we can't solve them now.  And if we were to carry
 on, tc_patsyn_finish does zonkTcTypeToType, which defaults any
 unsolved unificatdion variables to Any, which confuses the error
-reporting no end (Trac #15685).
+reporting no end (#15685).
 
 So we use simplifyTop to completely solve the constraint, report
 any errors, throw an exception.
@@ -151,7 +151,7 @@ tcInferPatSynDecl (PSB { psb_id = lname@(dL->L _ name), psb_args = details
              named_taus = (name, pat_ty) : map mk_named_tau args
              mk_named_tau arg
                = (getName arg, mkSpecForAllTys ex_tvs (varType arg))
-               -- The mkSpecForAllTys is important (Trac #14552), albeit
+               -- The mkSpecForAllTys is important (#14552), albeit
                -- slightly artifical (there is no variable with this funny type).
                -- We do not want to quantify over variable (alpha::k)
                -- that mention the existentially-bound type variables
@@ -246,7 +246,7 @@ No problem.  But note that 's' is not fixed by the type of the
 pattern (AST a), nor is it existentially bound.  It's really only
 fixed by the type of the continuation.
 
-Trac #14552 showed that this can go wrong if the kind of 's' mentions
+#14552 showed that this can go wrong if the kind of 's' mentions
 existentially bound variables.  We obviously can't make a type like
   $mP :: forall (s::k->*) a. Prj s => AST a -> (forall k. s a -> r)
                                    -> r -> r
@@ -270,7 +270,7 @@ Recall that
 (NB: technically the (k1~k2) existential dictionary is not necessary,
 but it's there at the moment.)
 
-Now consider (Trac #14394):
+Now consider (#14394):
    pattern Foo = HRefl
 in a non-poly-kinded module.  We don't want to get
     pattern Foo :: () => (* ~ *, b ~ a) => a :~~: b
@@ -310,7 +310,7 @@ See also Note [Lift equality constaints when quantifying] in TcType
 
 Note [Coercions that escape]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Trac #14507 showed an example where the inferred type of the matcher
+#14507 showed an example where the inferred type of the matcher
 for the pattern synonym was somethign like
    $mSO :: forall (r :: TYPE rep) kk (a :: k).
            TypeRep k a
@@ -384,9 +384,6 @@ tcCheckPatSynDecl psb@PSB{ psb_id = lname@(dL->L _ name), psb_args = details
            ASSERT2( equalLength arg_names arg_tys, ppr name $$ ppr arg_names $$ ppr arg_tys )
            pushLevelAndCaptureConstraints            $
            tcExtendTyVarEnv univ_tvs                 $
-           tcExtendKindEnvList [(getName (binderVar ex_tv), APromotionErr PatSynExPE)
-                               | ex_tv <- extra_ex] $
-               -- See Note [Pattern synonym existentials do not scope]
            tcPat PatSyn lpat (mkCheckExpType pat_ty) $
            do { let in_scope    = mkInScopeSet (mkVarSet univ_tvs)
                     empty_subst = mkEmptyTCvSubst in_scope
@@ -412,7 +409,7 @@ tcCheckPatSynDecl psb@PSB{ psb_id = lname@(dL->L _ name), psb_args = details
        ; (implics, ev_binds) <- buildImplicationFor tclvl skol_info univ_tvs req_dicts wanted
 
        -- Solve the constraints now, because we are about to make a PatSyn,
-       -- which should not contain unification variables and the like (Trac #10997)
+       -- which should not contain unification variables and the like (#10997)
        ; simplifyTopImplic implics
 
        -- ToDo: in the bidirectional case, check that the ex_tvs' are all distinct
@@ -449,55 +446,7 @@ Consider
 
 This should work.  But in the matcher we must match against MkT, and then
 instantiate its argument 'x', to get a function of type (Int -> Int).
-Equality is not enough!  Trac #13752 was an example.
-
-Note [Pattern synonym existentials do not scope]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Consider this (Trac #14498):
-  pattern SS :: forall (t :: k). () =>
-                => forall (a :: kk -> k) (n :: kk).
-                => TypeRep n -> TypeRep t
-  pattern SS n <- (App (Typeable :: TypeRep (a::kk -> k)) n)
-
-Here 'k' is implicitly bound in the signature, but (with
--XScopedTypeVariables) it does still scope over the pattern-synonym
-definition.  But what about 'kk', which is oexistential?  It too is
-implicitly bound in the signature; should it too scope?  And if so,
-what type variable is it bound to?
-
-The trouble is that the type variable to which it is bound is itself
-only brought into scope in part the pattern, so it makes no sense for
-'kk' to scope over the whole pattern.  See the discussion on
-Trac #14498, esp comment:16ff. Here is a simpler example:
-  data T where { MkT :: x -> (x->Int) -> T }
-  pattern P :: () => forall x. x -> (x->Int) -> T
-  pattern P a b = (MkT a b, True)
-
-Here it would make no sense to mention 'x' in the True pattern,
-like this:
-  pattern P a b = (MkT a b, True :: x)
-
-The 'x' only makes sense "under" the MkT pattern. Conclusion: the
-existential type variables of a pattern-synonym signature should not
-scope.
-
-But it's not that easy to implement, because we don't know
-exactly what the existentials /are/ until we get to type checking.
-(See Note [The pattern-synonym signature splitting rule], and
-the partition of implicit_tvs in tcCheckPatSynDecl.)
-
-So we do this:
-
-- The reaner brings all the implicitly-bound kind variables into
-  scope, without trying to distinguish universal from existential
-
-- tcCheckPatSynDecl uses tcExtendKindEnvList to bind the
-  implicitly-bound existentials to
-      APromotionErr PatSynExPE
-  It's not really a promotion error, but it's a way to bind the Name
-  (which the renamer has not complained about) to something that, when
-  looked up, will cause a complaint (in this case
-  TcHsType.promotionErr)
+Equality is not enough!  #13752 was an example.
 
 
 Note [The pattern-synonym signature splitting rule]
@@ -506,7 +455,7 @@ Given a pattern signature, we must split
      the kind-generalised variables, and
      the implicitly-bound variables
 into universal and existential.  The rule is this
-(see discussion on Trac #11224):
+(see discussion on #11224):
 
      The universal tyvars are the ones mentioned in
           - univ_tvs: the user-specified (forall'd) universals
@@ -527,7 +476,7 @@ how do we split the arg_tys from req_ty?  Consider
 
 This is an odd example because Q has only one syntactic argument, and
 so presumably is defined by a view pattern matching a function.  But
-it can happen (Trac #11977, #12108).
+it can happen (#11977, #12108).
 
 We don't know Q's arity from the pattern signature, so we have to wait
 until we see the pattern declaration itself before deciding res_ty is,
@@ -600,7 +549,7 @@ a pattern synonym.  What about the /building/ side?
   TauTvs) in tcCheckPatSynDecl.  But (a) strengthening the check here
   is redundant since tcPatSynBuilderBind does the job, (b) it was
   still incomplete (TyVarTvs can unify with each other), and (c) it
-  didn't even work (Trac #13441 was accepted with
+  didn't even work (#13441 was accepted with
   ExplicitBidirectional, but rejected if expressed in
   ImplicitBidirectional form.  Conclusion: trying to be too clever is
   a bad idea.
@@ -750,16 +699,16 @@ tcPatSynMatcher (dL->L loc name) lpat
                | is_unlifted = ([nlHsVar voidPrimId], [voidPrimTy])
                | otherwise   = (args,                 arg_tys)
              cont_ty = mkInfSigmaTy ex_tvs prov_theta $
-                       mkFunTys cont_arg_tys res_ty
+                       mkVisFunTys cont_arg_tys res_ty
 
-             fail_ty  = mkFunTy voidPrimTy res_ty
+             fail_ty  = mkVisFunTy voidPrimTy res_ty
 
        ; matcher_name <- newImplicitBinder name mkMatcherOcc
        ; scrutinee    <- newSysLocalId (fsLit "scrut") pat_ty
        ; cont         <- newSysLocalId (fsLit "cont")  cont_ty
        ; fail         <- newSysLocalId (fsLit "fail")  fail_ty
 
-       ; let matcher_tau   = mkFunTys [pat_ty, cont_ty, fail_ty] res_ty
+       ; let matcher_tau   = mkVisFunTys [pat_ty, cont_ty, fail_ty] res_ty
              matcher_sigma = mkInfSigmaTy (rr_tv:res_tv:univ_tvs) req_theta matcher_tau
              matcher_id    = mkExportedVanillaId matcher_name matcher_sigma
                              -- See Note [Exported LocalIds] in Id
@@ -848,8 +797,8 @@ mkPatSynBuilderId dir (dL->L _ name)
              builder_sigma  = add_void need_dummy_arg $
                               mkForAllTys univ_bndrs $
                               mkForAllTys ex_bndrs $
-                              mkFunTys theta $
-                              mkFunTys arg_tys $
+                              mkPhiTy theta $
+                              mkVisFunTys arg_tys $
                               pat_ty
              builder_id     = mkExportedVanillaId builder_name builder_sigma
               -- See Note [Exported LocalIds] in Id
@@ -956,7 +905,7 @@ tcPatSynBuilderOcc ps
 
 add_void :: Bool -> Type -> Type
 add_void need_dummy_arg ty
-  | need_dummy_arg = mkFunTy voidPrimTy ty
+  | need_dummy_arg = mkVisFunTy voidPrimTy ty
   | otherwise      = ty
 
 tcPatToExpr :: Name -> [Located Name] -> LPat GhcRn
@@ -1028,6 +977,7 @@ tcPatToExpr name args pat = go pat
     go1 (SplicePat _ (HsSpliced _ _ (HsSplicedPat pat)))
                                     = go1 pat
     go1 (SplicePat _ (HsSpliced{})) = panic "Invalid splice variety"
+    go1 (SplicePat _ (HsSplicedT{})) = panic "Invalid splice variety"
 
     -- The following patterns are not invertible.
     go1 p@(BangPat {})                       = notInvertible p -- #14112
@@ -1057,12 +1007,12 @@ tcPatToExpr name args pat = go pat
 
     -- We should really be able to invert list patterns, even when
     -- rebindable syntax is on, but doing so involves a bit of
-    -- refactoring; see Trac #14380.  Until then we reject with a
+    -- refactoring; see #14380.  Until then we reject with a
     -- helpful error message.
     notInvertibleListPat p
       = Left (vcat [ not_invertible_msg p
                    , text "Reason: rebindable syntax is on."
-                   , text "This is fixable: add use-case to Trac #14380" ])
+                   , text "This is fixable: add use-case to #14380" ])
 
 {- Note [Builder for a bidirectional pattern synonym]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1131,7 +1081,7 @@ When making the binding for the *builder*, though, we don't want
   $buildL x = Left x :: Either [a] [b]
 because that wil either mean (forall a b. Either [a] [b]), or we'll
 get a complaint that 'a' and 'b' are out of scope. (Actually the
-latter; Trac #9867.)  No, the job of the signature is done, so when
+latter; #9867.)  No, the job of the signature is done, so when
 converting the pattern to an expression (for the builder RHS) we
 simply discard the signature.
 

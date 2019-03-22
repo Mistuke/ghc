@@ -188,6 +188,17 @@ typedef struct _CONCURRENT_FLAGS {
  */
 #define DEFAULT_TICK_INTERVAL USToTime(10000)
 
+/*
+ * When linkerAlwaysPic is true, the runtime linker assume that all object
+ * files were compiled with -fPIC -fexternal-dynamic-refs and load them
+ * anywhere in the address space.
+ */
+#if defined(x86_64_HOST_ARCH) && defined(darwin_HOST_OS)
+#define DEFAULT_LINKER_ALWAYS_PIC true
+#else
+#define DEFAULT_LINKER_ALWAYS_PIC false
+#endif
+
 /* Which I/O Manager to use in the target program.  */
 typedef enum _IO_MANAGER { IO_MNGR_NATIVE, IO_MNGR_POSIX } IO_MANAGER;
 

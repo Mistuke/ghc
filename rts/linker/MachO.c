@@ -2,13 +2,12 @@
 
 #if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
 
-#if defined(ios_HOST_OS)
-#if !RTS_LINKER_USE_MMAP
+#if defined(ios_HOST_OS) && !RTS_LINKER_USE_MMAP
 #error "ios must use mmap and mprotect!"
 #endif
+
 /* for roundUpToPage */
 #include "sm/OSMem.h"
-#endif
 
 #include "RtsUtils.h"
 #include "GetEnv.h"
@@ -27,10 +26,6 @@
 
 #if defined(HAVE_SYS_MMAN_H) && RTS_LINKER_USE_MMAP
 #  include <sys/mman.h>
-#endif
-
-#if defined(powerpc_HOST_ARCH)
-#  include <mach-o/ppc/reloc.h>
 #endif
 
 #if defined(x86_64_HOST_ARCH)
@@ -99,6 +94,8 @@ bool ocMprotect_MachO( ObjectCode *oc );
 void
 ocInit_MachO(ObjectCode * oc)
 {
+    ocDeinit_MachO(oc);
+
     oc->info = (struct ObjectCodeFormatInfo*)stgCallocBytes(
                 1, sizeof *oc->info,
                 "ocInit_MachO(ObjectCodeFormatInfo)");
@@ -150,26 +147,31 @@ ocInit_MachO(ObjectCode * oc)
             oc->info->macho_symbols[i].name  = oc->info->names
                                              + oc->info->nlist[i].n_un.n_strx;
             oc->info->macho_symbols[i].nlist = &oc->info->nlist[i];
-             /* we don't have an address for this symbol yet; this will be
-              * populated during ocGetNames_MachO. hence addr = NULL
+             /* We don't have an address for this symbol yet; this
+              * will be populated during ocGetNames_MachO. Hence init
+              * with NULL
               */
             oc->info->macho_symbols[i].addr  = NULL;
+            oc->info->macho_symbols[i].got_addr = NULL;
         }
     }
 }
 
 void
 ocDeinit_MachO(ObjectCode * oc) {
-    if(oc->info->n_macho_symbols > 0) {
-        stgFree(oc->info->macho_symbols);
-    }
+    if (oc->info != NULL) {
+        if(oc->info->n_macho_symbols > 0) {
+            stgFree(oc->info->macho_symbols);
+        }
 #if defined(aarch64_HOST_ARCH)
-    freeGot(oc);
-    for(int i = 0; i < oc->n_sections; i++) {
-        freeStubs(&oc->sections[i]);
-    }
+        freeGot(oc);
+        for(int i = 0; i < oc->n_sections; i++) {
+            freeStubs(&oc->sections[i]);
+        }
 #endif
-    stgFree(oc->info);
+        stgFree(oc->info);
+        oc->info = NULL;
+    }
 }
 
 static int
@@ -179,62 +181,25 @@ resolveImports(
     unsigned long *indirectSyms);
 
 #if NEED_SYMBOL_EXTRAS
-#if defined(powerpc_HOST_ARCH)
-int
-ocAllocateSymbolExtras_MachO(ObjectCode* oc)
-{
-
-    IF_DEBUG(linker, debugBelch("ocAllocateSymbolExtras_MachO: start\n"));
-
-    // Find out the first and last undefined external
-    // symbol, so we don't have to allocate too many
-    // jump islands/GOT entries.
-
-    unsigned min = oc->info->symCmd->nsyms, max = 0;
-
-    for (unsigned i = 0; i < oc->info->symCmd->nsyms; i++) {
-
-        if (oc->info->nlist[i].n_type & N_STAB) {
-            ;
-        } else if (oc->info->nlist[i].n_type & N_EXT) {
-
-            if((oc->info->nlist[i].n_type & N_TYPE) == N_UNDF
-                && (oc->info->nlist[i].n_value == 0)) {
-
-                if (i < min) {
-                    min = i;
-                }
-
-                if (i > max) {
-                    max = i;
-            }
-        }
-    }
-    }
-
-    if (max >= min) {
-        return ocAllocateSymbolExtras(oc, max - min + 1, min);
-    }
-
-    return ocAllocateSymbolExtras(oc,0,0);
-}
-
-#elif defined(x86_64_HOST_ARCH) || defined(aarch64_HOST_ARCH)
+#if defined(x86_64_HOST_ARCH) || defined(aarch64_HOST_ARCH)
 
 int
-ocAllocateSymbolExtras_MachO(ObjectCode* oc)
+ocAllocateExtras_MachO(ObjectCode* oc)
 {
-    IF_DEBUG(linker, debugBelch("ocAllocateSymbolExtras_MachO: start\n"));
+    IF_DEBUG(linker, debugBelch("ocAllocateExtras_MachO: start\n"));
 
     if (NULL != oc->info->symCmd) {
-        IF_DEBUG(linker, debugBelch("ocAllocateSymbolExtras_MachO: allocate %d symbols\n", oc->info->symCmd->nsyms));
-        IF_DEBUG(linker, debugBelch("ocAllocateSymbolExtras_MachO: done\n"));
-        return ocAllocateSymbolExtras(oc, oc->info->symCmd->nsyms, 0);
+        IF_DEBUG(linker,
+            debugBelch("ocAllocateExtras_MachO: allocate %d symbols\n",
+                oc->info->symCmd->nsyms));
+        IF_DEBUG(linker, debugBelch("ocAllocateExtras_MachO: done\n"));
+        return ocAllocateExtras(oc, oc->info->symCmd->nsyms, 0, 0);
     }
 
-    IF_DEBUG(linker, debugBelch("ocAllocateSymbolExtras_MachO: allocated no symbols\n"));
-    IF_DEBUG(linker, debugBelch("ocAllocateSymbolExtras_MachO: done\n"));
-    return ocAllocateSymbolExtras(oc,0,0);
+    IF_DEBUG(linker,
+        debugBelch("ocAllocateExtras_MachO: allocated no symbols\n"));
+    IF_DEBUG(linker, debugBelch("ocAllocateExtras_MachO: done\n"));
+    return ocAllocateExtras(oc, 0, 0, 0);
 }
 
 #else
@@ -250,8 +215,6 @@ ocVerifyImage_MachO(ObjectCode * oc)
 
     IF_DEBUG(linker, debugBelch("ocVerifyImage_MachO: start\n"));
 
-#if defined(x86_64_HOST_ARCH) || defined(powerpc64_HOST_ARCH) \
-    || defined(aarch64_HOST_ARCH)
     if(header->magic != MH_MAGIC_64) {
         errorBelch("Could not load image %s: bad magic!\n"
                    "  Expected %08x (64bit), got %08x%s\n",
@@ -259,15 +222,6 @@ ocVerifyImage_MachO(ObjectCode * oc)
                    header->magic == MH_MAGIC ? " (32bit)." : ".");
         return 0;
     }
-#else
-    if(header->magic != MH_MAGIC) {
-        errorBelch("Could not load image %s: bad magic!\n"
-                   "  Expected %08x (32bit), got %08x%s\n",
-                   oc->fileName, MH_MAGIC, header->magic,
-                   header->magic == MH_MAGIC_64 ? " (64bit)." : ".");
-        return 0;
-    }
-#endif
 
     // FIXME: do some more verifying here
     IF_DEBUG(linker, debugBelch("ocVerifyImage_MachO: done\n"));
@@ -283,17 +237,6 @@ resolveImports(
     size_t itemSize = 4;
 
     IF_DEBUG(linker, debugBelch("resolveImports: start\n"));
-
-#if defined(i386_HOST_ARCH)
-    int isJumpTable = 0;
-
-    if (strcmp(sect->sectname,"__jump_table") == 0) {
-        isJumpTable = 1;
-        itemSize = 5;
-        ASSERT(sect->reserved2 == itemSize);
-    }
-
-#endif
 
     for(unsigned i = 0; i * itemSize < sect->size; i++)
     {
@@ -322,22 +265,10 @@ resolveImports(
         }
         ASSERT(addr);
 
-#if defined(i386_HOST_ARCH)
-        if (isJumpTable) {
-            checkProddableBlock(oc,oc->image + sect->offset + i*itemSize, 5);
-
-            *(oc->image + sect->offset + i * itemSize) = 0xe9; // jmp opcode
-            *(unsigned*)(oc->image + sect->offset + i*itemSize + 1)
-                = (SymbolAddr*)addr - (oc->image + sect->offset + i*itemSize + 5);
-        }
-        else
-#endif
-        {
-            checkProddableBlock(oc,
-                                ((void**)(oc->image + sect->offset)) + i,
-                                sizeof(void *));
-            ((void**)(oc->image + sect->offset))[i] = addr;
-        }
+        checkProddableBlock(oc,
+                            ((void**)(oc->image + sect->offset)) + i,
+                            sizeof(void *));
+        ((void**)(oc->image + sect->offset))[i] = addr;
     }
 
     IF_DEBUG(linker, debugBelch("resolveImports: done\n"));
@@ -750,79 +681,44 @@ relocateSectionAarch64(ObjectCode * oc, Section * section)
     }
     return 1;
 }
-
-#else /* non aarch64_HOST_ARCH branch -- aarch64 doesn't use relocateAddress */
-
-/*
- * Try to find the final loaded address for some addres.
- * Look through all sections, locating the section that
- * contains the address and compute the absolue address.
- */
-static unsigned long
-relocateAddress(
-                ObjectCode* oc,
-                int nSections,
-                MachOSection* sections,
-                unsigned long address)
-{
-    int i;
-    IF_DEBUG(linker, debugBelch("relocateAddress: start\n"));
-    for (i = 0; i < nSections; i++)
-    {
-        IF_DEBUG(linker, debugBelch("    relocating address in section %d\n", i));
-        if (sections[i].addr <= address
-            && address < sections[i].addr + sections[i].size)
-        {
-            return (unsigned long)oc->image
-            + sections[i].offset + address - sections[i].addr;
-        }
-    }
-    barf("Invalid Mach-O file:"
-         "Address out of bounds while relocating object file");
-    return 0;
-}
-
 #endif /* aarch64_HOST_ARCH */
 
-#if !defined(aarch64_HOST_ARCH)
-static int
-relocateSection(
-    ObjectCode* oc,
-    char *image,
-    MachOSymtabCommand *symLC, MachONList *nlist,
-    int nSections, MachOSection* sections, MachOSection *sect)
-{
-    MachORelocationInfo *relocs;
-    int i, n;
-
-    IF_DEBUG(linker, debugBelch("relocateSection: start\n"));
-
-    if(!strcmp(sect->sectname,"__la_symbol_ptr"))
-        return 1;
-    else if(!strcmp(sect->sectname,"__nl_symbol_ptr"))
-        return 1;
-    else if(!strcmp(sect->sectname,"__la_sym_ptr2"))
-        return 1;
-    else if(!strcmp(sect->sectname,"__la_sym_ptr3"))
-        return 1;
-
-    n = sect->nreloc;
-    IF_DEBUG(linker, debugBelch("relocateSection: number of relocations: %d\n", n));
-
-    relocs = (MachORelocationInfo*) (image + sect->reloff);
-
-    for(i = 0; i < n; i++)
-    {
 #if defined(x86_64_HOST_ARCH)
+static int
+relocateSection(ObjectCode* oc, int curSection)
+{
+    Section * sect = &oc->sections[curSection];
+    MachOSection * msect = sect->info->macho_section; // for access convenience
+    MachORelocationInfo * relocs = sect->info->relocation_info;
+    MachOSymbol * symbols = oc->info->macho_symbols;
+
+    IF_DEBUG(linker, debugBelch("relocateSection %d (%s, %s): start\n",
+                                curSection, msect->segname, msect->sectname));
+
+    if(!strcmp(msect->sectname,"__la_symbol_ptr"))
+        return 1;
+    else if(!strcmp(msect->sectname,"__nl_symbol_ptr"))
+        return 1;
+    else if(!strcmp(msect->sectname,"__la_sym_ptr2"))
+        return 1;
+    else if(!strcmp(msect->sectname,"__la_sym_ptr3"))
+        return 1;
+
+    IF_DEBUG(linker, debugBelch("relocateSection: number of relocations: %d\n", msect->nreloc));
+
+    for(uint32_t i = 0; i < msect->nreloc; i++)
+    {
         MachORelocationInfo *reloc = &relocs[i];
 
-        char    *thingPtr = image + sect->offset + reloc->r_address;
+        char    *thingPtr = (char *) sect->start + reloc->r_address;
         uint64_t thing;
         /* We shouldn't need to initialise this, but gcc on OS X 64 bit
            complains that it may be used uninitialized if we don't */
         uint64_t value = 0;
         uint64_t baseValue;
         int type = reloc->r_type;
+        int relocLenBytes;
+        int nextInstrAdj = 0;
 
         IF_DEBUG(linker, debugBelch("relocateSection: relocation %d\n", i));
         IF_DEBUG(linker, debugBelch("               : type      = %d\n", reloc->r_type));
@@ -836,28 +732,44 @@ relocateSection(
         switch(reloc->r_length)
         {
             case 0:
-                checkProddableBlock(oc,thingPtr,1);
                 thing = *(uint8_t*)thingPtr;
-                baseValue = (uint64_t)thingPtr + 1;
+                relocLenBytes = 1;
                 break;
             case 1:
-                checkProddableBlock(oc,thingPtr,2);
                 thing = *(uint16_t*)thingPtr;
-                baseValue = (uint64_t)thingPtr + 2;
+                relocLenBytes = 2;
                 break;
             case 2:
-                checkProddableBlock(oc,thingPtr,4);
                 thing = *(uint32_t*)thingPtr;
-                baseValue = (uint64_t)thingPtr + 4;
+                relocLenBytes = 4;
                 break;
             case 3:
-                checkProddableBlock(oc,thingPtr,8);
                 thing = *(uint64_t*)thingPtr;
-                baseValue = (uint64_t)thingPtr + 8;
+                relocLenBytes = 8;
                 break;
             default:
                 barf("Unknown size.");
         }
+        checkProddableBlock(oc,thingPtr,relocLenBytes);
+
+        /*
+         * With SIGNED_N the relocation is not at the end of the
+         * instruction and baseValue needs to be adjusted accordingly.
+         */
+        switch (type) {
+            case X86_64_RELOC_SIGNED_1:
+                nextInstrAdj = 1;
+                break;
+            case X86_64_RELOC_SIGNED_2:
+                nextInstrAdj = 2;
+                break;
+            case X86_64_RELOC_SIGNED_4:
+                nextInstrAdj = 4;
+                break;
+        }
+        baseValue = (uint64_t)thingPtr + relocLenBytes + nextInstrAdj;
+
+
 
         IF_DEBUG(linker,
                  debugBelch("relocateSection: length = %d, thing = %" PRId64 ", baseValue = %p\n",
@@ -866,18 +778,18 @@ relocateSection(
         if (type == X86_64_RELOC_GOT
          || type == X86_64_RELOC_GOT_LOAD)
         {
-            MachONList *symbol = &nlist[reloc->r_symbolnum];
-            SymbolName* nm = image + symLC->stroff + symbol->n_un.n_strx;
+            MachOSymbol *symbol = &symbols[reloc->r_symbolnum];
+            SymbolName* nm = symbol->name;
             SymbolAddr* addr = NULL;
 
-            IF_DEBUG(linker, debugBelch("relocateSection: making jump island for %s, extern = %d, X86_64_RELOC_GOT\n", nm, reloc->r_extern));
+            IF_DEBUG(linker, debugBelch("relocateSection: making jump island for %s, extern = %d, X86_64_RELOC_GOT\n",
+                                        nm, reloc->r_extern));
 
-            ASSERT(reloc->r_extern);
             if (reloc->r_extern == 0) {
                     errorBelch("\nrelocateSection: global offset table relocation for symbol with r_extern == 0\n");
             }
 
-            if (symbol->n_type & N_EXT) {
+            if (symbol->nlist->n_type & N_EXT) {
                     // The external bit is set, meaning the symbol is exported,
                     // and therefore can be looked up in this object module's
                     // symtab, or it is undefined, meaning dlsym must be used
@@ -885,8 +797,8 @@ relocateSection(
 
                     addr = lookupSymbol_(nm);
                     IF_DEBUG(linker, debugBelch("relocateSection: looked up %s, "
-                                                "external X86_64_RELOC_GOT or X86_64_RELOC_GOT_LOAD\n", nm));
-                    IF_DEBUG(linker, debugBelch("               : addr = %p\n", addr));
+                                                "external X86_64_RELOC_GOT or X86_64_RELOC_GOT_LOAD\n"
+                                                "               : addr = %p\n", nm, addr));
 
                     if (addr == NULL) {
                             errorBelch("\nlookupSymbol failed in relocateSection (RELOC_GOT)\n"
@@ -901,38 +813,47 @@ relocateSection(
                     // at the location given by the section index and
                     // symbol address (symbol->n_value)
 
-                    if ((symbol->n_type & N_TYPE) == N_SECT) {
-                            addr = (void *)relocateAddress(oc, nSections, sections, symbol->n_value);
-                            IF_DEBUG(linker, debugBelch("relocateSection: calculated relocation %p of "
-                                                        "non-external X86_64_RELOC_GOT or X86_64_RELOC_GOT_LOAD\n",
-                                                        (void *)symbol->n_value));
-                            IF_DEBUG(linker, debugBelch("               : addr = %p\n", addr));
+                    if ((symbol->nlist->n_type & N_TYPE) == N_SECT) {
+                        if (symbol->addr == NULL) {
+                            errorBelch("relocateSection: address of internal symbol %s was not resolved\n", nm);
+                            return 0;
+                        }
+
+                        addr = symbol->addr;
+
+                        IF_DEBUG(linker, debugBelch("relocateSection: calculated relocation of "
+                                                    "non-external X86_64_RELOC_GOT or X86_64_RELOC_GOT_LOAD\n"));
+                        IF_DEBUG(linker, debugBelch("               : addr = %p\n", addr));
                     } else {
-                            errorBelch("\nrelocateSection: %s is not exported,"
-                                       " and should be defined in a section, but isn't!\n", nm);
+                        errorBelch("\nrelocateSection: %s is not exported,"
+                                   " and should be defined in a section, but isn't!\n", nm);
+                        return 0;
                     }
             }
 
+            // creates a jump island for every relocation entry for a symbol
+            // TODO (AP): use got_addr to store the loc. of a jump island to reuse later
             value = (uint64_t) &makeSymbolExtra(oc, reloc->r_symbolnum, (unsigned long)addr)->addr;
 
             type = X86_64_RELOC_SIGNED;
         }
         else if (reloc->r_extern)
         {
-            MachONList *symbol = &nlist[reloc->r_symbolnum];
-            SymbolName* nm = image + symLC->stroff + symbol->n_un.n_strx;
+            MachOSymbol *symbol = &symbols[reloc->r_symbolnum];
+            SymbolName* nm = symbol->name;
             SymbolAddr* addr = NULL;
 
             IF_DEBUG(linker, debugBelch("relocateSection: looking up external symbol %s\n", nm));
-            IF_DEBUG(linker, debugBelch("               : type  = %d\n", symbol->n_type));
-            IF_DEBUG(linker, debugBelch("               : sect  = %d\n", symbol->n_sect));
-            IF_DEBUG(linker, debugBelch("               : desc  = %d\n", symbol->n_desc));
-            IF_DEBUG(linker, debugBelch("               : value = %p\n", (void *)symbol->n_value));
+            IF_DEBUG(linker, debugBelch("               : type  = %d\n", symbol->nlist->n_type));
+            IF_DEBUG(linker, debugBelch("               : sect  = %d\n", symbol->nlist->n_sect));
+            IF_DEBUG(linker, debugBelch("               : desc  = %d\n", symbol->nlist->n_desc));
+            IF_DEBUG(linker, debugBelch("               : value = %p\n", (void *)symbol->nlist->n_value));
 
-            if ((symbol->n_type & N_TYPE) == N_SECT) {
-                value = relocateAddress(oc, nSections, sections,
-                                        symbol->n_value);
-                IF_DEBUG(linker, debugBelch("relocateSection, defined external symbol %s, relocated address %p\n", nm, (void *)value));
+            if ((symbol->nlist->n_type & N_TYPE) == N_SECT) {
+                ASSERT(symbol->addr != NULL);
+                value = (uint64_t) symbol->addr;
+                IF_DEBUG(linker, debugBelch("relocateSection, defined external symbol %s, relocated address %p\n",
+                                            nm, (void *)value));
             }
             else {
                 addr = lookupSymbol_(nm);
@@ -949,15 +870,83 @@ relocateSection(
         }
         else
         {
-            // If the relocation is not through the global offset table
-            // or external, then set the value to the baseValue.  This
-            // will leave displacements into the __const section
-            // unchanged (as they ought to be).
+            /* Since the relocation is internal, r_symbolnum contains a section
+             * number relative to which the relocation is.  Depending on whether
+             * the relocation is unsigned or signed, the given displacement is
+             * relative to the image or the section respectively.
+             *
+             * For instance, in a signed case:
+             * thing = <displ. to to section r_symbolnum *in the image*> (1)
+             *       + <offset within r_symbolnum section>
+             * (1) needs to be updated due to different section placement in memory.
+             */
 
-            value = baseValue;
+            CHECKM(reloc->r_symbolnum > 0,
+                   "relocateSection: unsupported r_symbolnum = %" PRIu32 " < 1 for internal relocation",
+                   reloc->r_symbolnum);
+
+            int targetSecNum = reloc->r_symbolnum - 1; // sec numbers start with 1
+            Section * targetSec = &oc->sections[targetSecNum];
+            MachOSection * targetMacho = targetSec->info->macho_section;
+
+            IF_DEBUG(linker,
+                     debugBelch("relocateSection: internal relocation relative to section %d (%s, %s)\n",
+                                targetSecNum, targetMacho->segname, targetMacho->sectname));
+
+            switch (type) {
+            case X86_64_RELOC_UNSIGNED: {
+                CHECKM(thing >= targetMacho->addr,
+                       "relocateSection: unsigned displacement %" PRIx64 "before target section start address %" PRIx64 "\n",
+                       thing, (uint64_t) targetMacho->addr);
+
+                uint64_t thingRelativeOffset = thing - targetMacho->addr;
+                IF_DEBUG(linker, debugBelch("                 "
+                                            "unsigned displacement %" PRIx64 " with section relative offset %" PRIx64 "\n",
+                                            thing, thingRelativeOffset));
+
+                thing = (uint64_t) targetSec->start + thingRelativeOffset;
+                IF_DEBUG(linker, debugBelch("                 "
+                                            "relocated address is %p\n", (void *) thing));
+
+                /* Compared to external relocation we don't need to adjust value
+                 * any further since thing already has absolute address.
+                 */
+                value = 0;
+                break;
+            }
+            case X86_64_RELOC_SIGNED:
+            case X86_64_RELOC_SIGNED_1:
+            case X86_64_RELOC_SIGNED_2:
+            case X86_64_RELOC_SIGNED_4: {
+                uint32_t baseValueOffset = reloc->r_address + relocLenBytes + nextInstrAdj;
+                uint64_t imThingLoc = msect->addr + baseValueOffset + (int64_t) thing;
+
+                CHECKM(imThingLoc >= targetMacho->addr,
+                       "relocateSection: target location %p in image before target section start address %p\n",
+                       (void *) imThingLoc, (void *) targetMacho->addr);
+
+                int64_t thingRelativeOffset = imThingLoc - targetMacho->addr;
+                IF_DEBUG(linker,
+                     debugBelch("                 "
+                                "original displacement %" PRId64 " to %p with section relative offset %" PRIu64 "\n",
+                                thing, (void *) imThingLoc, thingRelativeOffset));
+
+                thing = (int64_t) ((uint64_t) targetSec->start + thingRelativeOffset)
+                                - ((uint64_t) sect->start + baseValueOffset);
+                value = baseValue; // so that it further cancels out with baseValue
+                IF_DEBUG(linker,
+                         debugBelch("                 "
+                                    "relocated displacement %" PRId64 " to %p\n",
+                                    (int64_t) thing, (void *) (baseValue + thing)));
+                break;
+            }
+            default:
+                barf("relocateSection: unexpected internal relocation type %d\n", type);
+                return 0;
+            }
         }
 
-        IF_DEBUG(linker, debugBelch("relocateSection: value = %p\n", (void *)value));
+        IF_DEBUG(linker, debugBelch("relocateSection: value = %p\n", (void *) value));
 
         if (type == X86_64_RELOC_BRANCH)
         {
@@ -992,6 +981,19 @@ relocateSection(
                 barf("unknown relocation");
         }
 
+        IF_DEBUG(linker, debugBelch("relocateSection: thing = %p\n", (void *) thing));
+
+        /* Thing points to memory within one of the relocated sections. We can
+         * probe the first byte to sanity check internal relocations.
+         */
+        if (0 == reloc->r_extern) {
+            if (reloc->r_pcrel) {
+                checkProddableBlock(oc, (void *)((char *)thing + baseValue), 1);
+            } else {
+                checkProddableBlock(oc, (void *)thing, 1);
+            }
+        }
+
         switch(reloc->r_length)
         {
             case 0:
@@ -1007,346 +1009,12 @@ relocateSection(
                 *(uint64_t*)thingPtr = thing;
                 break;
         }
-#else /* x86_64_HOST_ARCH */
-        if(relocs[i].r_address & R_SCATTERED)
-        {
-            MachOScatteredRelocationInfo *scat =
-                (MachOScatteredRelocationInfo*) &relocs[i];
-
-            if(!scat->r_pcrel)
-            {
-                if(scat->r_length == 2)
-                {
-                    unsigned long word = 0;
-                    unsigned long* wordPtr = (unsigned long*) (image + sect->offset + scat->r_address);
-
-                    /* In this check we assume that sizeof(unsigned long) = 2 * sizeof(unsigned short)
-                       on powerpc_HOST_ARCH */
-                    checkProddableBlock(oc,wordPtr,sizeof(unsigned long));
-
-                    // Note on relocation types:
-                    // i386 uses the GENERIC_RELOC_* types,
-                    // while ppc uses special PPC_RELOC_* types.
-                    // *_RELOC_VANILLA and *_RELOC_PAIR have the same value
-                    // in both cases, all others are different.
-                    // Therefore, we use GENERIC_RELOC_VANILLA
-                    // and GENERIC_RELOC_PAIR instead of the PPC variants,
-                    // and use #ifdefs for the other types.
-
-                    // Step 1: Figure out what the relocated value should be
-                    if (scat->r_type == GENERIC_RELOC_VANILLA) {
-                        word = *wordPtr
-                             + (unsigned long) relocateAddress(oc,
-                                                                nSections,
-                                                                sections,
-                                                                scat->r_value)
-                                        - scat->r_value;
-                    }
-#if defined(powerpc_HOST_ARCH)
-                    else if(scat->r_type == PPC_RELOC_SECTDIFF
-                        || scat->r_type == PPC_RELOC_LO16_SECTDIFF
-                        || scat->r_type == PPC_RELOC_HI16_SECTDIFF
-                        || scat->r_type == PPC_RELOC_HA16_SECTDIFF
-                        || scat->r_type == PPC_RELOC_LOCAL_SECTDIFF)
-#else /* powerpc_HOST_ARCH */
-                    else if(scat->r_type == GENERIC_RELOC_SECTDIFF
-                        || scat->r_type == GENERIC_RELOC_LOCAL_SECTDIFF)
-#endif /* powerpc_HOST_ARCH */
-                    {
-                        MachOScatteredRelocationInfo *pair =
-                                (MachOScatteredRelocationInfo*) &relocs[i+1];
-
-                        if (!pair->r_scattered || pair->r_type != GENERIC_RELOC_PAIR) {
-                            barf("Invalid Mach-O file: "
-                                 "RELOC_*_SECTDIFF not followed by RELOC_PAIR");
-                        }
-
-                        word = (unsigned long)
-                               (relocateAddress(oc, nSections, sections, scat->r_value)
-                              - relocateAddress(oc, nSections, sections, pair->r_value));
-                        i++;
-                    }
-#if defined(powerpc_HOST_ARCH)
-                    else if(scat->r_type == PPC_RELOC_HI16
-                         || scat->r_type == PPC_RELOC_LO16
-                         || scat->r_type == PPC_RELOC_HA16
-                         || scat->r_type == PPC_RELOC_LO14)
-                    {   // these are generated by label+offset things
-                        MachORelocationInfo *pair = &relocs[i+1];
-
-                        if ((pair->r_address & R_SCATTERED) || pair->r_type != PPC_RELOC_PAIR) {
-                            barf("Invalid Mach-O file: "
-                                 "PPC_RELOC_* not followed by PPC_RELOC_PAIR");
-                        }
-
-                        if(scat->r_type == PPC_RELOC_LO16)
-                        {
-                            word = ((unsigned short*) wordPtr)[1];
-                            word |= ((unsigned long) relocs[i+1].r_address & 0xFFFF) << 16;
-                        }
-                        else if(scat->r_type == PPC_RELOC_LO14)
-                        {
-                            barf("Unsupported Relocation: PPC_RELOC_LO14");
-                            word = ((unsigned short*) wordPtr)[1] & 0xFFFC;
-                            word |= ((unsigned long) relocs[i+1].r_address & 0xFFFF) << 16;
-                        }
-                        else if(scat->r_type == PPC_RELOC_HI16)
-                        {
-                            word = ((unsigned short*) wordPtr)[1] << 16;
-                            word |= ((unsigned long) relocs[i+1].r_address & 0xFFFF);
-                        }
-                        else if(scat->r_type == PPC_RELOC_HA16)
-                        {
-                            word = ((unsigned short*) wordPtr)[1] << 16;
-                            word += ((short)relocs[i+1].r_address & (short)0xFFFF);
-                        }
-
-
-                        word += (unsigned long) relocateAddress(oc, nSections, sections, scat->r_value)
-                                                - scat->r_value;
-
-                        i++;
-                    }
-#endif /* powerpc_HOST_ARCH */
-                    else {
-                        barf ("Don't know how to handle this Mach-O "
-                              "scattered relocation entry: "
-                              "object file %s; entry type %ld; "
-                              "address %#lx\n",
-                              OC_INFORMATIVE_FILENAME(oc),
-                              scat->r_type,
-                              scat->r_address);
-                        return 0;
-                     }
-
-#if defined(powerpc_HOST_ARCH)
-                    if(scat->r_type == GENERIC_RELOC_VANILLA
-                        || scat->r_type == PPC_RELOC_SECTDIFF)
-#else /* powerpc_HOST_ARCH */
-                    if(scat->r_type == GENERIC_RELOC_VANILLA
-                        || scat->r_type == GENERIC_RELOC_SECTDIFF
-                        || scat->r_type == GENERIC_RELOC_LOCAL_SECTDIFF)
-#endif /* powerpc_HOST_ARCH */
-                    {
-                        *wordPtr = word;
-                    }
-#if defined(powerpc_HOST_ARCH)
-                    else if (scat->r_type == PPC_RELOC_LO16_SECTDIFF
-                          || scat->r_type == PPC_RELOC_LO16)
-                    {
-                        ((unsigned short*) wordPtr)[1] = word & 0xFFFF;
-                    }
-                    else if (scat->r_type == PPC_RELOC_HI16_SECTDIFF
-                          || scat->r_type == PPC_RELOC_HI16)
-                    {
-                        ((unsigned short*) wordPtr)[1] = (word >> 16) & 0xFFFF;
-                    }
-                    else if (scat->r_type == PPC_RELOC_HA16_SECTDIFF
-                          || scat->r_type == PPC_RELOC_HA16)
-                    {
-                        ((unsigned short*) wordPtr)[1] = ((word >> 16) & 0xFFFF)
-                            + ((word & (1<<15)) ? 1 : 0);
-                    }
-#endif /* powerpc_HOST_ARCH */
-                }
-                else
-                {
-                    barf("Can't handle Mach-O scattered relocation entry "
-                         "with this r_length tag: "
-                         "object file %s; entry type %ld; "
-                         "r_length tag %ld; address %#lx\n",
-                         OC_INFORMATIVE_FILENAME(oc),
-                         scat->r_type,
-                         scat->r_length,
-                         scat->r_address);
-                    return 0;
-                }
-            }
-            else /* scat->r_pcrel */
-            {
-                barf("Don't know how to handle *PC-relative* Mach-O "
-                     "scattered relocation entry: "
-                     "object file %s; entry type %ld; address %#lx\n",
-                     OC_INFORMATIVE_FILENAME(oc),
-                     scat->r_type,
-                     scat->r_address);
-               return 0;
-            }
-
-        }
-        else /* !(relocs[i].r_address & R_SCATTERED) */
-        {
-            MachORelocationInfo *reloc = &relocs[i];
-            if (reloc->r_pcrel && !reloc->r_extern) {
-                IF_DEBUG(linker, debugBelch("relocateSection: pc relative but not external, skipping\n"));
-                continue;
-            }
-
-            if (reloc->r_length == 2) {
-                unsigned long word = 0;
-#if defined(powerpc_HOST_ARCH)
-                unsigned long jumpIsland = 0;
-                long offsetToJumpIsland = 0xBADBAD42; // initialise to bad value
-                                                      // to avoid warning and to catch
-                                                      // bugs.
-#endif /* powerpc_HOST_ARCH */
-
-                unsigned long* wordPtr = (unsigned long*) (image + sect->offset + reloc->r_address);
-
-                /* In this check we assume that sizeof(unsigned long) = 2 * sizeof(unsigned short)
-                   on powerpc_HOST_ARCH */
-                checkProddableBlock(oc,wordPtr, sizeof(unsigned long));
-
-                if (reloc->r_type == GENERIC_RELOC_VANILLA) {
-                    word = *wordPtr;
-                }
-#if defined(powerpc_HOST_ARCH)
-                else if (reloc->r_type == PPC_RELOC_LO16) {
-                    word = ((unsigned short*) wordPtr)[1];
-                    word |= ((unsigned long) relocs[i+1].r_address & 0xFFFF) << 16;
-                }
-                else if (reloc->r_type == PPC_RELOC_HI16) {
-                    word = ((unsigned short*) wordPtr)[1] << 16;
-                    word |= ((unsigned long) relocs[i+1].r_address & 0xFFFF);
-                }
-                else if (reloc->r_type == PPC_RELOC_HA16) {
-                    word = ((unsigned short*) wordPtr)[1] << 16;
-                    word += ((short)relocs[i+1].r_address & (short)0xFFFF);
-                }
-                else if (reloc->r_type == PPC_RELOC_BR24) {
-                    word = *wordPtr;
-                    word = (word & 0x03FFFFFC) | ((word & 0x02000000) ? 0xFC000000 : 0);
-                }
-#endif /* powerpc_HOST_ARCH */
-                else {
-                    barf("Can't handle this Mach-O relocation entry "
-                         "(not scattered): "
-                         "object file %s; entry type %ld; address %#lx\n",
-                         OC_INFORMATIVE_FILENAME(oc),
-                         reloc->r_type,
-                         reloc->r_address);
-                    return 0;
-                }
-
-                if (!reloc->r_extern) {
-                    long delta = sections[reloc->r_symbolnum-1].offset
-                        - sections[reloc->r_symbolnum-1].addr
-                        + ((long) image);
-
-                    word += delta;
-                }
-                else {
-                    MachONList *symbol = &nlist[reloc->r_symbolnum];
-                    char *nm = image + symLC->stroff + symbol->n_un.n_strx;
-                    void *symbolAddress = lookupSymbol_(nm);
-
-                    if (!symbolAddress) {
-                        errorBelch("\nunknown symbol `%s'", nm);
-                        return 0;
-                    }
-
-                    if (reloc->r_pcrel) {
-#if defined(powerpc_HOST_ARCH)
-                            // In the .o file, this should be a relative jump to NULL
-                            // and we'll change it to a relative jump to the symbol
-                        ASSERT(word + reloc->r_address == 0);
-                        jumpIsland = (unsigned long)
-                                        &makeSymbolExtra(oc,
-                                                         reloc->r_symbolnum,
-                                                         (unsigned long) symbolAddress)
-                                         -> jumpIsland;
-                        if (jumpIsland != 0) {
-                            offsetToJumpIsland = word + jumpIsland
-                                - (((long)image) + sect->offset - sect->addr);
-                        }
-#endif /* powerpc_HOST_ARCH */
-                        word += (unsigned long) symbolAddress
-                                - (((long)image) + sect->offset - sect->addr);
-                    }
-                    else {
-                        word += (unsigned long) symbolAddress;
-                    }
-                }
-
-                if (reloc->r_type == GENERIC_RELOC_VANILLA) {
-                    *wordPtr = word;
-                    continue;
-                }
-#if defined(powerpc_HOST_ARCH)
-                else if(reloc->r_type == PPC_RELOC_LO16)
-                {
-                    ((unsigned short*) wordPtr)[1] = word & 0xFFFF;
-                    i++;
-                    continue;
-                }
-                else if(reloc->r_type == PPC_RELOC_HI16)
-                {
-                    ((unsigned short*) wordPtr)[1] = (word >> 16) & 0xFFFF;
-                    i++;
-                    continue;
-                }
-                else if(reloc->r_type == PPC_RELOC_HA16)
-                {
-                    ((unsigned short*) wordPtr)[1] = ((word >> 16) & 0xFFFF)
-                        + ((word & (1<<15)) ? 1 : 0);
-                    i++;
-                    continue;
-                }
-                else if(reloc->r_type == PPC_RELOC_BR24)
-                {
-                    if ((word & 0x03) != 0) {
-                        barf("%s: unconditional relative branch with a displacement "
-                             "which isn't a multiple of 4 bytes: %#lx",
-                             OC_INFORMATIVE_FILENAME(oc),
-                             word);
-                    }
-
-                    if((word & 0xFE000000) != 0xFE000000 &&
-                        (word & 0xFE000000) != 0x00000000) {
-                        // The branch offset is too large.
-                        // Therefore, we try to use a jump island.
-                        if (jumpIsland == 0) {
-                            barf("%s: unconditional relative branch out of range: "
-                                 "no jump island available: %#lx",
-                                 OC_INFORMATIVE_FILENAME(oc),
-                                 word);
-                        }
-
-                        word = offsetToJumpIsland;
-
-                        if((word & 0xFE000000) != 0xFE000000 &&
-                            (word & 0xFE000000) != 0x00000000) {
-                            barf("%s: unconditional relative branch out of range: "
-                                 "jump island out of range: %#lx",
-                                 OC_INFORMATIVE_FILENAME(oc),
-                                 word);
-                    }
-                    }
-                    *wordPtr = (*wordPtr & 0xFC000003) | (word & 0x03FFFFFC);
-                    continue;
-                }
-#endif /* powerpc_HOST_ARCH */
-            }
-            else
-            {
-                 barf("Can't handle Mach-O relocation entry (not scattered) "
-                      "with this r_length tag: "
-                      "object file %s; entry type %ld; "
-                      "r_length tag %ld; address %#lx\n",
-                      OC_INFORMATIVE_FILENAME(oc),
-                      reloc->r_type,
-                      reloc->r_length,
-                      reloc->r_address);
-                 return 0;
-            }
-        }
-#endif /* x86_64_HOST_ARCH */
     }
 
     IF_DEBUG(linker, debugBelch("relocateSection: done\n"));
     return 1;
 }
-#endif /* aarch64_HOST_ARCH */
+#endif /* x86_64_HOST_ARCH */
 
 /* Note [mmap r+w+x]
  * ~~~~~~~~~~~~~~~~~
@@ -1367,6 +1035,165 @@ relocateSection(
  *   addressability for relative or absolute access.
  */
 
+SectionKind
+getSectionKind_MachO(MachOSection *section)
+{
+    SectionKind kind;
+
+    /* todo: Use section flags instead */
+    if (0==strcmp(section->sectname,"__text")) {
+        kind = SECTIONKIND_CODE_OR_RODATA;
+    } else if (0==strcmp(section->sectname,"__const") ||
+               0==strcmp(section->sectname,"__data") ||
+               0==strcmp(section->sectname,"__bss") ||
+               0==strcmp(section->sectname,"__common") ||
+               0==strcmp(section->sectname,"__mod_init_func")) {
+        kind = SECTIONKIND_RWDATA;
+    } else {
+        kind = SECTIONKIND_OTHER;
+    }
+
+    return kind;
+}
+
+/* Calculate the # of active segments and their sizes based on section
+ * sizes and alignments. This is done in 2 passes over sections:
+ * 1. Calculate how many sections is going to be in each segment and
+ * the total segment size.
+ * 2. Fill in segment's sections_idx arrays.
+ *
+ * gbZerofillSegment is there because of this comment in mach-o/loader.h:
+ * The gigabyte zero fill sections, those with the section type
+ * S_GB_ZEROFILL, can only be in a segment with sections of this
+ * type. These segments are then placed after all other segments.
+ */
+int
+ocBuildSegments_MachO(ObjectCode *oc)
+{
+    int n_rxSections = 0;
+    size_t size_rxSegment = 0;
+    Segment *rxSegment = NULL;
+
+    int n_rwSections = 0;
+    size_t size_rwSegment = 0;
+    Segment *rwSegment = NULL;
+
+    int n_gbZerofills = 0;
+    size_t size_gbZerofillSegment = 0;
+    Segment *gbZerofillSegment = NULL;
+
+    int n_activeSegments = 0;
+    int curSegment = 0;
+    size_t size_compound;
+
+    Segment *segments = NULL;
+    void *mem = NULL, *curMem = NULL;
+
+    for (int i = 0; i < oc->n_sections; i++) {
+        MachOSection *macho = &oc->info->macho_sections[i];
+        size_t alignment = 1 << macho->align;
+
+        if (S_GB_ZEROFILL == (macho->flags & SECTION_TYPE)) {
+            size_gbZerofillSegment = roundUpToAlign(size_gbZerofillSegment, alignment);
+            size_gbZerofillSegment += macho->size;
+            n_gbZerofills++;
+        } else if (getSectionKind_MachO(macho) == SECTIONKIND_CODE_OR_RODATA) {
+            size_rxSegment = roundUpToAlign(size_rxSegment, alignment);
+            size_rxSegment += macho->size;
+            n_rxSections++;
+        } else {
+            size_rwSegment = roundUpToAlign(size_rwSegment, alignment);
+            size_rwSegment += macho->size;
+            n_rwSections++;
+        }
+    }
+
+    size_compound = roundUpToPage(size_rxSegment) +
+        roundUpToPage(size_rwSegment) +
+        roundUpToPage(size_gbZerofillSegment);
+
+    if (n_rxSections > 0) {
+        n_activeSegments++;
+    }
+    if (n_rwSections > 0) {
+        n_activeSegments++;
+    }
+    if (n_gbZerofills >0) {
+        n_activeSegments++;
+    }
+
+    mem = mmapForLinker(size_compound, MAP_ANON, -1, 0);
+    if (NULL == mem) return 0;
+
+    IF_DEBUG(linker, debugBelch("ocBuildSegments: allocating %d segments\n", n_activeSegments));
+    segments = (Segment*)stgCallocBytes(n_activeSegments, sizeof(Segment),
+                                        "ocBuildSegments_MachO(segments)");
+    curMem = mem;
+
+    /* Allocate space for RX segment */
+    if (n_rxSections > 0) {
+        rxSegment = &segments[curSegment];
+        initSegment(rxSegment,
+                    curMem,
+                    roundUpToPage(size_rxSegment),
+                    SEGMENT_PROT_RX,
+                    n_rxSections);
+        IF_DEBUG(linker, debugBelch("ocBuildSegments_MachO: init segment %d (RX) at %p size %zu\n",
+                                    curSegment, rxSegment->start, rxSegment->size));
+        curMem = (char *)curMem + rxSegment->size;
+        curSegment++;
+    }
+
+    /* Allocate space for RW segment */
+    if (n_rwSections > 0) {
+        rwSegment = &segments[curSegment];
+        initSegment(rwSegment,
+                    curMem,
+                    roundUpToPage(size_rwSegment),
+                    SEGMENT_PROT_RWO,
+                    n_rwSections);
+        IF_DEBUG(linker, debugBelch("ocBuildSegments_MachO: init segment %d (RWO) at %p size %zu\n",
+                                    curSegment, rwSegment->start, rwSegment->size));
+        curMem = (char *)curMem + rwSegment->size;
+        curSegment++;
+    }
+
+    /* Allocate space for GB_ZEROFILL segment */
+    if (n_gbZerofills > 0) {
+        gbZerofillSegment = &segments[curSegment];
+        initSegment(gbZerofillSegment,
+                    curMem,
+                    roundUpToPage(size_gbZerofillSegment),
+                    SEGMENT_PROT_RWO,
+                    n_gbZerofills);
+        IF_DEBUG(linker, debugBelch("ocBuildSegments_MachO: init segment %d (GB_ZEROFILL) at %p size %zu\n",
+                                    curSegment, gbZerofillSegment->start, gbZerofillSegment->size));
+        curMem = (char *)curMem + gbZerofillSegment->size;
+        curSegment++;
+    }
+
+    /* Second pass over sections to fill in sections_idx arrays */
+    for (int i = 0, rx = 0, rw = 0, gb = 0;
+         i < oc->n_sections;
+         i++)
+    {
+        MachOSection *macho = &oc->info->macho_sections[i];
+
+        if (S_GB_ZEROFILL == (macho->flags & SECTION_TYPE)) {
+            gbZerofillSegment->sections_idx[gb++] = i;
+        } else if (getSectionKind_MachO(macho) == SECTIONKIND_CODE_OR_RODATA) {
+            rxSegment->sections_idx[rx++] = i;
+        } else {
+            rwSegment->sections_idx[rw++] = i;
+        }
+    }
+
+    oc->segments = segments;
+    oc->n_segments = n_activeSegments;
+
+    return 1;
+}
+
 int
 ocGetNames_MachO(ObjectCode* oc)
 {
@@ -1380,14 +1207,16 @@ ocGetNames_MachO(ObjectCode* oc)
 
     Section *secArray;
     secArray = (Section*)stgCallocBytes(
-         sizeof(Section),
-         oc->info->segCmd->nsects,
-         "ocGetNames_MachO(sections)");
+        oc->info->segCmd->nsects,
+        sizeof(Section),
+        "ocGetNames_MachO(sections)");
 
     oc->sections = secArray;
 
     IF_DEBUG(linker, debugBelch("ocGetNames_MachO: will load %d sections\n",
                                 oc->n_sections));
+
+#if defined (ios_HOST_OS)
     for(int i=0; i < oc->n_sections; i++)
     {
         MachOSection * section = &oc->info->macho_sections[i];
@@ -1399,23 +1228,9 @@ ocGetNames_MachO(ObjectCode* oc)
             continue;
         }
 
-        // XXX, use SECTION_TYPE attributes, instead of relying on the name?
-
-        SectionKind kind = SECTIONKIND_OTHER;
-
-        if (0==strcmp(section->sectname,"__text")) {
-            kind = SECTIONKIND_CODE_OR_RODATA;
-        }
-        else if (0==strcmp(section->sectname,"__const") ||
-                 0==strcmp(section->sectname,"__data") ||
-                 0==strcmp(section->sectname,"__bss") ||
-                 0==strcmp(section->sectname,"__common") ||
-                 0==strcmp(section->sectname,"__mod_init_func")) {
-            kind = SECTIONKIND_RWDATA;
-        }
+        SectionKind kind = getSectionKind_MachO(section);
 
         switch(section->flags & SECTION_TYPE) {
-#if defined(ios_HOST_OS)
             case S_ZEROFILL:
             case S_GB_ZEROFILL: {
                 // See Note [mmap r+w+x]
@@ -1424,7 +1239,8 @@ ocGetNames_MachO(ObjectCode* oc)
                                   MAP_ANON | MAP_PRIVATE,
                                   -1, 0);
                 if( mem == MAP_FAILED ) {
-                    barf("failed to mmap allocate memory for zerofill section %d of size %d. errno = %d", i, section->size, errno);
+                    barf("failed to mmap allocate memory for zerofill section %d of size %d. errno = %d",
+                         i, section->size, errno);
                 }
                 addSection(&secArray[i], kind, SECTION_MMAP, mem, section->size,
                            0, mem, roundUpToPage(section->size));
@@ -1496,83 +1312,101 @@ ocGetNames_MachO(ObjectCode* oc)
                   = (MachORelocationInfo*)(oc->image + section->reloff);
                 break;
             }
+        }
+    }
+#else /* !ios_HOST_OS */
+    IF_DEBUG(linker, debugBelch("ocGetNames_MachO: building segments\n"));
 
-#else /* any other host */
+    CHECKM(ocBuildSegments_MachO(oc), "ocGetNames_MachO: failed to build segments\n");
+
+    for (int seg_n = 0; seg_n < oc->n_segments; seg_n++) {
+        Segment *segment = &oc->segments[seg_n];
+        void *curMem = segment->start;
+
+        IF_DEBUG(linker,
+                 debugBelch("ocGetNames_MachO: loading segment %d "
+                            "(address = %p, size = %zu) "
+                            "with %d sections\n",
+                            seg_n, segment->start, segment->size, segment->n_sections));
+
+        for (int sec_n = 0; sec_n < segment->n_sections; sec_n++) {
+            int sec_idx = segment->sections_idx[sec_n];
+            MachOSection *section = &oc->info->macho_sections[sec_idx];
+
+            size_t alignment = 1 << section->align;
+            SectionKind kind = getSectionKind_MachO(section);
+
+            void *secMem = (void *)roundUpToAlign((size_t)curMem, alignment);
+
+            IF_DEBUG(linker,
+                     debugBelch("ocGetNames_MachO: loading section %d in segment %d "
+                                "(#%d, %s %s)\n"
+                                "                  skipped %zu bytes due to alignment of %zu\n",
+                                sec_n, seg_n, sec_idx, section->segname, section->sectname,
+                                (char *)secMem - (char *)curMem, alignment));
+
+            switch (section->flags & SECTION_TYPE) {
             case S_ZEROFILL:
-            case S_GB_ZEROFILL: {
-                char * zeroFillArea;
-                if (RTS_LINKER_USE_MMAP) {
-                    zeroFillArea = mmapForLinker(section->size, MAP_ANONYMOUS,
-                                                 -1, 0);
-                    if (zeroFillArea == NULL) return 0;
-                    memset(zeroFillArea, 0, section->size);
-                }
-                else {
-                    zeroFillArea = stgCallocBytes(1,section->size,
-                                                  "ocGetNames_MachO(common symbols)");
-                }
-                section->offset = zeroFillArea - oc->image;
+            case S_GB_ZEROFILL:
+                IF_DEBUG(linker, debugBelch("ocGetNames_MachO: memset to 0 a ZEROFILL section\n"));
+                memset(secMem, 0, section->size);
+                break;
+            default:
+                IF_DEBUG(linker,
+                         debugBelch("ocGetNames_MachO: copying from %p to %p"
+                                    " a block of %" PRIu64 " bytes\n",
+                                    (void *) (oc->image + section->offset), secMem, section->size));
 
-                addSection(&secArray[i], kind, SECTION_NOMEM,
-                           (void *)(oc->image + section->offset),
-                           section->size,
-                           0, 0, 0);
-
-                addProddableBlock(oc,
-                                  (void *) (oc->image + section->offset),
-                                  section->size);
-
-                secArray[i].info->nstubs = 0;
-                secArray[i].info->stub_offset = NULL;
-                secArray[i].info->stub_size = 0;
-                secArray[i].info->stubs = NULL;
-
-                secArray[i].info->macho_section = section;
-                secArray[i].info->relocation_info
-                = (MachORelocationInfo*)(oc->image + section->reloff);
-                FALLTHROUGH;
+                memcpy(secMem, oc->image + section->offset, section->size);
             }
-            default: {
-                // just set the pointer to the loaded image.
-                addSection(&secArray[i], kind, SECTION_NOMEM,
-                           (void *)(oc->image + section->offset),
-                           section->size,
-                           0, 0, 0);
 
-                addProddableBlock(oc,
-                                  (void *) (oc->image + section->offset),
-                                  section->size);
+            /* SECTION_NOMEM since memory is already allocated in segments */
+            addSection(&secArray[sec_idx], kind, SECTION_NOMEM,
+                       secMem, section->size,
+                       0, 0, 0);
+            addProddableBlock(oc, secMem, section->size);
 
-                secArray[i].info->nstubs = 0;
-                secArray[i].info->stub_offset = NULL;
-                secArray[i].info->stub_size = 0;
-                secArray[i].info->stubs = NULL;
+            curMem = (char*) secMem + section->size;
 
-                secArray[i].info->macho_section = section;
-                secArray[i].info->relocation_info
+            secArray[sec_idx].info->nstubs = 0;
+            secArray[sec_idx].info->stub_offset = NULL;
+            secArray[sec_idx].info->stub_size = 0;
+            secArray[sec_idx].info->stubs = NULL;
+
+            secArray[sec_idx].info->macho_section = section;
+            secArray[sec_idx].info->relocation_info
                 = (MachORelocationInfo*)(oc->image + section->reloff);
-            }
-#endif
+
         }
 
     }
+#endif
+
     /* now, as all sections have been loaded, we can resolve the absolute
      * address of symbols defined in those sections.
      */
     for(size_t i=0; i < oc->info->n_macho_symbols; i++) {
         MachOSymbol * s = &oc->info->macho_symbols[i];
         if( N_SECT == (s->nlist->n_type & N_TYPE) ) {
-            /* section is given */
+            if( NO_SECT == s->nlist->n_sect )
+                barf("Symbol with N_SECT type, but no section.");
+
+            /* section is given, and n_sect is >0 */
             uint8_t n = s->nlist->n_sect - 1;
             if(0 == oc->info->macho_sections[n].size) {
                 continue;
             }
-            if(s->nlist->n_sect == NO_SECT)
-                barf("Symbol with N_SECT type, but no section.");
 
-            /* addr <-   offset in memory where this section resides
-             *         - address rel. to the image where this section is stored
-             *         + symbol offset in the image
+            /* addr <-   address in memory where the relocated section resides | (a)
+             *         - section's address in the image | (b)
+             *         + symbol's address in the image  | (c)
+             * (c) - (b) gives symbol's offset relative to section start
+             * (a) - (b) + (c) gives symbol's address for the relocated section
+             *
+             * (c) and (b) are not _real_ addresses and not equal
+             * to file offsets in the image.
+             * Rather they are (virtual) aligned addresses within
+             * a single segment of MH_OBJECT object file.
              */
             s->addr = (uint8_t*)oc->sections[n].start
                               - oc->info->macho_sections[n].addr
@@ -1615,13 +1449,13 @@ ocGetNames_MachO(ObjectCode* oc)
     if (oc->info->symCmd) {
         for (size_t i = 0; i < oc->info->n_macho_symbols; i++) {
             SymbolName* nm = oc->info->macho_symbols[i].name;
-            if(oc->info->nlist[i].n_type & N_STAB)
+            if (oc->info->nlist[i].n_type & N_STAB)
             {
                 IF_DEBUG(linker, debugBelch("ocGetNames_MachO: Skip STAB: %s\n", nm));
             }
-            else if((oc->info->nlist[i].n_type & N_TYPE) == N_SECT)
+            else if ((oc->info->nlist[i].n_type & N_TYPE) == N_SECT)
             {
-                if(oc->info->nlist[i].n_type & N_EXT)
+                if (oc->info->nlist[i].n_type & N_EXT)
                 {
                     if (   (oc->info->nlist[i].n_desc & N_WEAK_DEF)
                         && lookupSymbol_(nm)) {
@@ -1811,19 +1645,13 @@ ocResolve_MachO(ObjectCode* oc)
         if (!relocateSectionAarch64(oc, &oc->sections[i]))
             return 0;
 #else
-        if (!relocateSection(oc,oc->image,oc->info->symCmd,oc->info->nlist,
-                             oc->info->segCmd->nsects,oc->info->macho_sections,
-                             &oc->info->macho_sections[i]))
+        if (!relocateSection(oc, i))
             return 0;
 #endif
     }
 #if defined(ios_HOST_OS)
     if(!ocMprotect_MachO ( oc ))
         return 0;
-#endif
-
-#if defined (powerpc_HOST_ARCH)
-    ocFlushInstructionCache( oc );
 #endif
 
     return 1;
@@ -1843,19 +1671,24 @@ ocRunInit_MachO ( ObjectCode *oc )
     getProgEnvv(&envc, &envv);
 
     for (int i = 0; i < oc->n_sections; i++) {
+        IF_DEBUG(linker, debugBelch("ocRunInit_MachO: checking section %d\n", i));
+
         // ToDo: replace this with a proper check for the S_MOD_INIT_FUNC_POINTERS
         // flag.  We should do this elsewhere in the Mach-O linker code
         // too.  Note that the system linker will *refuse* to honor
         // sections which don't have this flag, so this could cause
         // weird behavior divergence (albeit reproducible).
-        if (0 == strcmp(oc->info->macho_sections[i].sectname,
-                        "__mod_init_func")) {
+        if (0 == strcmp(oc->info->macho_sections[i].sectname, "__mod_init_func")) {
+            IF_DEBUG(linker, debugBelch("ocRunInit_MachO:     running mod init functions\n"));
 
             void *init_startC = oc->sections[i].start;
             init_t *init = (init_t*)init_startC;
             init_t *init_end = (init_t*)((uint8_t*)init_startC
                              + oc->sections[i].info->macho_section->size);
-            for (; init < init_end; init++) {
+
+            for (int pn = 0; init < init_end; init++, pn++) {
+                IF_DEBUG(linker, debugBelch("ocRunInit_MachO:     function pointer %d at %p to %p\n",
+                                            pn, (void *) init, (void *) *init));
                 (*init)(argc, argv, envv);
             }
         }
@@ -1864,53 +1697,6 @@ ocRunInit_MachO ( ObjectCode *oc )
     freeProgEnvv(envc, envv);
     return 1;
 }
-
-#if defined(powerpc_HOST_ARCH)
-/*
- * The Mach-O object format uses leading underscores. But not everywhere.
- * There is a small number of runtime support functions defined in
- * libcc_dynamic.a whose name does not have a leading underscore.
- * As a consequence, we can't get their address from C code.
- * We have to use inline assembler just to take the address of a function.
- * Yuck.
- */
-
-extern void* symbolsWithoutUnderscore[];
-
-void
-machoInitSymbolsWithoutUnderscore(void)
-{
-    void **p = symbolsWithoutUnderscore;
-    __asm__ volatile(".globl _symbolsWithoutUnderscore\n.data\n_symbolsWithoutUnderscore:");
-
-#undef SymI_NeedsProto
-#undef SymI_NeedsDataProto
-
-#define SymI_NeedsProto(x)  \
-    __asm__ volatile(".long " # x);
-
-#define SymI_NeedsDataProto(x) \
-    SymI_NeedsProto(x)
-
-    RTS_MACHO_NOUNDERLINE_SYMBOLS
-
-    __asm__ volatile(".text");
-
-#undef SymI_NeedsProto
-#undef SymI_NeedsDataProto
-
-#define SymI_NeedsProto(x)  \
-    ghciInsertSymbolTable("(GHCi built-in symbols)", symhash, #x, *p++, HS_BOOL_FALSE, NULL);
-
-#define SymI_NeedsDataProto(x) \
-    SymI_NeedsProto(x)
-
-    RTS_MACHO_NOUNDERLINE_SYMBOLS
-
-#undef SymI_NeedsProto
-#undef SymI_NeedsDataProto
-}
-#endif
 
 /*
  * Figure out by how much to shift the entire Mach-O file in memory
@@ -1930,23 +1716,16 @@ machoGetMisalignment( FILE * f )
     }
     fseek(f, -sizeof(header), SEEK_CUR);
 
-#if defined(x86_64_HOST_ARCH) || defined(powerpc64_HOST_ARCH) \
-    || defined(aarch64_HOST_ARCH)
     if(header.magic != MH_MAGIC_64) {
         barf("Bad magic. Expected: %08x, got: %08x.",
              MH_MAGIC_64, header.magic);
     }
-#else
-    if(header.magic != MH_MAGIC) {
-        barf("Bad magic. Expected: %08x, got: %08x.",
-             MH_MAGIC, header.magic);
-    }
-#endif
 
     misalignment = (header.sizeofcmds + sizeof(header))
                     & 0xF;
 
+    IF_DEBUG(linker, debugBelch("mach-o misalignment %d\n", misalignment));
     return misalignment ? (16 - misalignment) : 0;
 }
 
-#endif /* darwin_HOST_OS, ios_HOST_OS */
+#endif /* darwin_HOST_OS || ios_HOST_OS */

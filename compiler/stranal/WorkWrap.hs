@@ -185,7 +185,7 @@ f.  But that would make a new unfolding which would overwrite the old
 one! So the function would no longer be INLNABLE, and in particular
 will not be specialised at call sites in other modules.
 
-This comes in practice (Trac #6056).
+This comes in practice (#6056).
 
 Solution: do the w/w for strictness analysis, but transfer the Stable
 unfolding to the *worker*.  So we will get something like this:
@@ -240,7 +240,38 @@ will happen on every call of g. Disaster.
 Solution: do worker/wrapper even on NOINLINE things; but move the
 NOINLINE pragma to the worker.
 
-(See Trac #13143 for a real-world example.)
+(See #13143 for a real-world example.)
+
+It is crucial that we do this for *all* NOINLINE functions. #10069
+demonstrates what happens when we promise to w/w a (NOINLINE) leaf function, but
+fail to deliver:
+
+  data C = C Int# Int#
+
+  {-# NOINLINE c1 #-}
+  c1 :: C -> Int#
+  c1 (C _ n) = n
+
+  {-# NOINLINE fc #-}
+  fc :: C -> Int#
+  fc c = 2 *# c1 c
+
+Failing to w/w `c1`, but still w/wing `fc` leads to the following code:
+
+  c1 :: C -> Int#
+  c1 (C _ n) = n
+
+  $wfc :: Int# -> Int#
+  $wfc n = let c = C 0# n in 2 #* c1 c
+
+  fc :: C -> Int#
+  fc (C _ n) = $wfc n
+
+Yikes! The reboxed `C` in `$wfc` can't cancel out, so we are in a bad place.
+This generalises to any function that derives its strictness signature from
+its callees, so we have to make sure that when a function announces particular
+strictness properties, we have to w/w them accordingly, even if it means
+splitting a NOINLINE function.
 
 Note [Worker activation]
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -357,7 +388,7 @@ When should the wrapper inlining be active?
    Note [Worker-wrapper for NOINLINE functions]
 
 3. For ordinary functions with no pragmas we want to inline the
-   wrapper as early as possible (Trac #15056).  Suppose another module
+   wrapper as early as possible (#15056).  Suppose another module
    defines    f x = g x x
    and suppose there is some RULE for (g True True).  Then if we have
    a call (f True), we'd expect to inline 'f' and the RULE will fire.

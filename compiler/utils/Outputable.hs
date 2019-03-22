@@ -56,7 +56,7 @@ module Outputable (
 
         pprPrimChar, pprPrimInt, pprPrimWord, pprPrimInt64, pprPrimWord64,
 
-        pprFastFilePath,
+        pprFastFilePath, pprFilePathString,
 
         -- * Controlling the style in which output is printed
         BindingSite(..),
@@ -609,8 +609,8 @@ quotes d =
       else SDoc $ \sty ->
            let pp_d = runSDoc d sty
                str  = show pp_d
-           in case (str, snocView str) of
-             (_, Just (_, '\'')) -> pp_d
+           in case (str, lastMaybe str) of
+             (_, Just '\'') -> pp_d
              ('\'' : _, _)       -> pp_d
              _other              -> Pretty.quotes pp_d
 
@@ -999,6 +999,16 @@ pprInfixVar is_operator pp_v
 pprFastFilePath :: FastString -> SDoc
 pprFastFilePath path = text $ normalise $ unpackFS path
 
+-- | Normalise, escape and render a string representing a path
+--
+-- e.g. "c:\\whatever"
+pprFilePathString :: FilePath -> SDoc
+pprFilePathString path = doubleQuotes $ text (escape (normalise path))
+   where
+      escape []        = []
+      escape ('\\':xs) = '\\':'\\':escape xs
+      escape (x:xs)    = x:escape xs
+
 {-
 ************************************************************************
 *                                                                      *
@@ -1199,7 +1209,7 @@ pprTraceException heading doc =
 pprSTrace :: HasCallStack => SDoc -> a -> a
 pprSTrace doc = pprTrace "" (doc $$ callStackDoc)
 
-warnPprTrace :: Bool -> String -> Int -> SDoc -> a -> a
+warnPprTrace :: HasCallStack => Bool -> String -> Int -> SDoc -> a -> a
 -- ^ Just warn about an assertion failure, recording the given file and line number.
 -- Should typically be accessed with the WARN macros
 warnPprTrace _     _     _     _    x | not debugIsOn     = x
@@ -1207,7 +1217,9 @@ warnPprTrace _     _file _line _msg x
    | hasNoDebugOutput unsafeGlobalDynFlags = x
 warnPprTrace False _file _line _msg x = x
 warnPprTrace True   file  line  msg x
-  = pprDebugAndThen unsafeGlobalDynFlags trace heading msg x
+  = pprDebugAndThen unsafeGlobalDynFlags trace heading
+                    (msg $$ callStackDoc )
+                    x
   where
     heading = hsep [text "WARNING: file", text file <> comma, text "line", int line]
 

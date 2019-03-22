@@ -118,7 +118,7 @@ In a pattern synonym signature we write
 Note that the "required" context comes first, then the "provided"
 context.  Moreover, the "required" context must not mention
 existentially-bound type variables; that is, ones not mentioned in
-res_ty.  See lots of discussion in Trac #10928.
+res_ty.  See lots of discussion in #10928.
 
 If there is no "provided" context, you can omit it; but you
 can't omit the "required" part (unless you omit both).
@@ -464,6 +464,6 @@ pprPatSynType (MkPatSyn { psUnivTyVars = univ_tvs,  psReqTheta  = req_theta
         , pprType sigma_ty ]
   where
     sigma_ty = mkForAllTys ex_tvs  $
-               mkFunTys prov_theta $
-               mkFunTys orig_args orig_res_ty
+               mkInvisFunTys prov_theta $
+               mkVisFunTys orig_args orig_res_ty
     insert_empty_ctxt = null req_theta && not (null prov_theta && null ex_tvs)

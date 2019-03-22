@@ -49,7 +49,6 @@ import Unique           ( pprUniqueAlways )
 import Outputable
 import Platform
 import FastString
-import Data.Word
 
 -- -----------------------------------------------------------------------------
 -- Printing this stuff out
@@ -61,13 +60,10 @@ pprNatCmmDecl (CmmData section dats) =
 pprNatCmmDecl proc@(CmmProc top_info lbl _ (ListGraph blocks)) =
   case topInfoTable proc of
     Nothing ->
-       case blocks of
-         []     -> -- special case for split markers:
-           pprLabel lbl
-         blocks -> -- special case for code without info table:
-           pprSectionAlign (Section Text lbl) $$
-           pprLabel lbl $$ -- blocks guaranteed not null, so label needed
-           vcat (map (pprBasicBlock top_info) blocks)
+        -- special case for code without info table:
+        pprSectionAlign (Section Text lbl) $$
+        pprLabel lbl $$ -- blocks guaranteed not null, so label needed
+        vcat (map (pprBasicBlock top_info) blocks)
 
     Just (Statics info_lbl _) ->
       sdocWithPlatform $ \platform ->
@@ -109,7 +105,7 @@ pprDatas :: CmmStatics -> SDoc
 pprDatas (Statics lbl dats) = vcat (pprLabel lbl : map pprData dats)
 
 pprData :: CmmStatic -> SDoc
-pprData (CmmString str)          = pprASCII str
+pprData (CmmString str)          = pprBytes str
 pprData (CmmUninitialised bytes) = text ".skip " <> int bytes
 pprData (CmmStaticLit lit)       = pprDataItem lit
 
@@ -129,15 +125,6 @@ pprLabel :: CLabel -> SDoc
 pprLabel lbl = pprGloblDecl lbl
             $$ pprTypeAndSizeDecl lbl
             $$ (ppr lbl <> char ':')
-
-
-pprASCII :: [Word8] -> SDoc
-pprASCII str
-  = vcat (map do1 str) $$ do1 0
-    where
-       do1 :: Word8 -> SDoc
-       do1 w = text "\t.byte\t" <> int (fromIntegral w)
-
 
 -- -----------------------------------------------------------------------------
 -- pprInstr: print an 'Instr'

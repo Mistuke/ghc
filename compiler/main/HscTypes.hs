@@ -23,7 +23,7 @@ module HscTypes (
         needsTemplateHaskellOrQQ, mgBootModules,
 
         -- * Hsc monad
-        Hsc(..), runHsc, runInteractiveHsc,
+        Hsc(..), runHsc, mkInteractiveHscEnv, runInteractiveHsc,
 
         -- * Information about modules
         ModDetails(..), emptyModDetails,
@@ -133,7 +133,7 @@ module HscTypes (
 
         -- * Compilation errors and warnings
         SourceError, GhcApiError, mkSrcErr, srcErrorMessages, mkApiErr,
-        throwOneError, handleSourceError,
+        throwOneError, throwErrors, handleSourceError,
         handleFlagWarnings, printOrThrowWarnings,
 
         -- * COMPLETE signature
@@ -253,13 +253,15 @@ runHsc hsc_env (Hsc hsc) = do
     printOrThrowWarnings (hsc_dflags hsc_env) w
     return a
 
+mkInteractiveHscEnv :: HscEnv -> HscEnv
+mkInteractiveHscEnv hsc_env = hsc_env{ hsc_dflags = interactive_dflags }
+  where
+    interactive_dflags = ic_dflags (hsc_IC hsc_env)
+
 runInteractiveHsc :: HscEnv -> Hsc a -> IO a
 -- A variant of runHsc that switches in the DynFlags from the
 -- InteractiveContext before running the Hsc computation.
-runInteractiveHsc hsc_env
-  = runHsc (hsc_env { hsc_dflags = interactive_dflags })
-  where
-    interactive_dflags = ic_dflags (hsc_IC hsc_env)
+runInteractiveHsc hsc_env = runHsc (mkInteractiveHscEnv hsc_env)
 
 -- -----------------------------------------------------------------------------
 -- Source Errors
@@ -276,8 +278,11 @@ srcErrorMessages (SourceError msgs) = msgs
 mkApiErr :: DynFlags -> SDoc -> GhcApiError
 mkApiErr dflags msg = GhcApiError (showSDoc dflags msg)
 
-throwOneError :: MonadIO m => ErrMsg -> m ab
-throwOneError err = liftIO $ throwIO $ mkSrcErr $ unitBag err
+throwErrors :: MonadIO io => ErrorMessages -> io a
+throwErrors = liftIO . throwIO . mkSrcErr
+
+throwOneError :: MonadIO io => ErrMsg -> io a
+throwOneError = throwErrors . unitBag
 
 -- | A source error is an error that is caused by one or more errors in the
 -- source code.  A 'SourceError' is thrown by many functions in the
@@ -698,7 +703,7 @@ hptSomeThingsBelowUs extract include_hi_boot hsc_env deps
                     Nothing -> pprTrace "WARNING in hptSomeThingsBelowUs" msg []
           msg = vcat [text "missing module" <+> ppr mod,
                       text "Probable cause: out-of-date interface files"]
-                        -- This really shouldn't happen, but see Trac #962
+                        -- This really shouldn't happen, but see #962
 
         -- And get its dfuns
     , thing <- things ]
@@ -1530,7 +1535,7 @@ e.g.    Prelude> data T = A | B
         Prelude> instance Eq T where ...
         Prelude> instance Eq T where ...   -- This one overrides
 
-It's exactly the same for type-family instances.  See Trac #7102
+It's exactly the same for type-family instances.  See #7102
 -}
 
 -- | Interactive context, recording information about the state of the
@@ -1653,7 +1658,7 @@ extendInteractiveContext :: InteractiveContext
 extendInteractiveContext ictxt new_tythings new_cls_insts new_fam_insts defaults fix_env
   = ictxt { ic_mod_index  = ic_mod_index ictxt + 1
                             -- Always bump this; even instances should create
-                            -- a new mod_index (Trac #9426)
+                            -- a new mod_index (#9426)
           , ic_tythings   = new_tythings ++ old_tythings
           , ic_rn_gbl_env = ic_rn_gbl_env ictxt `icExtendGblRdrEnv` new_tythings
           , ic_instances  = ( new_cls_insts ++ old_cls_insts
@@ -1721,7 +1726,7 @@ icExtendGblRdrEnv env tythings
     -- are not implicit-ids, and must appear in the TypeEnv.  But they
     -- will also be brought into scope by the corresponding (ATyCon
     -- tc).  And we want the latter, because that has the correct
-    -- parent (Trac #10520)
+    -- parent (#10520)
     is_sub_bndr (AnId f) = case idDetails f of
                              RecSelId {}  -> True
                              ClassOpId {} -> True

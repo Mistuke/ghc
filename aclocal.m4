@@ -476,7 +476,6 @@ AC_DEFUN([FP_SETTINGS],
 	SettingsLdCommand="\$tooldir/${mingw_bin_prefix}ld.exe"
 	SettingsArCommand="\$tooldir/${mingw_bin_prefix}ar.exe"
 	SettingsRanlibCommand="\$tooldir/${mingw_bin_prefix}ranlib.exe"
-	SettingsPerlCommand='$tooldir/perl/perl.exe'
 	SettingsDllWrapCommand="\$tooldir/${mingw_bin_prefix}dllwrap.exe"
 	SettingsWindresCommand="\$tooldir/${mingw_bin_prefix}windres.exe"
         SettingsTouchCommand='$topdir/bin/touchy.exe'
@@ -488,7 +487,6 @@ AC_DEFUN([FP_SETTINGS],
         SettingsHaskellCPPFlags="$HaskellCPPArgs"
         SettingsLdCommand="$(basename $LdCmd)"
         SettingsArCommand="$(basename $ArCmd)"
-        SettingsPerlCommand="$(basename $PerlCmd)"
         SettingsDllWrapCommand="$(basename $DllWrapCmd)"
         SettingsWindresCommand="$(basename $WindresCmd)"
         SettingsTouchCommand='$topdir/bin/touchy.exe'
@@ -499,7 +497,6 @@ AC_DEFUN([FP_SETTINGS],
         SettingsLdCommand="$LdCmd"
         SettingsArCommand="$ArCmd"
         SettingsRanlibCommand="$RanlibCmd"
-        SettingsPerlCommand="$PerlCmd"
         if test -z "$DllWrapCmd"
         then
             SettingsDllWrapCommand="/bin/false"
@@ -552,7 +549,6 @@ AC_DEFUN([FP_SETTINGS],
     AC_SUBST(SettingsLdFlags)
     AC_SUBST(SettingsArCommand)
     AC_SUBST(SettingsRanlibCommand)
-    AC_SUBST(SettingsPerlCommand)
     AC_SUBST(SettingsDllWrapCommand)
     AC_SUBST(SettingsWindresCommand)
     AC_SUBST(SettingsLibtoolCommand)
@@ -693,15 +689,6 @@ AC_DEFUN([FPTOOLS_SET_C_LD_FLAGS],
 
     esac
 
-    # If gcc knows about the stack protector, turn it off.
-    # Otherwise the stack-smash handler gets triggered.
-    echo 'int main(void) {return 0;}' > conftest.c
-    if $CC -c conftest.c -fno-stack-protector > /dev/null 2>&1
-    then
-        $2="$$2 -fno-stack-protector"
-    fi
-
-    rm -f conftest.c conftest.o
     AC_MSG_RESULT([done])
 ])
 
@@ -911,18 +898,22 @@ AS_IF([test "$fp_num1" $2 "$fp_num2"], [$4], [$5])[]dnl
 
 
 dnl
-dnl Check for Happy and version.
-dnl If there's no installed Happy, we look
-dnl for a happy source tree and point the build system at that instead.
+dnl Check for Happy and version:
+dnl
+dnl 1. Use happy specified in env var HAPPY
+dnl 2. Find happy in path
+dnl 3. Check happy version
+dnl
 dnl If you increase the minimum version requirement, please also update:
 dnl https://ghc.haskell.org/trac/ghc/wiki/Building/Preparation/Tools
 dnl
 AC_DEFUN([FPTOOLS_HAPPY],
-[AC_PATH_PROG(HappyCmd,happy,)
-
+[AC_PATH_PROG(HAPPY,[happy],)
+AC_SUBST(HappyCmd,$HAPPY)
 AC_CACHE_CHECK([for version of happy], fptools_cv_happy_version,
 changequote(, )dnl
-[if test x"$HappyCmd" != x; then
+[
+if test x"$HappyCmd" != x; then
    fptools_cv_happy_version=`"$HappyCmd" -v |
               grep 'Happy Version' | sed -e 's/Happy Version \([^ ]*\).*/\1/g'` ;
 else
@@ -941,13 +932,17 @@ AC_SUBST(HappyVersion)
 
 dnl
 dnl Check for Alex and version.
+dnl
+dnl 1. Use alex specified in env var ALEX
+dnl 2. Find alex in path
+dnl 3. Check alex version
+dnl
 dnl If you increase the minimum version requirement, please also update:
 dnl https://ghc.haskell.org/trac/ghc/wiki/Building/Preparation/Tools
 dnl
 AC_DEFUN([FPTOOLS_ALEX],
-[
-AC_PATH_PROG(AlexCmd,alex,)
-
+[AC_PATH_PROG(ALEX,[alex],)
+AC_SUBST(AlexCmd,$ALEX)
 AC_CACHE_CHECK([for version of alex], fptools_cv_alex_version,
 changequote(, )dnl
 [if test x"$AlexCmd" != x; then
@@ -1328,22 +1323,6 @@ AC_DEFUN([FP_GCC_SUPPORTS_NO_PIE],
    rm -f conftest.c conftest.o conftest
 ])
 
-dnl Small feature test for perl version. Assumes PerlCmd
-dnl contains path to perl binary.
-dnl
-dnl (Perl versions prior to v5.6 does not contain the string "v5";
-dnl instead they display version strings such as "version 5.005".)
-dnl
-AC_DEFUN([FPTOOLS_CHECK_PERL_VERSION],
-[$PerlCmd -v >conftest.out 2>&1
-   if grep "v5" conftest.out >/dev/null 2>&1; then
-      :
-   else
-      AC_MSG_ERROR([your version of perl probably won't work, try upgrading it.])
-   fi
-rm -fr conftest*
-])
-
 
 # FP_CHECK_PROG(VARIABLE, PROG-TO-CHECK-FOR,
 #               [VALUE-IF-NOT-FOUND], [PATH], [REJECT])
@@ -1504,7 +1483,7 @@ AC_SUBST([GhcPkgCmd])
 # to compile .hc code.
 #
 # -fwrapv is needed for gcc to emit well-behaved code in the presence of
-# integer wrap around. (Trac #952)
+# integer wrap around. (#952)
 #
 AC_DEFUN([FP_GCC_EXTRA_FLAGS],
 [AC_REQUIRE([FP_GCC_VERSION])
@@ -1781,8 +1760,22 @@ AC_DEFUN([FP_GMP],
       [directory containing gmp library])],
       [GMP_LIB_DIRS=$withval])
 
+  AC_ARG_WITH([intree-gmp],
+    [AC_HELP_STRING([--with-intree-gmp],
+      [force using the in-tree GMP])],
+      [GMP_FORCE_INTREE=YES],
+      [GMP_FORCE_INTREE=NO])
+
+  AC_ARG_WITH([gmp-framework-preferred],
+    [AC_HELP_STRING([--with-gmp-framework-preferred],
+      [on OSX, prefer the GMP framework to the gmp lib])],
+      [GMP_PREFER_FRAMEWORK=YES],
+      [GMP_PREFER_FRAMEWORK=NO])
+
   AC_SUBST(GMP_INCLUDE_DIRS)
   AC_SUBST(GMP_LIB_DIRS)
+  AC_SUBST(GMP_FORCE_INTREE)
+  AC_SUBST(GMP_PREFER_FRAMEWORK)
 ])# FP_GMP
 
 # FP_CURSES

@@ -292,7 +292,7 @@ type instance XParPat  (GhcPass _) = NoExt
 type instance XBangPat (GhcPass _) = NoExt
 
 -- Note: XListPat cannot be extended when using GHC 8.0.2 as the bootstrap
--- compiler, as it triggers https://ghc.haskell.org/trac/ghc/ticket/14396 for
+-- compiler, as it triggers https://gitlab.haskell.org/ghc/ghc/issues/14396 for
 -- `SyntaxExpr`
 type instance XListPat GhcPs = NoExt
 type instance XListPat GhcRn = Maybe (SyntaxExpr GhcRn)
@@ -374,7 +374,7 @@ data HsRecFields p arg         -- A bunch of record fields
                                 --      { x = 3, y = True }
         -- Used for both expressions and patterns
   = HsRecFields { rec_flds   :: [LHsRecField p arg],
-                  rec_dotdot :: Maybe Int }  -- Note [DotDot fields]
+                  rec_dotdot :: Maybe (Located Int) }  -- Note [DotDot fields]
   deriving (Functor, Foldable, Traversable)
 
 
@@ -593,7 +593,7 @@ instance (Outputable arg)
       => Outputable (HsRecFields p arg) where
   ppr (HsRecFields { rec_flds = flds, rec_dotdot = Nothing })
         = braces (fsep (punctuate comma (map ppr flds)))
-  ppr (HsRecFields { rec_flds = flds, rec_dotdot = Just n })
+  ppr (HsRecFields { rec_flds = flds, rec_dotdot = Just (unLoc -> n) })
         = braces (fsep (punctuate comma (map ppr (take n flds) ++ [dotdot])))
         where
           dotdot = text ".." <+> whenPprDebug (ppr (drop n flds))
@@ -735,7 +735,7 @@ isIrrefutableHsPat
                            =
       isJust (tyConSingleDataCon_maybe (dataConTyCon con))
       -- NB: tyConSingleDataCon_maybe, *not* isProductTyCon, because
-      -- the latter is false of existentials. See Trac #4439
+      -- the latter is false of existentials. See #4439
       && all goL (hsConPatArgs details)
     go (ConPatOut
         { pat_con = (dL->L _ (PatSynCon _pat)) })

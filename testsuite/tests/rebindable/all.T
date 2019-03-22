@@ -13,13 +13,17 @@ test('rebindable4', normal, compile_and_run, [''])
 test('rebindable5', normal, compile_and_run, [''])
 
 # rebindable6 has become expected failures
-# following Trac #1537
+# following #1537
 test('rebindable6', normal, compile_fail, [''])
 
 test('rebindable7', normal, compile_and_run, [''])
 test('rebindable8', normal, compile, [''])
 test('rebindable9', normal, compile, [''])
 test('rebindable10', normal, compile_and_run, [''])
+
+# Test rebindable clash warnings
+test('rebindable11', normal, compile, [''])
+test('rebindable12', normal, compile_fail, [''])
 
 test('T303', normal, compile, [''])
 

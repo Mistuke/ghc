@@ -78,7 +78,8 @@ import Outputable
 import DynFlags
 import CodeGen.Platform
 
-import Data.Word
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import Data.Bits
 import Hoopl.Graph
 import Hoopl.Label
@@ -181,7 +182,7 @@ mkWordCLit :: DynFlags -> Integer -> CmmLit
 mkWordCLit dflags wd = CmmInt wd (wordWidth dflags)
 
 mkByteStringCLit
-  :: CLabel -> [Word8] -> (CmmLit, GenCmmDecl CmmStatics info stmt)
+  :: CLabel -> ByteString -> (CmmLit, GenCmmDecl CmmStatics info stmt)
 -- We have to make a top-level decl for the string,
 -- and return a literal pointing to it
 mkByteStringCLit lbl bytes
@@ -189,7 +190,7 @@ mkByteStringCLit lbl bytes
   where
     -- This can not happen for String literals (as there \NUL is replaced by
     -- C0 80). However, it can happen with Addr# literals.
-    sec = if 0 `elem` bytes then ReadOnlyData else CString
+    sec = if 0 `BS.elem` bytes then ReadOnlyData else CString
 
 mkDataLits :: Section -> CLabel -> [CmmLit] -> GenCmmDecl CmmStatics info stmt
 -- Build a data-segment data block
@@ -447,7 +448,7 @@ regsOverlap _ reg reg' = reg == reg'
 --
 -- We must check for overlapping registers and not just equal
 -- registers here, otherwise CmmSink may incorrectly reorder
--- assignments that conflict due to overlap. See Trac #10521 and Note
+-- assignments that conflict due to overlap. See #10521 and Note
 -- [Overlapping global registers].
 regUsedIn :: DynFlags -> CmmReg -> CmmExpr -> Bool
 regUsedIn dflags = regUsedIn_ where

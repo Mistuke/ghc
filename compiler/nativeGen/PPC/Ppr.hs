@@ -49,17 +49,14 @@ pprNatCmmDecl proc@(CmmProc top_info lbl _ (ListGraph blocks)) =
   case topInfoTable proc of
     Nothing ->
        sdocWithPlatform $ \platform ->
-       case blocks of
-         []     -> -- special case for split markers:
-           pprLabel lbl
-         blocks -> -- special case for code without info table:
-           pprSectionAlign (Section Text lbl) $$
-           (case platformArch platform of
-              ArchPPC_64 ELF_V1 -> pprFunctionDescriptor lbl
-              ArchPPC_64 ELF_V2 -> pprFunctionPrologue lbl
-              _ -> pprLabel lbl) $$ -- blocks guaranteed not null,
+         -- special case for code without info table:
+         pprSectionAlign (Section Text lbl) $$
+         (case platformArch platform of
+            ArchPPC_64 ELF_V1 -> pprFunctionDescriptor lbl
+            ArchPPC_64 ELF_V2 -> pprFunctionPrologue lbl
+            _ -> pprLabel lbl) $$ -- blocks guaranteed not null,
                                      -- so label needed
-           vcat (map (pprBasicBlock top_info) blocks)
+         vcat (map (pprBasicBlock top_info) blocks)
 
     Just (Statics info_lbl _) ->
       sdocWithPlatform $ \platform ->
@@ -125,13 +122,8 @@ pprDatas :: CmmStatics -> SDoc
 pprDatas (Statics lbl dats) = vcat (pprLabel lbl : map pprData dats)
 
 pprData :: CmmStatic -> SDoc
-pprData (CmmString str)          = pprASCII str
-pprData (CmmUninitialised bytes) = keyword <> int bytes
-    where keyword = sdocWithPlatform $ \platform ->
-                    case platformOS platform of
-                    OSDarwin -> text ".space "
-                    OSAIX    -> text ".space "
-                    _        -> text ".skip "
+pprData (CmmString str)          = pprBytes str
+pprData (CmmUninitialised bytes) = text ".space " <> int bytes
 pprData (CmmStaticLit lit)       = pprDataItem lit
 
 pprGloblDecl :: CLabel -> SDoc
@@ -151,15 +143,6 @@ pprLabel :: CLabel -> SDoc
 pprLabel lbl = pprGloblDecl lbl
             $$ pprTypeAndSizeDecl lbl
             $$ (ppr lbl <> char ':')
-
-
-pprASCII :: [Word8] -> SDoc
-pprASCII str
-  = vcat (map do1 str) $$ do1 0
-    where
-       do1 :: Word8 -> SDoc
-       do1 w = text "\t.byte\t" <> int (fromIntegral w)
-
 
 -- -----------------------------------------------------------------------------
 -- pprInstr: print an 'Instr'
@@ -181,50 +164,10 @@ pprReg r
       RegVirtual (VirtualRegSSE u) -> text "%vSSE_" <> pprUniqueAlways u
   where
     ppr_reg_no :: Int -> SDoc
-    ppr_reg_no i =
-        sdocWithPlatform $ \platform ->
-        case platformOS platform of
-        OSDarwin ->
-            ptext
-                (case i of {
-                 0 -> sLit "r0";   1 -> sLit "r1";
-                 2 -> sLit "r2";   3 -> sLit "r3";
-                 4 -> sLit "r4";   5 -> sLit "r5";
-                 6 -> sLit "r6";   7 -> sLit "r7";
-                 8 -> sLit "r8";   9 -> sLit "r9";
-                10 -> sLit "r10";  11 -> sLit "r11";
-                12 -> sLit "r12";  13 -> sLit "r13";
-                14 -> sLit "r14";  15 -> sLit "r15";
-                16 -> sLit "r16";  17 -> sLit "r17";
-                18 -> sLit "r18";  19 -> sLit "r19";
-                20 -> sLit "r20";  21 -> sLit "r21";
-                22 -> sLit "r22";  23 -> sLit "r23";
-                24 -> sLit "r24";  25 -> sLit "r25";
-                26 -> sLit "r26";  27 -> sLit "r27";
-                28 -> sLit "r28";  29 -> sLit "r29";
-                30 -> sLit "r30";  31 -> sLit "r31";
-                32 -> sLit "f0";  33 -> sLit "f1";
-                34 -> sLit "f2";  35 -> sLit "f3";
-                36 -> sLit "f4";  37 -> sLit "f5";
-                38 -> sLit "f6";  39 -> sLit "f7";
-                40 -> sLit "f8";  41 -> sLit "f9";
-                42 -> sLit "f10"; 43 -> sLit "f11";
-                44 -> sLit "f12"; 45 -> sLit "f13";
-                46 -> sLit "f14"; 47 -> sLit "f15";
-                48 -> sLit "f16"; 49 -> sLit "f17";
-                50 -> sLit "f18"; 51 -> sLit "f19";
-                52 -> sLit "f20"; 53 -> sLit "f21";
-                54 -> sLit "f22"; 55 -> sLit "f23";
-                56 -> sLit "f24"; 57 -> sLit "f25";
-                58 -> sLit "f26"; 59 -> sLit "f27";
-                60 -> sLit "f28"; 61 -> sLit "f29";
-                62 -> sLit "f30"; 63 -> sLit "f31";
-                _  -> sLit "very naughty powerpc register"
-              })
-        _
-         | i <= 31   -> int i      -- GPRs
-         | i <= 63   -> int (i-32) -- FPRs
-         | otherwise -> text "very naughty powerpc register"
+    ppr_reg_no i
+         | i <= 31   = int i      -- GPRs
+         | i <= 63   = int (i-32) -- FPRs
+         | otherwise = text "very naughty powerpc register"
 
 
 
@@ -272,16 +215,10 @@ pprImm (LO (ImmInteger i)) = pprImm (ImmInteger (toInteger lo16))
     lo16 = fromInteger (i .&. 0xffff) :: Int16
 
 pprImm (LO i)
-  = sdocWithPlatform $ \platform ->
-    if platformOS platform == OSDarwin
-    then hcat [ text "lo16(", pprImm i, rparen ]
-    else pprImm i <> text "@l"
+  = pprImm i <> text "@l"
 
 pprImm (HI i)
-  = sdocWithPlatform $ \platform ->
-    if platformOS platform == OSDarwin
-    then hcat [ text "hi16(", pprImm i, rparen ]
-    else pprImm i <> text "@h"
+  = pprImm i <> text "@h"
 
 pprImm (HA (ImmInt i))     = pprImm (HA (ImmInteger (toInteger i)))
 pprImm (HA (ImmInteger i)) = pprImm (ImmInteger ha16)
@@ -291,22 +228,13 @@ pprImm (HA (ImmInteger i)) = pprImm (ImmInteger ha16)
     lo16 = i .&. 0xffff
 
 pprImm (HA i)
-  = sdocWithPlatform $ \platform ->
-    if platformOS platform == OSDarwin
-    then hcat [ text "ha16(", pprImm i, rparen ]
-    else pprImm i <> text "@ha"
+  = pprImm i <> text "@ha"
 
 pprImm (HIGHERA i)
-  = sdocWithPlatform $ \platform ->
-    if platformOS platform == OSDarwin
-    then panic "PPC.pprImm: highera not implemented on Darwin"
-    else pprImm i <> text "@highera"
+  = pprImm i <> text "@highera"
 
 pprImm (HIGHESTA i)
-  = sdocWithPlatform $ \platform ->
-    if platformOS platform == OSDarwin
-    then panic "PPC.pprImm: highesta not implemented on Darwin"
-    else pprImm i <> text "@highesta"
+  = pprImm i <> text "@highesta"
 
 
 pprAddr :: AddrMode -> SDoc
@@ -330,32 +258,25 @@ pprSectionAlign sec@(Section seg _) =
 pprAlignForSection :: SectionType -> SDoc
 pprAlignForSection seg =
  sdocWithPlatform $ \platform ->
- let osDarwin = platformOS platform == OSDarwin
-     ppc64    = not $ target32Bit platform
+ let ppc64    = not $ target32Bit platform
  in ptext $ case seg of
        Text              -> sLit ".align 2"
        Data
         | ppc64          -> sLit ".align 3"
         | otherwise      -> sLit ".align 2"
        ReadOnlyData
-        | osDarwin       -> sLit ".align 2"
         | ppc64          -> sLit ".align 3"
         | otherwise      -> sLit ".align 2"
        RelocatableReadOnlyData
-        | osDarwin       -> sLit ".align 2"
         | ppc64          -> sLit ".align 3"
         | otherwise      -> sLit ".align 2"
        UninitialisedData
-        | osDarwin       -> sLit ".align 2"
         | ppc64          -> sLit ".align 3"
         | otherwise      -> sLit ".align 2"
-       ReadOnlyData16
-        | osDarwin       -> sLit ".align 4"
-        | otherwise      -> sLit ".align 4"
+       ReadOnlyData16    -> sLit ".align 4"
        -- TODO: This is copied from the ReadOnlyData case, but it can likely be
        -- made more efficient.
        CString
-        | osDarwin       -> sLit ".align 2"
         | ppc64          -> sLit ".align 3"
         | otherwise      -> sLit ".align 2"
        OtherSection _    -> panic "PprMach.pprSectionAlign: unknown section"
@@ -627,7 +548,7 @@ pprInstr (BCCFAR cond blockid prediction) = vcat [
             Just True  -> char '-'
             Just False -> char '+'
 
-pprInstr (JMP lbl)
+pprInstr (JMP lbl _)
   -- We never jump to ForeignLabels; if we ever do, c.f. handling for "BL"
   | isForeignLabel lbl = panic "PPC.Ppr.pprInstr: JMP to ForeignLabel"
   | otherwise =
@@ -644,7 +565,7 @@ pprInstr (MTCTR reg) = hcat [
         char '\t',
         pprReg reg
     ]
-pprInstr (BCTR _ _) = hcat [
+pprInstr (BCTR _ _ _) = hcat [
         char '\t',
         text "bctr"
     ]
@@ -833,12 +754,12 @@ pprInstr (SR II32 reg1 reg2 (RIImm (ImmInt i))) | i < 0  || i > 31 =
     -- Handle the case where we are asked to shift a 32 bit register by
     -- less than zero or more than 31 bits. We convert this into a clear
     -- of the destination register.
-    -- Fixes ticket http://ghc.haskell.org/trac/ghc/ticket/5900
+    -- Fixes ticket https://gitlab.haskell.org/ghc/ghc/issues/5900
     pprInstr (XOR reg1 reg2 (RIReg reg2))
 
 pprInstr (SL II32 reg1 reg2 (RIImm (ImmInt i))) | i < 0  || i > 31 =
     -- As above for SR, but for left shifts.
-    -- Fixes ticket http://ghc.haskell.org/trac/ghc/ticket/10870
+    -- Fixes ticket https://gitlab.haskell.org/ghc/ghc/issues/10870
     pprInstr (XOR reg1 reg2 (RIReg reg2))
 
 pprInstr (SRA II32 reg1 reg2 (RIImm (ImmInt i))) | i > 31 =
@@ -966,24 +887,6 @@ pprInstr ISYNC  = text "\tisync"
 pprInstr LWSYNC = text "\tlwsync"
 
 pprInstr NOP = text "\tnop"
-
-pprInstr (UPDATE_SP fmt amount@(ImmInt offset))
-   | fits16Bits offset = vcat [
-       pprInstr (LD fmt r0 (AddrRegImm sp (ImmInt 0))),
-       pprInstr (STU fmt r0 (AddrRegImm sp amount))
-     ]
-
-pprInstr (UPDATE_SP fmt amount)
-   = sdocWithPlatform $ \platform ->
-       let tmp = tmpReg platform in
-         vcat [
-           pprInstr (LD fmt r0 (AddrRegImm sp (ImmInt 0))),
-           pprInstr (ADDIS tmp sp (HA amount)),
-           pprInstr (ADD tmp tmp (RIImm (LO amount))),
-           pprInstr (STU fmt r0 (AddrRegReg sp tmp))
-         ]
-
--- pprInstr _ = panic "pprInstr (ppc)"
 
 
 pprLogic :: PtrString -> Reg -> Reg -> RI -> SDoc

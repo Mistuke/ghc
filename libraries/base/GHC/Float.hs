@@ -10,7 +10,7 @@
 -- We believe we could deorphan this module, by moving lots of things
 -- around, but we haven't got there yet:
 {-# OPTIONS_GHC -Wno-orphans #-}
-{-# OPTIONS_HADDOCK hide #-}
+{-# OPTIONS_HADDOCK not-home #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -1294,7 +1294,7 @@ And with the rule:
 The running time of the program goes from 120 seconds to 0.198 seconds
 with the native backend, and 0.143 seconds with the C backend.
 
-A few more details in Trac #2251, and the patch message
+A few more details in #2251, and the patch message
 "Add RULES for realToFrac from Int".
 -}
 

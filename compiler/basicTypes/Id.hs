@@ -66,7 +66,10 @@ module Id (
         isClassOpId_maybe, isDFunId,
         isPrimOpId, isPrimOpId_maybe,
         isFCallId, isFCallId_maybe,
-        isDataConWorkId, isDataConWorkId_maybe, isDataConId_maybe, idDataCon,
+        isDataConWorkId, isDataConWorkId_maybe,
+        isDataConWrapId, isDataConWrapId_maybe,
+        isDataConId_maybe,
+        idDataCon,
         isConLikeId, isBottomingId, idIsFrom,
         hasNoBinding,
 
@@ -383,7 +386,7 @@ of reasons:
  * Look them up in the current substitution when we come across
    occurrences of them (in Subst.lookupIdSubst). Lacking this we
    can get an out-of-date unfolding, which can in turn make the
-   simplifier go into an infinite loop (Trac #9857)
+   simplifier go into an infinite loop (#9857)
 
  * Ensure that for dfuns that the specialiser does not float dict uses
    above their defns, which would prevent good simplifications happening.
@@ -419,12 +422,14 @@ isDataConRecordSelector  :: Id -> Bool
 isPrimOpId              :: Id -> Bool
 isFCallId               :: Id -> Bool
 isDataConWorkId         :: Id -> Bool
+isDataConWrapId         :: Id -> Bool
 isDFunId                :: Id -> Bool
 
 isClassOpId_maybe       :: Id -> Maybe Class
 isPrimOpId_maybe        :: Id -> Maybe PrimOp
 isFCallId_maybe         :: Id -> Maybe ForeignCall
 isDataConWorkId_maybe   :: Id -> Maybe DataCon
+isDataConWrapId_maybe   :: Id -> Maybe DataCon
 
 isRecordSelector id = case Var.idDetails id of
                         RecSelId {}     -> True
@@ -472,6 +477,14 @@ isDataConWorkId id = case Var.idDetails id of
 
 isDataConWorkId_maybe id = case Var.idDetails id of
                         DataConWorkId con -> Just con
+                        _                 -> Nothing
+
+isDataConWrapId id = case Var.idDetails id of
+                       DataConWrapId _ -> True
+                       _               -> False
+
+isDataConWrapId_maybe id = case Var.idDetails id of
+                        DataConWrapId con -> Just con
                         _                 -> Nothing
 
 isDataConId_maybe :: Id -> Maybe DataCon
@@ -547,7 +560,7 @@ un-saturated.  Example:
 
 This has a compulsory unfolding because we can't lambda-bind those
 arguments.  But the compulsory unfolding may leave levity-polymorphic
-lambdas if it is not applied to enough arguments; e.g. (Trac #14561)
+lambdas if it is not applied to enough arguments; e.g. (#14561)
   bad :: forall (a :: TYPE r). a -> a
   bad = unsafeCoerce#
 
@@ -556,7 +569,7 @@ And we want that magic to apply to levity-polymorphic compulsory-inline things.
 The easiest way to do this is for hasNoBinding to return True of all things
 that have compulsory unfolding.  A very Ids with a compulsory unfolding also
 have a binding, but it does not harm to say they don't here, and its a very
-simple way to fix Trac #14561.
+simple way to fix #14561.
 
 Note [Primop wrappers]
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -929,7 +942,7 @@ where the '*' means 'LoopBreaker'.  Then if we float we must get
 
 where g' is also marked as LoopBreaker.  If not, terrible things
 can happen if we re-simplify the binding (and the Simplifier does
-sometimes simplify a term twice); see Trac #4345.
+sometimes simplify a term twice); see #4345.
 
 It's not so simple to retain
   * worker info

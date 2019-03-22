@@ -697,6 +697,11 @@ following RTS options select which break-down to use:
     *Requires :ghc-flag:`-prof`.* Breaks down the graph by the cost-centre stack
     which produced the data.
 
+    .. note:: The meaning of the shortened :rts-flag:`-h` is dependent on whether
+              your program was compiled for profiling. When compiled for profiling,
+              :rts-flag:`-h` is equivalent to :rts-flag:`-hc`, but otherwise is
+              equivalent to :rts-flag:`-hT` (see :ref:`rts-profiling`).
+
 .. rts-flag:: -hm
 
     *Requires :ghc-flag:`-prof`.* Break down the live heap by the module
@@ -1617,7 +1622,7 @@ Using “ticky-ticky” profiling (for implementors)
 Because ticky-ticky profiling requires a certain familiarity with GHC
 internals, we have moved the documentation to the GHC developers wiki.
 Take a look at its
-:ghc-wiki:`overview of the profiling options <Commentary/Profiling>`,
+:ghc-wiki:`overview of the profiling options <commentary/profiling>`,
 which includeds a link to the ticky-ticky profiling page.
 
 .. [1]

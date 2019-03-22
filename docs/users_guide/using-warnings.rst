@@ -123,7 +123,6 @@ The following flags are simple ways to select standard "packages" of warnings:
         * :ghc-flag:`-Wmissing-monadfail-instances`
         * :ghc-flag:`-Wsemigroup`
         * :ghc-flag:`-Wnoncanonical-monoid-instances`
-        * :ghc-flag:`-Wimplicit-kind-vars`
         * :ghc-flag:`-Wstar-is-type`
 
 .. ghc-flag:: -Wno-compat
@@ -776,58 +775,6 @@ of ``-W(no-)*``.
 
     This warning is off by default.
 
-.. ghc-flag:: -Wimplicit-kind-vars
-    :shortdesc: warn when kind variables are brought into scope implicitly despite
-        the "forall-or-nothing" rule
-    :type: dynamic
-    :reverse: -Wno-implicit-kind-vars
-    :category:
-
-    :since: 8.6
-
-    `GHC proposal #24
-    <https://github.com/ghc-proposals/ghc-proposals/blob/master/proposals/0024-no-kind-vars.rst>`__
-    prescribes to treat kind variables and type variables identically in
-    ``forall``, removing the legacy distinction between them.
-
-    Consider the following examples: ::
-
-        f :: Proxy a -> Proxy b -> ()
-        g :: forall a b. Proxy a -> Proxy b -> ()
-
-    ``f`` does not use an explicit ``forall``, so type variables ``a`` and ``b``
-    are brought into scope implicitly. ``g`` quantifies both ``a`` and ``b``
-    explicitly. Both ``f`` and ``g`` work today and will continue to work in the
-    future because they adhere to the "forall-or-nothing" rule: either all type
-    variables in a function definition are introduced explicitly or implicitly,
-    there is no middle ground.
-
-    A violation of the "forall-or-nothing" rule looks like this: ::
-
-        m :: forall a. Proxy a -> Proxy b -> ()
-
-    ``m`` does not introduce one of the variables, ``b``, and thus is rejected.
-
-    However, consider the following example: ::
-
-        n :: forall a. Proxy (a :: k) -> ()
-
-    While ``n`` uses ``k`` without introducing it and thus violates the rule, it
-    is currently accepted. This is because ``k`` in ``n`` is considered a kind
-    variable, as it occurs in a kind signature. In reality, the line between
-    type variables and kind variables is blurry, as the following example
-    demonstrates: ::
-
-        kindOf :: forall a. Proxy (a :: k) -> Proxy k
-
-    In ``kindOf``, the ``k`` variable is used both in a kind position and a type
-    position. Currently, ``kindOf`` happens to be accepted as well.
-
-    In a future release of GHC, both ``n`` and ``kindOf`` will be rejected per
-    the "forall-or-nothing" rule. This warning, being part of the
-    :ghc-flag:`-Wcompat` option group, allows to detect this before the actual
-    breaking change takes place.
-
 .. ghc-flag:: -Wincomplete-patterns
     :shortdesc: warn when a pattern match could fail
     :type: dynamic
@@ -903,6 +850,27 @@ of ``-W(no-)*``.
 
     This option isn't enabled by default because it can be very noisy,
     and it often doesn't indicate a bug in the program.
+
+.. ghc-flag:: -Wmissing-deriving-strategies
+    :shortdesc: warn when a deriving clause is missing a deriving strategy
+    :type: dynamic
+    :reverse: -Wno-missing-deriving-strategies
+    :category:
+
+    :since: 8.8.1
+
+    The datatype below derives the ``Eq`` typeclass, but doesn't specify a
+    strategy. When :ghc-flag:`-Wmissing-deriving-strategies` is enabled,
+    the compiler will emit a warning about this. ::
+
+        data Foo a = Foo a
+          deriving (Eq)
+
+    The compiler will warn here that the deriving clause doesn't specify a
+    strategy. If the warning is enabled, but :extension:`DerivingStrategies` is
+    not enabled, the compiler will suggest turning on the
+    :extension:`DerivingStrategies` extension. This option is not on by default,
+    having to be turned on manually or with :ghc-flag:`-Weverything`.
 
 .. ghc-flag:: -Wmissing-fields
     :shortdesc: warn when fields of a record are uninitialised
@@ -1544,9 +1512,9 @@ of ``-W(no-)*``.
 
     When :extension:`ExplicitForAll` is enabled, explicitly quantified type
     variables may also be identified as unused. For instance: ::
-      
+
         type instance forall x y. F x y = []
-    
+
     would still report ``x`` and ``y`` as unused on the right hand side
 
     Unlike :ghc-flag:`-Wunused-matches`, :ghc-flag:`-Wunused-type-patterns` is
@@ -1554,7 +1522,7 @@ of ``-W(no-)*``.
     unlike term-level pattern names, type names are often chosen expressly for
     documentation purposes, so using underscores in type names can make the
     documentation harder to read.
-    
+
 .. ghc-flag:: -Wunused-foralls
     :shortdesc: warn about type variables in user-written
         ``forall``\\s that are unused
@@ -1572,6 +1540,50 @@ of ``-W(no-)*``.
         g :: forall a b c. (b -> b)
 
     would report ``a`` and ``c`` as unused.
+
+.. ghc-flag:: -Wunused-record-wildcards
+    :shortdesc: Warn about record wildcard matches when none of the bound variables
+      are used.
+    :type: dynamic
+    :since: 8.10.1
+    :reverse: -Wno-unused-record-wildcards
+    :category:
+
+    .. index::
+       single: unused, warning, record wildcards
+
+    Report all record wildcards where none of the variables bound implicitly
+    are used. For instance: ::
+
+
+	data P = P { x :: Int, y :: Int }
+
+        f1 :: P -> Int
+        f1 P{..} = 1 + 3
+
+    would report that the ``P{..}`` match is unused.
+
+.. ghc-flag:: -Wredundant-record-wildcards
+    :shortdesc: Warn about record wildcard matches when the wildcard binds no patterns.
+    :type: dynamic
+    :since: 8.10.1
+    :reverse: -Wno-redundant-record-wildcards
+    :category:
+
+    .. index::
+       single: unused, warning, record wildcards
+
+    Report all record wildcards where the wild card match binds no patterns.
+    For instance: ::
+
+
+	data P = P { x :: Int, y :: Int }
+
+        f1 :: P -> Int
+        f1 P{x,y,..} = x + y
+
+    would report that the ``P{x, y, ..}`` match has a redundant use of ``..``.
+
 
 .. ghc-flag:: -Wwrong-do-bind
     :shortdesc: warn about do bindings that appear to throw away monadic values

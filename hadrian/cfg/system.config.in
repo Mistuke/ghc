@@ -7,7 +7,7 @@
 
 alex           = @AlexCmd@
 ar             = @ArCmd@
-autoreconf     = autoreconf
+autoreconf     = @AutoreconfCmd@
 cc             = @CC@
 happy          = @HappyCmd@
 hs-cpp         = @HaskellCPPCmd@
@@ -23,7 +23,6 @@ system-ghc     = @WithGhc@
 system-ghc-pkg = @GhcPkgCmd@
 tar            = @TarCmd@
 patch          = @PatchCmd@
-perl           = @PerlCmd@
 xelatex        = @XELATEX@
 
 # Python 3 is required to run test driver.
@@ -43,7 +42,6 @@ hs-cpp-args         = @HaskellCPPArgs@
 #===============
 
 solaris-broken-shld  = @SOLARIS_BROKEN_SHLD@
-split-objects-broken = @SplitObjsBroken@
 ghc-unregisterised   = @Unregisterised@
 ghc-source-path      = @hardtop@
 leading-underscore   = @LeadingUnderscore@
@@ -93,18 +91,22 @@ project-git-commit-id = @ProjectGitCommitId@
 conf-cc-args-stage0         = @CONF_CC_OPTS_STAGE0@
 conf-cc-args-stage1         = @CONF_CC_OPTS_STAGE1@
 conf-cc-args-stage2         = @CONF_CC_OPTS_STAGE2@
+conf-cc-args-stage3         = @CONF_CC_OPTS_STAGE3@
 
 conf-cpp-args-stage0        = @CONF_CPP_OPTS_STAGE0@
 conf-cpp-args-stage1        = @CONF_CPP_OPTS_STAGE1@
 conf-cpp-args-stage2        = @CONF_CPP_OPTS_STAGE2@
+conf-cpp-args-stage3        = @CONF_CPP_OPTS_STAGE3@
 
 conf-gcc-linker-args-stage0 = @CONF_GCC_LINKER_OPTS_STAGE0@
 conf-gcc-linker-args-stage1 = @CONF_GCC_LINKER_OPTS_STAGE1@
 conf-gcc-linker-args-stage2 = @CONF_GCC_LINKER_OPTS_STAGE2@
+conf-gcc-linker-args-stage3 = @CONF_GCC_LINKER_OPTS_STAGE3@
 
 conf-ld-linker-args-stage0  = @CONF_LD_LINKER_OPTS_STAGE0@
 conf-ld-linker-args-stage1  = @CONF_LD_LINKER_OPTS_STAGE1@
 conf-ld-linker-args-stage2  = @CONF_LD_LINKER_OPTS_STAGE2@
+conf-ld-linker-args-stage3  = @CONF_LD_LINKER_OPTS_STAGE3@
 
 # Include and library directories:
 #=================================
@@ -114,8 +116,10 @@ curses-lib-dir    = @CURSES_LIB_DIRS@
 iconv-include-dir = @ICONV_INCLUDE_DIRS@
 iconv-lib-dir     = @ICONV_LIB_DIRS@
 
-gmp-include-dir   = @GMP_INCLUDE_DIRS@
-gmp-lib-dir       = @GMP_LIB_DIRS@
+intree-gmp              = @GMP_FORCE_INTREE@
+gmp-framework-preferred = @GMP_PREFER_FRAMEWORK@
+gmp-include-dir         = @GMP_INCLUDE_DIRS@
+gmp-lib-dir             = @GMP_LIB_DIRS@
 
 use-system-ffi    = @UseSystemLibFFI@
 ffi-include-dir   = @FFIIncludeDir@

@@ -127,7 +127,7 @@ rnSrcDecls group@(HsGroup { hs_valds   = val_decls,
 
    -- (D1) Bring pattern synonyms into scope.
    --      Need to do this before (D2) because rnTopBindsLHS
-   --      looks up those pattern synonyms (Trac #9889)
+   --      looks up those pattern synonyms (#9889)
 
    extendPatSynEnv val_decls local_fix_env $ \pat_syn_bndrs -> do {
 
@@ -648,13 +648,27 @@ rnClsInstDecl (ClsInstDecl { cid_poly_ty = inst_ty, cid_binds = mbinds
                            , cid_sigs = uprags, cid_tyfam_insts = ats
                            , cid_overlap_mode = oflag
                            , cid_datafam_insts = adts })
-  = do { (inst_ty', inst_fvs) <- rnLHsInstType (text "an instance declaration") inst_ty
+  = do { (inst_ty', inst_fvs)
+           <- rnHsSigType (GenericCtx $ text "an instance declaration") inst_ty
        ; let (ktv_names, _, head_ty') = splitLHsInstDeclTy inst_ty'
-       ; let cls = case hsTyGetAppHead_maybe head_ty' of
-                     Nothing -> mkUnboundName (mkTcOccFS (fsLit "<class>"))
-                     Just (dL->L _ cls, _) -> cls
-                     -- rnLHsInstType has added an error message
-                     -- if hsTyGetAppHead_maybe fails
+       ; cls <-
+           case hsTyGetAppHead_maybe head_ty' of
+             Just (dL->L _ cls) -> pure cls
+             Nothing -> do
+               -- The instance is malformed. We'd still like
+               -- to make *some* progress (rather than failing outright), so
+               -- we report an error and continue for as long as we can.
+               -- Importantly, this error should be thrown before we reach the
+               -- typechecker, lest we encounter different errors that are
+               -- hopelessly confusing (such as the one in #16114).
+               addErrAt (getLoc (hsSigType inst_ty)) $
+                 hang (text "Illegal class instance:" <+> quotes (ppr inst_ty))
+                    2 (vcat [ text "Class instances must be of the form"
+                            , nest 2 $ text "context => C ty_1 ... ty_n"
+                            , text "where" <+> quotes (char 'C')
+                              <+> text "is a class"
+                            ])
+               pure $ mkUnboundName (mkTcOccFS (fsLit "<class>"))
 
           -- Rename the bindings
           -- The typechecker (not the renamer) checks that all
@@ -710,18 +724,14 @@ rnFamInstEqn doc mb_cls rhs_kvars
                                , feqn_fixity = fixity
                                , feqn_rhs    = payload }}) rn_payload
   = do { tycon'   <- lookupFamInstName (fmap fst mb_cls) tycon
-       ; let pat_kity_vars_with_dups = extractHsTysRdrTyVarsDups pats
+       ; let pat_kity_vars_with_dups = extractHsTyArgRdrKiTyVarsDup pats
              -- Use the "...Dups" form because it's needed
              -- below to report unsed binder on the LHS
-       ; let pat_kity_vars = rmDupsInRdrTyVars pat_kity_vars_with_dups
 
-         -- all pat vars not explicitly bound (see extractHsTvBndrs)
-       ; let mb_imp_kity_vars = extractHsTvBndrs <$> mb_bndrs <*> pure pat_kity_vars
-             imp_vars = case mb_imp_kity_vars of
-                          -- kind vars are the only ones free if we have an explicit forall
-                          Just nbnd_kity_vars -> freeKiTyVarsKindVars nbnd_kity_vars
-                          -- all pattern vars are free otherwise
-                          Nothing             -> freeKiTyVarsAllVars pat_kity_vars
+         -- Implicitly bound variables, empty if we have an explicit 'forall' according
+         -- to the "forall-or-nothing" rule.
+       ; let imp_vars | isNothing mb_bndrs = nubL pat_kity_vars_with_dups
+                      | otherwise = []
        ; imp_var_names <- mapM (newTyVarNameRn mb_cls) imp_vars
 
        ; let bndrs = fromMaybe [] mb_bndrs
@@ -745,14 +755,14 @@ rnFamInstEqn doc mb_cls rhs_kvars
                  --  the user meant to bring in scope here. This is an explicit
                  --  forall, so we want fresh names, not class variables.
                  --  Thus: always pass Nothing
-                 do { (pats', pat_fvs) <- rnLHsTypes (FamPatCtx tycon) pats
+                 do { (pats', pat_fvs) <- rnLHsTypeArgs (FamPatCtx tycon) pats
                     ; (payload', rhs_fvs) <- rn_payload doc payload
 
                        -- Report unused binders on the LHS
                        -- See Note [Unused type variables in family instances]
                     ; let groups :: [NonEmpty (Located RdrName)]
                           groups = equivClasses cmpLocated $
-                                   freeKiTyVarsAllVars pat_kity_vars_with_dups
+                                   pat_kity_vars_with_dups
                     ; nms_dups <- mapM (lookupOccRn . unLoc) $
                                      [ tv | (tv :| (_:_)) <- groups ]
                           -- Add to the used variables
@@ -766,30 +776,15 @@ rnFamInstEqn doc mb_cls rhs_kvars
                           inst_tvs = case mb_cls of
                                        Nothing            -> []
                                        Just (_, inst_tvs) -> inst_tvs
-                          all_nms = all_imp_var_names
-                                      ++ map hsLTyVarName bndrs'
+                          all_nms = all_imp_var_names ++ hsLTyVarNames bndrs'
                     ; warnUnusedTypePatterns all_nms nms_used
-
-                         -- See Note [Renaming associated types]
-                    ; let bad_tvs = maybe [] (filter is_bad . snd) mb_cls
-                          var_name_set = mkNameSet (map hsLTyVarName bndrs'
-                                                    ++ all_imp_var_names)
-                          is_bad cls_tkv = cls_tkv `elemNameSet` rhs_fvs
-                                           && not (cls_tkv `elemNameSet` var_name_set)
-                    ; unless (null bad_tvs) (badAssocRhs bad_tvs)
 
                     ; return ((bndrs', pats', payload'), rhs_fvs `plusFV` pat_fvs) }
 
-       ; let anon_wcs = concatMap collectAnonWildCards pats'
-             all_ibs  = anon_wcs ++ all_imp_var_names
-                        -- all_ibs: include anonymous wildcards in the implicit
-                        -- binders In a type pattern they behave just like any
-                        -- other type variable except for being anoymous.  See
-                        -- Note [Wildcards in family instances]
-             all_fvs  = fvs `addOneFV` unLoc tycon'
-                        -- type instance => use, hence addOneFV
+       ; let all_fvs  = fvs `addOneFV` unLoc tycon'
+            -- type instance => use, hence addOneFV
 
-       ; return (HsIB { hsib_ext = all_ibs
+       ; return (HsIB { hsib_ext = all_imp_var_names -- Note [Wildcards in family instances]
                       , hsib_body
                           = FamEqn { feqn_ext    = noExt
                                    , feqn_tycon  = tycon'
@@ -915,12 +910,13 @@ is the same as
     type family F a b :: *
     type instance F Int b = Int
 
-This is implemented as follows: during renaming anonymous wild cards
-'_' are given freshly generated names. These names are collected after
-renaming (rnFamInstEqn) and used to make new type variables during
-type checking (tc_fam_ty_pats). One should not confuse these wild
-cards with the ones from partial type signatures. The latter generate
-fresh meta-variables whereas the former generate fresh skolems.
+This is implemented as follows: Unnamed wildcards remain unchanged after
+the renamer, and then given fresh meta-variables during typechecking, and
+it is handled pretty much the same way as the ones in partial type signatures.
+We however don't want to emit hole constraints on wildcards in family
+instances, so we turn on PartialTypeSignatures and turn off warning flag to
+let typechecker know this.
+See related Note [Wildcards in visible kind application] in TcHsType.hs
 
 Note [Unused type variables in family instances]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -959,7 +955,7 @@ bound on the LHS.  For example, this is not ok
       type F a x :: *
    instance C (p,q) r where
       type F (p,q) x = (x, r)   -- BAD: mentions 'r'
-c.f. Trac #5515
+c.f. #5515
 
 Kind variables, on the other hand, are allowed to be implicitly or explicitly
 bound. As examples, this (#9574) is acceptable:
@@ -984,12 +980,27 @@ So for parity with type synonyms, we also allow:
 
 All this applies only for *instance* declarations.  In *class*
 declarations there is no RHS to worry about, and the class variables
-can all be in scope (Trac #5862):
+can all be in scope (#5862):
     class Category (x :: k -> k -> *) where
       type Ob x :: k -> Constraint
       id :: Ob x a => x a a
       (.) :: (Ob x a, Ob x b, Ob x c) => x b c -> x a b -> x a c
 Here 'k' is in scope in the kind signature, just like 'x'.
+
+Although type family equations can bind type variables with explicit foralls,
+it need not be the case that all variables that appear on the RHS must be bound
+by a forall. For instance, the following is acceptable:
+
+   class C a where
+     type T a b
+   instance C (Maybe a) where
+     type forall b. T (Maybe a) b = Either a b
+
+Even though `a` is not bound by the forall, this is still accepted because `a`
+was previously bound by the `instance C (Maybe a)` part. (see #16116).
+
+In each case, the function which detects improperly bound variables on the RHS
+is TcValidity.checkValidFamPats.
 -}
 
 
@@ -1009,6 +1020,7 @@ rnSrcDerivDecl (DerivDecl _ ty mds overlap)
            <- rnLDerivStrategy DerivDeclCtx mds $ \strat_tvs ppr_via_ty ->
               rnAndReportFloatingViaTvs strat_tvs loc ppr_via_ty "instance" $
               rnHsSigWcType BindUnlessForall DerivDeclCtx ty
+       ; warnNoDerivStrat mds' loc
        ; return (DerivDecl noExt ty' mds' overlap, fvs) }
   where
     loc = getLoc $ hsib_body $ hswc_body ty
@@ -1213,7 +1225,7 @@ reasons:
   This has a kind error, but the error message is better if you
   check T first, (fixing its kind) and *then* S.  If you do kind
   inference together, you might get an error reported in S, which
-  is jolly confusing.  See Trac #4875
+  is jolly confusing.  See #4875
 
 
 * Increase kind polymorphism.  See TcTyClsDecls
@@ -1221,7 +1233,7 @@ reasons:
 
 Why do the instance declarations participate?  At least two reasons
 
-* Consider (Trac #11348)
+* Consider (#11348)
 
      type family F a
      type instance F Int = Bool
@@ -1234,7 +1246,7 @@ Why do the instance declarations participate?  At least two reasons
   know that unless we've looked at the type instance declaration for F
   before kind-checking Foo.
 
-* Another example is this (Trac #3990).
+* Another example is this (#3990).
 
      data family Complex a
      data instance Complex Double = CD {-# UNPACK #-} !Double
@@ -1710,6 +1722,29 @@ rnDataDefn doc (HsDataDefn { dd_ND = new_or_data, dd_cType = cType
            ; return (cL loc ds', fvs) }
 rnDataDefn _ (XHsDataDefn _) = panic "rnDataDefn"
 
+warnNoDerivStrat :: Maybe (LDerivStrategy GhcRn)
+                 -> SrcSpan
+                 -> RnM ()
+warnNoDerivStrat mds loc
+  = do { dyn_flags <- getDynFlags
+       ; when (wopt Opt_WarnMissingDerivingStrategies dyn_flags) $
+           case mds of
+             Nothing -> addWarnAt
+               (Reason Opt_WarnMissingDerivingStrategies)
+               loc
+               (if xopt LangExt.DerivingStrategies dyn_flags
+                 then no_strat_warning
+                 else no_strat_warning $+$ deriv_strat_nenabled
+               )
+             _ -> pure ()
+       }
+  where
+    no_strat_warning :: SDoc
+    no_strat_warning = text "No deriving strategy specified. Did you want stock"
+                       <> text ", newtype, or anyclass?"
+    deriv_strat_nenabled :: SDoc
+    deriv_strat_nenabled = text "Use DerivingStrategies to specify a strategy."
+
 rnLHsDerivingClause :: HsDocContext -> LHsDerivingClause GhcPs
                     -> RnM (LHsDerivingClause GhcRn, FreeVars)
 rnLHsDerivingClause doc
@@ -1720,6 +1755,7 @@ rnLHsDerivingClause doc
   = do { (dcs', dct', fvs)
            <- rnLDerivStrategy doc dcs $ \strat_tvs ppr_via_ty ->
               mapFvRn (rn_deriv_ty strat_tvs ppr_via_ty) dct
+       ; warnNoDerivStrat dcs' loc
        ; pure ( cL loc (HsDerivingClause { deriv_clause_ext = noExt
                                          , deriv_clause_strategy = dcs'
                                          , deriv_clause_tys = cL loc' dct' })
@@ -1772,7 +1808,7 @@ rnLDerivStrategy doc mds thing_inside
              let HsIB { hsib_ext  = via_imp_tvs
                       , hsib_body = via_body } = via_ty'
                  (via_exp_tv_bndrs, _, _) = splitLHsSigmaTy via_body
-                 via_exp_tvs = map hsLTyVarName via_exp_tv_bndrs
+                 via_exp_tvs = hsLTyVarNames via_exp_tv_bndrs
                  via_tvs = via_imp_tvs ++ via_exp_tvs
              (thing, fvs2) <- extendTyVarEnvFVRn via_tvs $
                               thing_inside via_tvs (ppr via_ty')
@@ -2028,7 +2064,7 @@ rnInjectivityAnn _ _ (dL->L srcSpan (InjectivityAnn injFrom injTo)) =
 {-
 Note [Stupid theta]
 ~~~~~~~~~~~~~~~~~~~
-Trac #3850 complains about a regression wrt 6.10 for
+#3850 complains about a regression wrt 6.10 for
      data Show a => T a
 There is no reason not to allow the stupid theta if there are no data
 constructors.  It's still stupid, but does no harm, and I don't want
@@ -2044,13 +2080,6 @@ are no data constructors we allow h98_style = True
 ***************************************************** -}
 
 ---------------
-badAssocRhs :: [Name] -> RnM ()
-badAssocRhs ns
-  = addErr (hang (text "The RHS of an associated type declaration mentions"
-                  <+> text "out-of-scope variable" <> plural ns
-                  <+> pprWithCommas (quotes . ppr) ns)
-               2 (text "All such variables must be bound on the LHS"))
-
 wrongTyFamName :: Name -> Name -> SDoc
 wrongTyFamName fam_tc_name eqn_tc_name
   = hang (text "Mismatched type name in type family instance.")
@@ -2113,7 +2142,7 @@ rnConDecl decl@(ConDeclGADT { con_names   = names
           -- order of their appearance in the constructor type.
           -- That order governs the order the implicitly-quantified type
           -- variable, and hence the order needed for visible type application
-          -- See Trac #14808.
+          -- See #14808.
               free_tkvs = extractHsTvBndrs explicit_tkvs $
                           extractHsTysRdrTyVarsDups (theta ++ arg_tys ++ [res_ty])
 
@@ -2137,9 +2166,7 @@ rnConDecl decl@(ConDeclGADT { con_names   = names
                                       -- See Note [GADT abstract syntax] in HsDecls
                                       (PrefixCon arg_tys, final_res_ty)
 
-              new_qtvs =  HsQTvs { hsq_ext = HsQTvsRn
-                                     { hsq_implicit  = implicit_tkvs
-                                     , hsq_dependent = emptyNameSet }
+              new_qtvs =  HsQTvs { hsq_ext = implicit_tkvs
                                  , hsq_explicit  = explicit_tkvs }
 
         ; traceRn "rnConDecl2" (ppr names $$ ppr implicit_tkvs $$ ppr explicit_tkvs)
@@ -2298,7 +2325,7 @@ add gp loc (SpliceD _ splice@(SpliceDecl _ _ flag)) ds
                      -- The compiler should suggest the above, and not using
                      -- TemplateHaskell since the former suggestion is more
                      -- relevant to the larger base of users.
-                     -- See Trac #12146 for discussion.
+                     -- See #12146 for discussion.
 
 -- Class declarations: pull out the fixity signatures to the top
 add gp@(HsGroup {hs_tyclds = ts, hs_fixds = fs}) l (TyClD _ d) ds

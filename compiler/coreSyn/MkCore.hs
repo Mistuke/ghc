@@ -17,7 +17,7 @@ module MkCore (
         mkCharExpr, mkStringExpr, mkStringExprFS, mkStringExprFSWith,
 
         -- * Floats
-        FloatBind(..), wrapFloat,
+        FloatBind(..), wrapFloat, wrapFloats, floatBindings,
 
         -- * Constructing small tuples
         mkCoreVarTup, mkCoreVarTupTy, mkCoreTup, mkCoreUbxTup,
@@ -81,7 +81,7 @@ import DynFlags
 import Data.List
 
 import Data.Char        ( ord )
-import Control.Monad.Fail ( MonadFail )
+import Control.Monad.Fail as MonadFail ( MonadFail )
 
 infixl 4 `mkCoreApp`, `mkCoreApps`
 
@@ -302,7 +302,7 @@ mkStringExprFSWith lookupM str
   where
     chars = unpackFS str
     safeChar c = ord c >= 1 && ord c <= 0x7F
-    lit = Lit (LitString (fastStringToByteString str))
+    lit = Lit (LitString (bytesFS str))
 
 {-
 ************************************************************************
@@ -560,6 +560,19 @@ wrapFloat :: FloatBind -> CoreExpr -> CoreExpr
 wrapFloat (FloatLet defns)       body = Let defns body
 wrapFloat (FloatCase e b con bs) body = Case e b (exprType body) [(con, bs, body)]
 
+-- | Applies the floats from right to left. That is @wrapFloats [b1, b2, …, bn]
+-- u = let b1 in let b2 in … in let bn in u@
+wrapFloats :: [FloatBind] -> CoreExpr -> CoreExpr
+wrapFloats floats expr = foldr wrapFloat expr floats
+
+bindBindings :: CoreBind -> [Var]
+bindBindings (NonRec b _) = [b]
+bindBindings (Rec bnds) = map fst bnds
+
+floatBindings :: FloatBind -> [Var]
+floatBindings (FloatLet bnd) = bindBindings bnd
+floatBindings (FloatCase _ b _ bs) = b:bs
+
 {-
 ************************************************************************
 *                                                                      *
@@ -600,7 +613,7 @@ mkFoldrExpr elt_ty result_ty c n list = do
            `App` list)
 
 -- | Make a 'build' expression applied to a locally-bound worker function
-mkBuildExpr :: (MonadFail m, MonadThings m, MonadUnique m)
+mkBuildExpr :: (MonadFail.MonadFail m, MonadThings m, MonadUnique m)
             => Type                                     -- ^ Type of list elements to be built
             -> ((Id, Type) -> (Id, Type) -> m CoreExpr) -- ^ Function that, given information about the 'Id's
                                                         -- of the binders for the build worker function, returns
@@ -609,7 +622,7 @@ mkBuildExpr :: (MonadFail m, MonadThings m, MonadUnique m)
 mkBuildExpr elt_ty mk_build_inside = do
     [n_tyvar] <- newTyVars [alphaTyVar]
     let n_ty = mkTyVarTy n_tyvar
-        c_ty = mkFunTys [elt_ty, n_ty] n_ty
+        c_ty = mkVisFunTys [elt_ty, n_ty] n_ty
     [c, n] <- sequence [mkSysLocalM (fsLit "c") c_ty, mkSysLocalM (fsLit "n") n_ty]
 
     build_inside <- mk_build_inside (c, c_ty) (n, n_ty)
@@ -758,7 +771,7 @@ tYPE_ERROR_ID                   = mkRuntimeErrorId typeErrorName
 aBSENT_SUM_FIELD_ERROR_ID
   = mkVanillaGlobalWithInfo absentSumFieldErrorName
       (mkSpecForAllTys [alphaTyVar] (mkTyVarTy alphaTyVar)) -- forall a . a
-      (vanillaIdInfo `setStrictnessInfo` mkClosedStrictSig [] exnRes
+      (vanillaIdInfo `setStrictnessInfo` mkClosedStrictSig [] botRes
                      `setArityInfo` 0
                      `setCafInfo` NoCafRefs) -- #15038
 
@@ -785,14 +798,13 @@ mkRuntimeErrorId name
         -- any pc_bottoming_Id will itself have CafRefs, which bloats
         -- SRTs.
 
-    strict_sig = mkClosedStrictSig [evalDmd] exnRes
-              -- exnRes: these throw an exception, not just diverge
+    strict_sig = mkClosedStrictSig [evalDmd] botRes
 
 runtimeErrorTy :: Type
 -- forall (rr :: RuntimeRep) (a :: rr). Addr# -> a
 --   See Note [Error and friends have an "open-tyvar" forall]
 runtimeErrorTy = mkSpecForAllTys [runtimeRep1TyVar, openAlphaTyVar]
-                                 (mkFunTy addrPrimTy openAlphaTy)
+                                 (mkVisFunTy addrPrimTy openAlphaTy)
 
 {- Note [Error and friends have an "open-tyvar" forall]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -828,7 +840,7 @@ used, and does a w/w split thus
 After some simplification, the (absentError "blah") thunk goes away.
 
 ------ Tricky wrinkle -------
-Trac #14285 had, roughly
+#14285 had, roughly
 
    data T a = MkT a !a
    {-# INLINABLE f #-}
@@ -882,7 +894,7 @@ be relying on anything from it.
 aBSENT_ERROR_ID
  = mkVanillaGlobalWithInfo absentErrorName absent_ty arity_info
  where
-   absent_ty = mkSpecForAllTys [alphaTyVar] (mkFunTy addrPrimTy alphaTy)
+   absent_ty = mkSpecForAllTys [alphaTyVar] (mkVisFunTy addrPrimTy alphaTy)
    -- Not runtime-rep polymorphic. aBSENT_ERROR_ID is only used for
    -- lifted-type things; see Note [Absent errors] in WwLib
    arity_info = vanillaIdInfo `setArityInfo` 1

@@ -23,8 +23,6 @@ data Flavour = Flavour {
     libraryWays :: Ways,
     -- | Build RTS these ways.
     rtsWays :: Ways,
-    -- | Build split objects.
-    splitObjects :: Predicate,
     -- | Build dynamic GHC programs.
     dynamicGhcPrograms :: Action Bool,
     -- | Enable GHCi debugger.
@@ -32,7 +30,10 @@ data Flavour = Flavour {
     -- | Build profiled GHC.
     ghcProfiled :: Bool,
     -- | Build GHC with debug information.
-    ghcDebugged :: Bool }
+    ghcDebugged :: Bool
+    -- | Whether to build docs and which ones
+    --   (haddocks, user manual, haddock manual)
+    ghcDocs :: Action DocTargets }
 ```
 Hadrian provides several built-in flavours (`default`, `quick`, and a few
 others; see `hadrian/doc/flavours.md`), which can be activated from the command line,
@@ -102,11 +103,26 @@ patterns such as `"//Prelude.*"` can be used when matching input and output file
 where `//` matches an arbitrary number of path components and `*` matches an entire
 path component, excluding any separators.
 
+### Enabling -Werror
+
+It is useful to enable `-Werror` when building GHC as this setting is
+used in the CI to ensure a warning free build. The `werror` function can be
+used to easily modify a flavour to turn this setting on.
+
+```
+devel2WerrorFlavour :: Flavour
+devel2WerrorFlavour = werror (developmentFlavour Stage2)
+```
+
 ## Packages
 
 Users can add and remove packages from particular build stages. As an example,
 below we add package `base` to Stage0 and remove package `haskeline` from Stage1:
 ```haskell
+...
+import Packages
+...
+
 userFlavour :: Flavour
 userFlavour = defaultFlavour { name = "user", packages = modifiedPackages }
 
@@ -136,8 +152,24 @@ You can choose which integer library to use when builing GHC using the
 (default) and `integerSimple`.
 ```haskell
 userFlavour :: Flavour
-userFlavour = defaultFlavour { name = "user", integerLibrary = integerSimple }
+userFlavour = defaultFlavour { name = "user", integerLibrary = pure integerSimple }
 ```
+
+### Specifying the final stage to build
+
+The `finalStage` variable can be set to indicate after which stage we should
+stop the compilation pipeline. By default it is set to `Stage2` which indicates
+that we will build everything which uses the `Stage1` `ghc` and then stop.
+
+```
+finalStage :: Stage
+finalStage = Stage2
+```
+
+Using this mechanism we can also build a `Stage3` compiler by setting
+`finalStage = Stage3` or just a `Stage1` compiler by setting
+`finalStage = Stage1`.
+
 ## Build ways
 
 Packages can be built in a number of ways, such as `vanilla`, `profiling` (with
@@ -200,18 +232,46 @@ verboseCommand = output "//rts/sm/*" &&^ way threaded
 verboseCommand = return True
 ```
 
-## Miscellaneous
+## Documentation
 
-By setting `stage1Only = True` you can disable building Stage2 GHC and Stage2
-utilities such as `haddock`. Note that all Stage0 and Stage1 libraries will
-still be built.
+`Flavour`'s `ghcDocs :: Action DocTargets` field lets you
+customize the "groups" of documentation targets that should
+run when running `build docs` (or, transitively,
+`build binary-dist`).
 
-To change the default behaviour of Hadrian with respect to building split
-objects, override the `splitObjects` setting of the `Flavour` record:
 ```haskell
-userFlavour :: Flavour
-userFlavour = defaultFlavour { name = "user", splitObjects = return False }
+type DocTargets = Set DocTarget
+data DocTarget = Haddocks | SphinxHTML | SphinxPDFs | SphinxMan
 ```
+
+By default, `ghcDocs` contains all of them and `build docs` would
+therefore attempt to build all the haddocks, manuals and manpages.
+If, for some reason (e.g no easy way to install `sphinx-build` or
+`xelatex` on your system), you're just interested in building the
+haddocks, you could define a custom flavour as follows:
+
+```haskell
+justHaddocksFlavour :: Flavour
+justHaddocksFlavour = defaultFlavour
+    { name = "default-haddocks"
+	, ghcDocs = Set.singleton Haddocks }
+```
+
+and then run `build --flavour=default-haddocks`. Alternatively,
+you can use the `--docs` CLI flag to selectively disable some or
+all of the documentation targets:
+
+- `--docs=none`: don't build any docs
+- `--docs=no-haddocks`: don't build haddocks
+- `--docs=no-sphinx`: don't build any user manual or manpage
+- `--docs=no-sphinx-html`: don't build HTML versions of manuals
+- `--docs=no-sphinx-pdfs`: don't build PDF versions of manuals
+- `--docs=no-sphinx-man`: don't build the manpage
+
+You can pass several `--docs=...` flags, Hadrian will combine
+their effects.
+
+## Miscellaneous
 
 Hadrian prints various progress info during the build. You can change the colours
 used by default by overriding `buildProgressColour` and `successColour`:

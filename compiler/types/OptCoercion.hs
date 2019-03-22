@@ -2,10 +2,6 @@
 
 {-# LANGUAGE CPP #-}
 
--- The default iteration limit is a bit too low for the definitions
--- in this module.
-{-# OPTIONS_GHC -fmax-pmcheck-iterations=10000000 #-}
-
 module OptCoercion ( optCoercion, checkAxInstCo ) where
 
 #include "HsVersions.h"
@@ -488,7 +484,7 @@ of arguments in a `CoTyConApp` can differ. Consider
   Any * Int                      :: *
   Any (*->*) Maybe Int  :: *
 
-Hence the need to compare argument lengths; see Trac #13658
+Hence the need to compare argument lengths; see #13658
  -}
 
 opt_univ :: LiftingContext -> SymFlag -> UnivCoProvenance -> Role
@@ -1159,7 +1155,7 @@ etaTyConAppCo_maybe tc (TyConAppCo _ tc2 cos2)
   = ASSERT( tc == tc2 ) Just cos2
 
 etaTyConAppCo_maybe tc co
-  | mightBeUnsaturatedTyCon tc
+  | not (mustBeSaturated tc)
   , (Pair ty1 ty2, r) <- coercionKindRole co
   , Just (tc1, tys1)  <- splitTyConApp_maybe ty1
   , Just (tc2, tys2)  <- splitTyConApp_maybe ty2
@@ -1168,7 +1164,7 @@ etaTyConAppCo_maybe tc co
   , let n = length tys1
   , tys2 `lengthIs` n      -- This can fail in an erroneous progam
                            -- E.g. T a ~# T a b
-                           -- Trac #14607
+                           -- #14607
   = ASSERT( tc == tc1 )
     Just (decomposeCo n co (tyConRolesX r tc1))
     -- NB: n might be <> tyConArity tc
