@@ -211,6 +211,7 @@ typedef struct _MISC_FLAGS {
     bool generate_stack_trace;
     bool machineReadable;
     bool internalCounters;       /* See Note [Internal Counter Stats] */
+    bool linkerAlwaysPic;        /* Assume the object code is always PIC */
     StgWord linkerMemBase;       /* address to ask the OS for memory
                                   * for the linker, NULL ==> off */
     IO_MANAGER ioManager;        /* The I/O manager to use.  */
