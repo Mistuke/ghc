@@ -539,8 +539,13 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
           -- synchronously we've requested to not have the completion queued.
           let result' =
                 case result of
-                  CbNone ret | success == #{const ERROR_SUCCESS}       -> CbDone Nothing
-                             | err     == #{const STATUS_END_OF_FILE}  -> CbDone Nothing
+                  CbNone ret | success == #{const STATUS_SUCCESS}      -> CbDone Nothing
+                             | success == #{const STATUS_END_OF_FILE}  -> CbDone Nothing
+                             | success == #{const STATUS_PENDING}      -> CbPending
+                             -- Buffer was too small.. not sure what to do, so I'll just
+                             -- complete the read request
+                             | err     == #{const ERROR_MORE_DATA}     -> CbDone Nothing
+                             | err     == #{const ERROR_SUCCESS}       -> CbDone Nothing
                              | err     == #{const ERROR_IO_PENDING}    -> CbPending
                              | err     == #{const ERROR_IO_INCOMPLETE} -> CbPending
                              | err     == #{const ERROR_HANDLE_EOF}    -> CbDone Nothing
@@ -557,8 +562,11 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
               status <- FFI.overlappedIOStatus lpol
               debugIO $ "== >< " ++ show (status)
               lasterr <- fmap fromIntegral getLastError :: IO Int
-              let done_early =  status == #{const ERROR_SUCCESS}
-                             || lasterr == #{const STATUS_END_OF_FILE}
+              -- | TODO: In cases where we do finish early, the value of
+              -- getOverlappedResult may not be correct.  Verify this.
+              let done_early =  status == #{const STATUS_SUCCESS}
+                             || status == #{const STATUS_END_OF_FILE}
+                             || lasterr == #{const ERROR_HANDLE_EOF}
 
               debugIO $ "== >*< " ++ show (finished, done_early)
               case (finished, done_early) of
@@ -617,7 +625,10 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
             case bytes of
               Just res -> completionCB 0 res
               Nothing  -> do err <- FFI.overlappedIOStatus lpol
-                             completionCB err 0
+                             -- TODO: Remap between STATUS_ and ERROR_ instead
+                             -- of re-interpret here. But for now, don't care.
+                             let err' = fromIntegral err
+                             completionCB err' 0
           CbError err  -> do let err' = fromIntegral err
                              completionCB err' 0
           _            -> do error "unexpected case in `execute'"
@@ -843,7 +854,10 @@ processCompletion mgr@Manager{..} n delay = do
               -- return immediately in most cases.
               -- _ <- FFI.getOverlappedResult _hwnd (lpOverlapped oe) True
               status <- FFI.overlappedIOStatus (lpOverlapped oe)
-              cb status (dwNumberOfBytesTransferred oe)
+              -- TODO: Remap between STATUS_ and ERROR_ instead
+              -- of re-interpret here. But for now, don't care.
+              let status' = fromIntegral status
+              cb status' (dwNumberOfBytesTransferred oe)
 
       -- clear the array so we don't erroneously interpret the output, in
       -- certain circumstances like lockFileEx the code could return 1 entry

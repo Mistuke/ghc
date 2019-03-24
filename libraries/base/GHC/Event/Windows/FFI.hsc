@@ -171,13 +171,12 @@ getQueuedCompletionStatusEx iocp arr timeout =
                     if err == #{const WAIT_TIMEOUT} || alertable then return 0
                     else failWith "GetQueuedCompletionStatusEx" err
 
-overlappedIOStatus :: LPOVERLAPPED -> IO ErrCode
+overlappedIOStatus :: LPOVERLAPPED -> IO NTSTATUS
 overlappedIOStatus lpol = do
   status <- #{peek OVERLAPPED, Internal} lpol
-  if status == #{const STATUS_SUCCESS} then return #{const ERROR_SUCCESS}
   -- TODO: Map NTSTATUS to ErrCode?
   -- See https://github.com/libuv/libuv/blob/b12624c13693c4d29ca84b3556eadc9e9c0936a4/src/win/winsock.c#L153
-  else return status
+  return status
 {-# INLINE overlappedIOStatus #-}
 
 foreign import WINDOWS_CCONV unsafe "windows.h PostQueuedCompletionStatus"

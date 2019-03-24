@@ -41,6 +41,7 @@ module GHC.Windows (
         LPCWSTR,
         WORD,
         UCHAR,
+        NTSTATUS,
 
         -- * Constants
         iNFINITE,
@@ -78,6 +79,7 @@ import Data.Char
 import Data.OldList
 import Data.Maybe
 import Data.Word
+import Data.Int
 import Foreign.C.Error
 import Foreign.C.String
 import Foreign.C.Types
@@ -102,23 +104,24 @@ finiteBitSize = bitSize
 
 #include "windows_cconv.h"
 
-type BOOL    = Bool
-type LPBOOL  = Ptr BOOL
-type BYTE    = Word8
-type DWORD   = Word32
-type UINT    = Word32
-type ULONG   = Word32
-type ErrCode = DWORD
-type HANDLE  = Ptr ()
-type LPWSTR  = Ptr CWchar
-type LPCTSTR = LPTSTR
-type LPVOID  = Ptr ()
-type LPDWORD = Ptr DWORD
-type LPSTR   = Ptr CChar
-type LPCSTR  = LPSTR
-type LPCWSTR = LPWSTR
-type WORD    = Word16
-type UCHAR   = Word8
+type BOOL     = Bool
+type LPBOOL   = Ptr BOOL
+type BYTE     = Word8
+type DWORD    = Word32
+type UINT     = Word32
+type ULONG    = Word32
+type ErrCode  = DWORD
+type HANDLE   = Ptr ()
+type LPWSTR   = Ptr CWchar
+type LPCTSTR  = LPTSTR
+type LPVOID   = Ptr ()
+type LPDWORD  = Ptr DWORD
+type LPSTR    = Ptr CChar
+type LPCSTR   = LPSTR
+type LPCWSTR  = LPWSTR
+type WORD     = Word16
+type UCHAR    = Word8
+type NTSTATUS = Int32
 
 nullHANDLE :: HANDLE
 nullHANDLE = nullPtr
