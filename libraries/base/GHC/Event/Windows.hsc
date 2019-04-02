@@ -83,7 +83,7 @@ import {-# SOURCE #-} Control.Concurrent
 import Control.Concurrent.MVar
 import Control.Exception as E
 import Data.IORef
-import Data.Foldable (mapM_, length)
+import Data.Foldable (mapM_, length, forM_)
 import Data.Maybe
 import Data.Word
 import Data.Semigroup.Internal (stimesMonoid)
@@ -96,6 +96,7 @@ import GHC.Base
 import GHC.Conc.Sync (forkIO, myThreadId, showThreadId,
                       ThreadId(..), ThreadStatus(..),
                       threadStatus, sharedCAF)
+import GHC.Conc (threadDelay)
 import GHC.Event.Unique
 import GHC.Event.TimeOut
 import GHC.Event.Windows.ConsoleEvent
@@ -436,6 +437,11 @@ lpoverlappedToInt :: LPOVERLAPPED -> Int
 lpoverlappedToInt lpol = fromIntegral (ptrToIntPtr lpol)
 {-# INLINE lpoverlappedToInt #-}
 
+-- | Convert an Int representing a intptr_t to an OVERLAPPED*.
+intToLpoverlapped :: Int -> LPOVERLAPPED
+intToLpoverlapped lpol = intPtrToPtr (fromIntegral lpol)
+{-# INLINE intToLpoverlapped #-}
+
 -- hashOverlapped :: LPOVERLAPPED -> Int
 -- hashOverlapped lpol = (lpoverlappedToInt lpol) .&. (callbackArraySize - 1)
 -- {-# INLINE hashOverlapped #-}
@@ -473,6 +479,8 @@ type StartIOCallback a = StartCallback (CbResult a)
 data CbResult a
   = CbDone (Maybe DWORD) -- ^ Request was handled immediately, no queue.
   | CbPending            -- ^ Queued and handled by I/O manager
+  | CbIncomplete         -- ^ I/O request is incomplete but not enqueued, handle
+                         --   it synchronously.
   | CbError a            -- ^ I/O request abort, return failure immediately
   | CbNone Bool          -- ^ The caller did not do any checking, the I/O
                          --   manager will perform additional checks.
@@ -547,13 +555,18 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                              | err     == #{const ERROR_MORE_DATA}     -> CbDone Nothing
                              | err     == #{const ERROR_SUCCESS}       -> CbDone Nothing
                              | err     == #{const ERROR_IO_PENDING}    -> CbPending
-                             | err     == #{const ERROR_IO_INCOMPLETE} -> CbPending
+                             | err     == #{const ERROR_IO_INCOMPLETE} -> CbIncomplete
                              | err     == #{const ERROR_HANDLE_EOF}    -> CbDone Nothing
                              | not ret                                 -> CbError err
                              | otherwise                               -> CbPending
                   _                                                    -> result
           case result' of
             CbNone    _ -> error "shouldn't happen."
+            CbIncomplete -> do
+               debugIO $ "handling incomplete request synchronously " ++ show (h, lpol)
+               res <- spinWaitComplete h lpol
+               debugIO $ "done blocking request " ++ show (h, lpol)
+               return res
             CbPending   -> do
               -- Before we enqueue check to see if operation finished in the
               -- mean time, since caller may not have done this.
@@ -562,15 +575,16 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
               status <- FFI.overlappedIOStatus lpol
               debugIO $ "== >< " ++ show (status)
               lasterr <- fmap fromIntegral getLastError :: IO Int
-              -- | TODO: In cases where we do finish early, the value of
+              -- TODO: In cases where we do finish early, the value of
               -- getOverlappedResult may not be correct.  Verify this.
               let done_early =  status == #{const STATUS_SUCCESS}
                              || status == #{const STATUS_END_OF_FILE}
                              || lasterr == #{const ERROR_HANDLE_EOF}
+              let will_finish_sync = lasterr == #{const ERROR_IO_INCOMPLETE}
 
-              debugIO $ "== >*< " ++ show (finished, done_early)
-              case (finished, done_early) of
-                (Nothing, False) -> do
+              debugIO $ "== >*< " ++ show (finished, done_early, h, lpol, lasterr)
+              case (finished, done_early, will_finish_sync) of
+                (Nothing, False, False) -> do
                     _ <- withMVar (callbackTableVar mgr) $
                             IT.insertWith (flip const) (lpoverlappedToInt lpol)
                                           (CompletionData fptr h completionCB')
@@ -578,6 +592,11 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                     debugIO $ "+1.. " ++ show reqs ++ " requests queued. | " ++ show lpol
                     wakeupIOManager
                     return result'
+                (Nothing, False, True) -> do
+                  debugIO $ "handling incomplete request synchronously " ++ show (h, lpol)
+                  res <- spinWaitComplete h lpol
+                  debugIO $ "done blocking request " ++ show (h, lpol)
+                  return res
                 _                -> do
                   debugIO "request handled immediately (o/b), not queued."
                   return $ CbDone Nothing
@@ -632,6 +651,14 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
           CbError err  -> do let err' = fromIntegral err
                              completionCB err' 0
           _            -> do error "unexpected case in `execute'"
+      where spinWaitComplete fhndl lpol = do
+              -- Wait for the request to finish as it was running before and
+              -- The I/O manager won't enqueue it due to our optimizations to
+              -- prevent context switches in such cases.
+              res <- FFI.getOverlappedResult fhndl lpol False
+              case res of
+                Nothing -> threadDelay 100 >> spinWaitComplete fhndl lpol
+                _       -> return $ CbDone res
 
 -- Safe version of function
 withOverlapped :: String
@@ -837,27 +864,32 @@ processCompletion :: Manager -> Int -> Maybe Seconds -> IO (Bool, Maybe Seconds)
 processCompletion mgr@Manager{..} n delay = do
     debugIO $ "completed completions: " ++ show n
 
+    -- Print some debug info
+    dumpCompletions mgr
+
     -- If some completions are done, we need to process them and call their
     -- callbacks.  We then remove the callbacks from the bookkeeping and resize
     -- the index if required.
     when (n > 0) $ do
-      A.forM_ mgrOverlappedEntries $ \oe -> do
-          debugIO $ " $ checking " ++ show (lpOverlapped oe)
-          mCD <- withMVar (callbackTableVar mgr) $ \tbl ->
-                   IT.delete (lpoverlappedToInt (lpOverlapped oe)) tbl
-          case mCD of
-            Nothing                        -> return ()
-            Just (CompletionData _fptr _hwnd cb) -> do
-              reqs <- removeRequest
-              debugIO $ "-1.. " ++ show reqs ++ " requests queued."
-              -- It's safe to block here since the operation completed it will
-              -- return immediately in most cases.
-              -- _ <- FFI.getOverlappedResult _hwnd (lpOverlapped oe) True
-              status <- FFI.overlappedIOStatus (lpOverlapped oe)
-              -- TODO: Remap between STATUS_ and ERROR_ instead
-              -- of re-interpret here. But for now, don't care.
-              let status' = fromIntegral status
-              cb status' (dwNumberOfBytesTransferred oe)
+      forM_ [0..(n-1)] $ \idx -> do
+        oe <- A.unsafeRead mgrOverlappedEntries idx
+        debugIO $ " $ checking " ++ show (lpOverlapped oe)
+                  ++ " at idx " ++ show idx
+        mCD <- withMVar (callbackTableVar mgr) $ \tbl ->
+                 IT.delete (lpoverlappedToInt (lpOverlapped oe)) tbl
+        case mCD of
+          Nothing                        -> return ()
+          Just (CompletionData _fptr _hwnd cb) -> do
+            reqs <- removeRequest
+            debugIO $ "-1.. " ++ show reqs ++ " requests queued."
+            -- It's safe to block here since the operation completed it will
+            -- return immediately in most cases.
+            -- _ <- FFI.getOverlappedResult _hwnd (lpOverlapped oe) True
+            status <- FFI.overlappedIOStatus (lpOverlapped oe)
+            -- TODO: Remap between STATUS_ and ERROR_ instead
+            -- of re-interpret here. But for now, don't care.
+            let status' = fromIntegral status
+            cb status' (dwNumberOfBytesTransferred oe)
 
       -- clear the array so we don't erroneously interpret the output, in
       -- certain circumstances like lockFileEx the code could return 1 entry
@@ -875,6 +907,8 @@ processCompletion mgr@Manager{..} n delay = do
     -- if we have a pending delay.
     reqs <- outstandingRequests
     debugIO $ "outstanding requests: " ++ show reqs
+    -- Print some debug info
+    dumpCompletions mgr
     let more = reqs > 0
     debugIO $ "has more: " ++ show more ++ " - removed: " ++  show n
     return (more || (isJust delay && threaded), delay)
@@ -894,6 +928,8 @@ processRemoteCompletion = do
     mngr <- getSystemManager
     let arr = mgrOverlappedEntries mngr
     A.unsafeSplat arr entries n
+    -- Debug line to see if we loaded the ARR correctly.
+    dumpCompletions mngr
     _ <- processCompletion mngr n Nothing
     num_left <- outstandingRequests
     -- This call will unblock the non-threaded I/O manager.  After this it is no
@@ -1030,3 +1066,20 @@ debugIO s
                   return ()
           else do return ()
 
+-- | Debug code to print out the state of all non-finished handles.
+-- TODO: Add #if defined (DEBUG)
+dumpCompletions :: Manager -> IO ()
+dumpCompletions mgr = c_DEBUG_DUMP >>= \debug -> when debug $
+  do len <- withMVar (callbackTableVar mgr) IT.size
+     debugIO $ ">> dumping " ++ show len ++ " outstanding completions.. "
+     debugIO $ ">> SUCCESS: " ++ show (#{const ERROR_SUCCESS} :: DWORD)
+     debugIO $ ">> PENDING: " ++ show (#{const ERROR_IO_PENDING} :: DWORD)
+     _ <- withMVar (callbackTableVar mgr) $ \cb ->
+        IT.iterate cb $ \key (CompletionData _ _hwnd _) -> (do
+            finish <- FFI.getOverlappedResult _hwnd (intToLpoverlapped key) False
+            err    <- getLastError
+            debugIO $ " >    "  ++ show finish
+                      ++ "\t["  ++ show (intToLpoverlapped key) ++ "]"
+                      ++ "\t" ++ show _hwnd
+                      ++ "\t"   ++ show err)
+     debugIO $ ">> dumping done. "

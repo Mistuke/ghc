@@ -304,7 +304,8 @@ schedule (Capability *initialCapability, Task *task)
      the RTS with more work.  */
   //if (t && t->why_blocked == BlockedOnIOCompletion)
     {
-      SwitchToThread ();
+      // SwitchToThread ();
+      Sleep (0);
       continue;
     }
 #else

@@ -12,6 +12,7 @@ module GHC.Event.IntTable
     , delete
     , updateWith
     , size
+    , iterate
     ) where
 
 import Data.Bits ((.&.), shiftL, shiftR)
@@ -149,3 +150,19 @@ updateWith f k (IntTable ref) = do
         size <- peek ptr
         poke ptr (size - 1)
   return oldVal
+
+-- | Iterate over every element in the table
+iterate :: IntTable a -> (Int -> a -> IO b) -> IO ()
+iterate (IntTable ref) f = do
+  IT{..} <- readIORef ref
+  let sz = Arr.size tabArr
+  go tabArr (sz-1)
+    where go arr n
+            | n < 0 = return ()
+            | otherwise = do
+                e <- Arr.read arr n
+                mk e
+                go arr (n-1)
+
+          mk Empty = return ()
+          mk (Bucket k v n) = f k v >> mk n

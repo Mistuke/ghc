@@ -175,6 +175,9 @@ void shutdownAsyncWinIO(bool wait_threads)
           WakeConditionVariable (&wakeEvent);
 
           ReleaseSRWLockExclusive (&lock);
+
+          /* Now wait for the thread to actually finish.  */
+          WaitForSingleObject (workerThread, INFINITE);
         }
       completionPortHandle = INVALID_HANDLE_VALUE;
       workerThread = NULL;
@@ -216,6 +219,9 @@ void registerAlertableWait (HANDLE port, DWORD mssec, uint64_t num_req)
   wakeup = outstanding_requests == 0 && num_req > 0;
 
   outstanding_requests = num_req;
+  /* If the new timeout is earlier than the old one we have to reschedule the
+     wait.  Do this by interrupting the current operation and setting the new
+     timeout, since it must be the shortest one in the queue.  */
   if (timeout > mssec)
     {
       timeout = mssec;
@@ -232,7 +238,13 @@ void registerAlertableWait (HANDLE port, DWORD mssec, uint64_t num_req)
 
 /* Exported callback function that will be called by the RTS to collect the
    finished overlapped entried belonging to the completed I/O requests.  The
-   number of read entries will be returned in NUM.  */
+   number of read entries will be returned in NUM.
+
+   NOTE: This function isn't thread safe, but is intended to be called only
+         when requested to by the I/O manager via notifyRtsOfFinishedCall.  In
+         that context it is thread safe as we're guaranteeing that the I/O
+         manager is blocked waiting for the read to happen followed by a
+         servicedIOEntries call.   */
 OVERLAPPED_ENTRY* getOverlappedEntries (uint32_t *num)
 {
   *num = num_last_completed;
@@ -330,8 +342,8 @@ DWORD WINAPI runner (LPVOID lpParam STG_UNUSED)
 
           if (num_removed > 0)
             {
-              notifyRtsOfFinishedCall (num_removed);
               queue_full = num_removed == num_callbacks;
+              notifyRtsOfFinishedCall (num_removed);
             }
         }
       else if (WAIT_TIMEOUT == GetLastError ())
