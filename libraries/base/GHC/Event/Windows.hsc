@@ -106,12 +106,12 @@ import GHC.Windows
 import System.IO.Unsafe     (unsafePerformIO)
 import Text.Show
 import System.Posix.Internals (c_write)
--- import GHC.RTS.Flags
+import GHC.RTS.Flags
 
 import qualified GHC.Windows as Win32
 
 c_DEBUG_DUMP :: IO Bool
-c_DEBUG_DUMP = return True -- scheduler `fmap` getDebugFlags
+c_DEBUG_DUMP = scheduler `fmap` getDebugFlags
 
 -- Note [WINIO Manager design]
 -- This file contains the Windows I//O manager. Windows's IO subsystem is by
@@ -1062,6 +1062,7 @@ unregisterHandle (Manager{..}) key@HandleKey{..} = do
 -- debugging
 
 debugIO :: String -> IO ()
+#if defined(DEBUG)
 debugIO s
   = do debug <- c_DEBUG_DUMP
        if debug
@@ -1072,15 +1073,16 @@ debugIO s
                          \(p, len) -> c_write 2 (castPtr p) (fromIntegral len)
                   return ()
           else do return ()
+#else
+debugIO _ = return ()
+#endif
 
 -- | Debug code to print out the state of all non-finished handles.
--- TODO: Add #if defined (DEBUG)
 dumpCompletions :: Manager -> IO ()
+#if defined(DEBUG)
 dumpCompletions mgr = c_DEBUG_DUMP >>= \debug -> when debug $
   do len <- withMVar (callbackTableVar mgr) IT.size
      debugIO $ ">> dumping " ++ show len ++ " outstanding completions.. "
-     debugIO $ ">> SUCCESS: " ++ show (#{const ERROR_SUCCESS} :: DWORD)
-     debugIO $ ">> PENDING: " ++ show (#{const ERROR_IO_PENDING} :: DWORD)
      _ <- withMVar (callbackTableVar mgr) $ \cb ->
         IT.iterate cb $ \key (CompletionData _ _hwnd _) -> (do
             finish <- FFI.getOverlappedResult _hwnd (intToLpoverlapped key) False
@@ -1090,3 +1092,6 @@ dumpCompletions mgr = c_DEBUG_DUMP >>= \debug -> when debug $
                       ++ "\t" ++ show _hwnd
                       ++ "\t"   ++ show err)
      debugIO $ ">> dumping done. "
+#else
+dumpCompletions _ = return ()
+#endif

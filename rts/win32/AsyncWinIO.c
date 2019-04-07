@@ -194,7 +194,6 @@ void shutdownAsyncWinIO(bool wait_threads)
    monitoring.  All handles are expected to be associated with this handle.  */
 void registerNewIOCPHandle (HANDLE port)
 {
-  fprintf (stderr, "$ registerNewIOCPHandle: %p\n", port);
   AcquireSRWLockExclusive (&lock);
 
   completionPortHandle = port;
@@ -210,7 +209,6 @@ void registerNewIOCPHandle (HANDLE port)
 
 void registerAlertableWait (HANDLE port, DWORD mssec, uint64_t num_req)
 {
-  fprintf (stderr, "$ registerAlertableWait: %p (%ld) %lld\n", port, mssec, num_req);
   bool interrupt = false;
   bool wakeup = false;
   AcquireSRWLockExclusive (&lock);
@@ -254,7 +252,6 @@ OVERLAPPED_ENTRY* getOverlappedEntries (uint32_t *num)
 /* Internal function to notify the RTS of NUM completed I/O requests.  */
 static void notifyRtsOfFinishedCall (uint32_t num)
 {
-  fprintf (stderr, "$ (0x%lu) notifyRtsOfFinishedCall: %d\n", GetCurrentThreadId (), num);
   num_last_completed = num;
 #if !defined(THREADED_RTS)
   Capability *cap = &MainCapability;
@@ -266,7 +263,6 @@ static void notifyRtsOfFinishedCall (uint32_t num)
 
   scheduleThread (cap, tso);
 #endif
-  fprintf (stderr, "$ rts notified of %d completions.\n", num);
 }
 
 /* Exported function that will be called by the RTS in order to indicate that
@@ -277,8 +273,6 @@ static void notifyRtsOfFinishedCall (uint32_t num)
 
 void servicedIOEntries (uint64_t remaining)
 {
-  fprintf (stderr, "$ runner:servicedIOEntries %lld\n", remaining);
-
   AcquireSRWLockExclusive (&lock);
 
   outstanding_requests = remaining;
@@ -322,14 +316,12 @@ DWORD WINAPI runner (LPVOID lpParam STG_UNUSED)
              || lastEvent == IO_MANAGER_DIE
              || outstanding_service_requests)
         {
-          fprintf (stderr, "$ runner:SleepConditionVariableSRW\n");
           SleepConditionVariableSRW (&wakeEvent, &lock, INFINITE, 0);
           HsWord32 nextEvent = readIOManagerEvent ();
           lastEvent = nextEvent ? nextEvent : lastEvent;
         }
 
       ReleaseSRWLockExclusive (&lock);
-      fprintf (stderr, "$ runner:GetQueuedCompletionStatusEx\n");
 
       ULONG num_removed = -1;
       ZeroMemory (entries, sizeof (entries[0]) * num_callbacks);
@@ -353,9 +345,6 @@ DWORD WINAPI runner (LPVOID lpParam STG_UNUSED)
         }
 
       AcquireSRWLockExclusive (&lock);
-
-      fprintf (stderr, "$ runner:running: %d, num_removed: %ld, oustanding: %lld, timeout: 0x%lx\n",
-               running, num_removed, outstanding_requests, timeout);
 
       if (!running)
         ExitThread (0);
