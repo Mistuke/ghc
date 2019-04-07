@@ -14,7 +14,10 @@
 --
 -------------------------------------------------------------------------------
 
-module GHC.IO.Types where
+module GHC.IO.Types
+ ( module GHC.IO.Types
+ , IntPtr
+ , POSIX.Fd) where
 
 import GHC.Base
 import GHC.Num

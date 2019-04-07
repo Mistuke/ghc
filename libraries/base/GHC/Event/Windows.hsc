@@ -96,7 +96,6 @@ import GHC.Base
 import GHC.Conc.Sync (forkIO, myThreadId, showThreadId,
                       ThreadId(..), ThreadStatus(..),
                       threadStatus, sharedCAF)
-import GHC.Conc (threadDelay)
 import GHC.Event.Unique
 import GHC.Event.TimeOut
 import GHC.Event.Windows.ConsoleEvent
@@ -657,7 +656,15 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
               -- prevent context switches in such cases.
               res <- FFI.getOverlappedResult fhndl lpol False
               case res of
-                Nothing -> threadDelay 100 >> spinWaitComplete fhndl lpol
+                -- Uses an inline definition of threadDelay to prevent an import
+                -- cycle.
+                Nothing ->
+                  do m <- newEmptyIOPort
+                     let secs = 100 / 1000000.0
+                     reg <- registerTimeout mgr secs $
+                              writeIOPort m () >> return ()
+                     readIOPort m `onException` unregisterTimeout mgr reg
+                     spinWaitComplete fhndl lpol
                 _       -> return $ CbDone res
 
 -- Safe version of function

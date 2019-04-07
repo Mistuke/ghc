@@ -68,7 +68,8 @@ import GHC.Conc.Windows (asyncRead, asyncWrite, asyncDoProc, asyncReadBA,
 #else
 import qualified GHC.Event.Thread as Event
 #endif
-import GHC.IO.Types
+import GHC.IO.Types (BHandle)
+import qualified GHC.IO.Types as Types
 
 ensureIOManagerIsRunning :: IO ()
 #if !defined(mingw32_HOST_OS)
@@ -101,6 +102,8 @@ ioManagerCapabilitiesChanged = return ()
 -- This will throw an 'Prelude.IOError' if the handle or file descriptor was closed
 -- while this thread was blocked.  To safely close a handle or file descriptor
 -- that has been used with 'threadWaitRead', use 'closeFdWith'.
+{-# SPECIALIZE threadWaitRead :: Types.IntPtr -> IO () #-}
+{-# SPECIALIZE threadWaitRead :: Types.Fd -> IO () #-}
 threadWaitRead :: BHandle a => a -> IO ()
 threadWaitRead bh
 #if !defined(mingw32_HOST_OS)
@@ -117,6 +120,8 @@ threadWaitRead bh
 -- This will throw an 'Prelude.IOError' if the handle or file descriptor was closed
 -- while this thread was blocked.  To safely close a handle or file descriptor
 -- that has been used with 'threadWaitWrite', use 'closeFdWith'.
+{-# SPECIALIZE threadWaitWrite :: Types.IntPtr -> IO () #-}
+{-# SPECIALIZE threadWaitWrite :: Types.Fd -> IO () #-}
 threadWaitWrite :: BHandle a => a -> IO ()
 threadWaitWrite bh
 #if !defined(mingw32_HOST_OS)
@@ -131,6 +136,8 @@ threadWaitWrite bh
 -- to read from a handle or file descriptor. The second returned value
 -- is an IO action that can be used to deregister interest
 -- in the handle or file descriptor.
+{-# SPECIALIZE threadWaitReadSTM :: Types.IntPtr -> IO (Sync.STM (), IO ()) #-}
+{-# SPECIALIZE threadWaitReadSTM :: Types.Fd -> IO (Sync.STM (), IO ()) #-}
 threadWaitReadSTM :: BHandle a => a -> IO (Sync.STM (), IO ())
 threadWaitReadSTM bh
 #if !defined(mingw32_HOST_OS)
@@ -150,6 +157,8 @@ threadWaitReadSTM bh
 -- can be written to a handle or file descriptor. The second returned value
 -- is an IO action that can be used to deregister interest
 -- in the handle or file descriptor.
+{-# SPECIALIZE threadWaitWriteSTM :: Types.IntPtr -> IO (Sync.STM (), IO ()) #-}
+{-# SPECIALIZE threadWaitWriteSTM :: Types.Fd -> IO (Sync.STM (), IO ()) #-}
 threadWaitWriteSTM :: BHandle a => a -> IO (Sync.STM (), IO ())
 threadWaitWriteSTM bh
 #if !defined(mingw32_HOST_OS)
@@ -173,6 +182,8 @@ threadWaitWriteSTM bh
 -- Any threads that are blocked on the handle or file descriptor via
 -- 'threadWaitRead' or 'threadWaitWrite' will be unblocked by having
 -- IO exceptions thrown.
+{-# SPECIALIZE closeWith :: (Types.IntPtr ->IO ()) -> Types.IntPtr -> IO () #-}
+{-# SPECIALIZE closeWith :: (Types.Fd ->IO ()) -> Types.Fd -> IO () #-}
 closeWith :: BHandle a => (a -> IO ()) -- ^ Low-level action that performs the real close.
           -> a            -- ^ handle or file descriptor to close.
           -> IO ()

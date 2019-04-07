@@ -6,14 +6,18 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  GHC.IOPort
--- Copyright   :  (c) Tamar Christina 2018
+-- Copyright   :  (c) Tamar Christina 2019
 -- License     :  see libraries/base/LICENSE
 --
 -- Maintainer  :  cvs-ghc@haskell.org
 -- Stability   :  internal
 -- Portability :  non-portable (GHC Extensions)
 --
--- The IOPort type
+-- The IOPort type. This is a synchronization primitive similar to IOVar but
+-- without any of the deadlock guarantees that IOVar provides.  The ports are
+-- single write/multiple wait.  Writing to an already full Port will not queue
+-- the value but instead will discard it.
+--
 --
 -----------------------------------------------------------------------------
 

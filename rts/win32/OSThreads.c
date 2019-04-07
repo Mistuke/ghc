@@ -27,51 +27,6 @@ static uint32_t* cpuGroupCumulativeCache = NULL;
 /* Processor group dist cache.  */
 static uint8_t* cpuGroupDistCache = NULL;
 
-/* Win32 threads and synchronisation objects */
-
-/* A Condition is represented by a Win32 Event object;
- * a Mutex by a Mutex kernel object.
- *
- * ToDo: go through the defn and usage of these to
- * make sure the semantics match up with that of
- * the (assumed) pthreads behaviour. This is really
- * just a first pass at getting something compilable.
- */
-
-void
-initCondition( Condition* pCond )
-{
-  InitializeConditionVariable(pCond);
-  return;
-}
-
-void
-closeCondition( Condition* pCond STG_UNUSED)
-{
-  return;
-}
-
-bool
-broadcastCondition ( Condition* pCond )
-{
-  WakeAllConditionVariable(pCond);
-  return true;
-}
-
-bool
-signalCondition ( Condition* pCond )
-{
-  WakeConditionVariable(pCond);
-  return true;
-}
-
-bool
-waitCondition ( Condition* pCond, Mutex* pMut )
-{
-  SleepConditionVariableSRW(pCond, pMut, INFINITE, 0);
-  return true;
-}
-
 void
 yieldThread()
 {
@@ -130,17 +85,6 @@ osThreadIsAlive(OSThreadId id)
     }
     CloseHandle(hdl);
     return (exit_code == STILL_ACTIVE);
-}
-
-void
-initMutex (Mutex* pMut)
-{
-    InitializeSRWLock(pMut);
-}
-void
-closeMutex (Mutex* pMut)
-{
-    (void)pMut;
 }
 
 void
@@ -563,4 +507,60 @@ KernelThreadId kernelThreadId (void)
 {
     DWORD tid = GetCurrentThreadId();
     return tid;
+}
+
+/* Win32 threads and synchronisation objects */
+
+/* A Condition is represented by a Win32 Event object;
+ * a Mutex by a Mutex kernel object.
+ *
+ * ToDo: go through the defn and usage of these to
+ * make sure the semantics match up with that of
+ * the (assumed) pthreads behaviour. This is really
+ * just a first pass at getting something compilable.
+ */
+
+void
+initCondition( Condition* pCond )
+{
+  InitializeConditionVariable(pCond);
+  return;
+}
+
+void
+closeCondition( Condition* pCond STG_UNUSED)
+{
+  return;
+}
+
+bool
+broadcastCondition ( Condition* pCond )
+{
+  WakeAllConditionVariable(pCond);
+  return true;
+}
+
+bool
+signalCondition ( Condition* pCond )
+{
+  WakeConditionVariable(pCond);
+  return true;
+}
+
+bool
+waitCondition ( Condition* pCond, Mutex* pMut )
+{
+  SleepConditionVariableSRW(pCond, pMut, INFINITE, 0);
+  return true;
+}
+
+void
+initMutex (Mutex* pMut)
+{
+  InitializeSRWLock(pMut);
+}
+void
+closeMutex (Mutex* pMut)
+{
+  (void)pMut;
 }

@@ -98,6 +98,11 @@ extern volatile StgWord recent_activity;
 #if !defined(THREADED_RTS)
 extern  StgTSO *blocked_queue_hd, *blocked_queue_tl;
 extern  StgTSO *sleeping_queue;
+
+/* IO Port activity mutex and conditional variable.  Used to wait for new work
+   from an external source if no work can be done in the RTS.  */
+extern Mutex ioport_mutex;
+extern CONDITION_VARIABLE ioport_cond;
 #endif
 
 extern bool heap_overflow;
@@ -138,7 +143,15 @@ appendToRunQueue (Capability *cap, StgTSO *tso)
         setTSOPrev(cap, tso, cap->run_queue_tl);
     }
     cap->run_queue_tl = tso;
-    cap->n_run_queue++;
+    uint32_t n = cap->n_run_queue++;
+
+    /* Signal any conditional variable if required.  */
+#if !defined(THREADED_RTS)
+    if (n == 1)
+      signalCondition (&ioport_cond);
+#else
+    (void)n;
+#endif
 }
 
 /* Push a thread on the beginning of the run queue.
