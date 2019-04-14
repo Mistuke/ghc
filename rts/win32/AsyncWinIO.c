@@ -261,6 +261,7 @@ static void notifyRtsOfFinishedCall (uint32_t num)
   outstanding_service_requests = true;
   ReleaseSRWLockExclusive (&lock);
 
+  fprintf (stderr, "I/O done %d.\n", num);
   scheduleThread (cap, tso);
 #endif
 }

@@ -89,11 +89,10 @@ import Data.Word
 import Data.Semigroup.Internal (stimesMonoid)
 import Data.OldList (deleteBy)
 import Foreign       hiding (new)
-import Foreign.C
 import Foreign.ForeignPtr.Unsafe
 import qualified GHC.Event.Array    as A
 import GHC.Base
-import GHC.Conc.Sync (forkIO, myThreadId, showThreadId,
+import GHC.Conc.Sync (forkIO, showThreadId,
                       ThreadId(..), ThreadStatus(..),
                       threadStatus, sharedCAF)
 import GHC.Event.Unique
@@ -105,13 +104,15 @@ import GHC.Real
 import GHC.Windows
 import System.IO.Unsafe     (unsafePerformIO)
 import Text.Show
+
+#if defined(DEBUG)
+import Foreign.C
 import System.Posix.Internals (c_write)
 import GHC.RTS.Flags
+import GHC.Conc.Sync (myThreadId)
+#endif
 
 import qualified GHC.Windows as Win32
-
-c_DEBUG_DUMP :: IO Bool
-c_DEBUG_DUMP = scheduler `fmap` getDebugFlags
 
 -- Note [WINIO Manager design]
 -- This file contains the Windows I//O manager. Windows's IO subsystem is by
@@ -436,10 +437,12 @@ lpoverlappedToInt :: LPOVERLAPPED -> Int
 lpoverlappedToInt lpol = fromIntegral (ptrToIntPtr lpol)
 {-# INLINE lpoverlappedToInt #-}
 
+#if defined(DEBUG)
 -- | Convert an Int representing a intptr_t to an OVERLAPPED*.
 intToLpoverlapped :: Int -> LPOVERLAPPED
 intToLpoverlapped lpol = intPtrToPtr (fromIntegral lpol)
 {-# INLINE intToLpoverlapped #-}
+#endif
 
 -- hashOverlapped :: LPOVERLAPPED -> Int
 -- hashOverlapped lpol = (lpoverlappedToInt lpol) .&. (callbackArraySize - 1)
@@ -569,6 +572,9 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
             CbPending   -> do
               -- Before we enqueue check to see if operation finished in the
               -- mean time, since caller may not have done this.
+              -- Normally we'd have to clear lpol with 0 before this call,
+              -- however the statuses we're interested in would not get to here
+              -- so we can save the memset call.
               finished <- FFI.getOverlappedResult h lpol False
               debugIO $ "== " ++ show (finished)
               status <- FFI.overlappedIOStatus lpol
@@ -579,6 +585,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
               let done_early =  status == #{const STATUS_SUCCESS}
                              || status == #{const STATUS_END_OF_FILE}
                              || lasterr == #{const ERROR_HANDLE_EOF}
+                             || lasterr == #{const ERROR_SUCCESS}
               let will_finish_sync = lasterr == #{const ERROR_IO_INCOMPLETE}
 
               debugIO $ "== >*< " ++ show (finished, done_early, h, lpol, lasterr)
@@ -598,7 +605,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                   return res
                 _                -> do
                   debugIO "request handled immediately (o/b), not queued."
-                  return $ CbDone Nothing
+                  return $ CbDone finished
             CbError err' -> signalThrow (Just err') >> return result'
             CbDone  _   -> debugIO "request handled immediately (o), not queued." >> return result'
 
@@ -643,10 +650,11 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
             case bytes of
               Just res -> completionCB 0 res
               Nothing  -> do err <- FFI.overlappedIOStatus lpol
+                             numBytes <- FFI.overlappedIONumBytes lpol
                              -- TODO: Remap between STATUS_ and ERROR_ instead
                              -- of re-interpret here. But for now, don't care.
                              let err' = fromIntegral err
-                             completionCB err' 0
+                             completionCB err' (fromIntegral numBytes)
           CbError err  -> do let err' = fromIntegral err
                              completionCB err' 0
           _            -> do error "unexpected case in `execute'"
@@ -867,6 +875,12 @@ step maxDelay mgr@Manager{..} = do
 -- completion table.  This is because some completion entries may have been
 -- created due to calls to interruptIOManager which will enqueue a faux
 -- completion.
+--
+-- NOTE: In Threaded mode things get a bit complicated the operation may have
+-- been completed even before we even got around to put the request in the
+-- waiting callback table.  These events are handled by having a separate queue
+-- for orphaned callback instances that the calling thread is supposed to check
+-- before adding something to the work queue.
 processCompletion :: Manager -> Int -> Maybe Seconds -> IO (Bool, Maybe Seconds)
 processCompletion mgr@Manager{..} n delay = do
     debugIO $ "completed completions: " ++ show n
@@ -1060,6 +1074,11 @@ unregisterHandle (Manager{..}) key@HandleKey{..} = do
 
 -- ---------------------------------------------------------------------------
 -- debugging
+
+#if defined(DEBUG)
+c_DEBUG_DUMP :: IO Bool
+c_DEBUG_DUMP = return True -- scheduler `fmap` getDebugFlags
+#endif
 
 debugIO :: String -> IO ()
 #if defined(DEBUG)

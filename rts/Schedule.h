@@ -134,6 +134,9 @@ appendToRunQueue (Capability *cap, StgTSO *tso);
 EXTERN_INLINE void
 appendToRunQueue (Capability *cap, StgTSO *tso)
 {
+#if !defined(THREADED_RTS)
+    OS_ACQUIRE_LOCK (&ioport_mutex);
+#endif
     ASSERT(tso->_link == END_TSO_QUEUE);
     if (cap->run_queue_hd == END_TSO_QUEUE) {
         cap->run_queue_hd = tso;
@@ -147,8 +150,9 @@ appendToRunQueue (Capability *cap, StgTSO *tso)
 
     /* Signal any conditional variable if required.  */
 #if !defined(THREADED_RTS)
-    if (n == 1)
+    if (n == 0)
       signalCondition (&ioport_cond);
+    OS_RELEASE_LOCK (&ioport_mutex);
 #else
     (void)n;
 #endif
@@ -163,6 +167,9 @@ pushOnRunQueue (Capability *cap, StgTSO *tso);
 EXTERN_INLINE void
 pushOnRunQueue (Capability *cap, StgTSO *tso)
 {
+#if !defined(THREADED_RTS)
+    OS_ACQUIRE_LOCK (&ioport_mutex);
+#endif
     setTSOLink(cap, tso, cap->run_queue_hd);
     tso->block_info.prev = END_TSO_QUEUE;
     if (cap->run_queue_hd != END_TSO_QUEUE) {
@@ -172,7 +179,16 @@ pushOnRunQueue (Capability *cap, StgTSO *tso)
     if (cap->run_queue_tl == END_TSO_QUEUE) {
         cap->run_queue_tl = tso;
     }
-    cap->n_run_queue++;
+    uint32_t n = cap->n_run_queue++;
+
+    /* Signal any conditional variable if required.  */
+#if !defined(THREADED_RTS)
+    if (n == 0)
+      signalCondition (&ioport_cond);
+    OS_RELEASE_LOCK (&ioport_mutex);
+#else
+    (void)n;
+#endif
 }
 
 /* Pop the first thread off the runnable queue.

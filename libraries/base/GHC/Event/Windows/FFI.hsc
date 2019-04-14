@@ -24,6 +24,7 @@ module GHC.Event.Windows.FFI (
     zeroOverlapped,
     pokeOffsetOverlapped,
     overlappedIOStatus,
+    overlappedIONumBytes,
 
     -- * Cancel pending I/O
     cancelIoEx,
@@ -178,6 +179,12 @@ overlappedIOStatus lpol = do
   -- See https://github.com/libuv/libuv/blob/b12624c13693c4d29ca84b3556eadc9e9c0936a4/src/win/winsock.c#L153
   return status
 {-# INLINE overlappedIOStatus #-}
+
+overlappedIONumBytes :: LPOVERLAPPED -> IO ULONG_PTR
+overlappedIONumBytes lpol = do
+  bytes <- #{peek OVERLAPPED, InternalHigh} lpol
+  return bytes
+{-# INLINE overlappedIONumBytes #-}
 
 foreign import WINDOWS_CCONV unsafe "windows.h PostQueuedCompletionStatus"
     c_PostQueuedCompletionStatus :: IOCP -> DWORD -> ULONG_PTR -> LPOVERLAPPED

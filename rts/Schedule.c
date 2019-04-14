@@ -306,21 +306,26 @@ schedule (Capability *initialCapability, Task *task)
 #endif
 
 #if !defined(THREADED_RTS)
+    OS_ACQUIRE_LOCK (&ioport_mutex);
     if ( emptyRunQueue(cap) ) {
   /* On the non-threaded RTS if the queue is empty and the last action was
      blocked on an I/O completion port, then just wait till we're woken up by
      the RTS with more work.  */
-  //if (t && t->why_blocked == BlockedOnIOCompletion)
+  if (t && t->why_blocked == BlockedOnIOCompletion)
     {
       // SwitchToThread ();
       // Sleep (0);
+      fprintf (stderr, "Nothing to do, sleeping...\n");
       waitCondition (&ioport_cond, &ioport_mutex);
+      fprintf (stderr, "Awoken...\n");
+      OS_RELEASE_LOCK (&ioport_mutex);
       continue;
     }
 #if !defined(mingw32_HOST_OS)
         ASSERT(sched_state >= SCHED_INTERRUPTING);
 #endif
     }
+    OS_RELEASE_LOCK (&ioport_mutex);
 #endif
 
     //
@@ -849,6 +854,9 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
             setTSOLink(cap, prev, t);
         }
         cap->n_run_queue = n;
+#if !defined(THREADED_RTS)
+        signalCondition (&ioport_cond);
+#endif
 
         IF_DEBUG(sanity, checkRunQueue(cap));
 
@@ -2532,6 +2540,10 @@ scheduleThread(Capability *cap, StgTSO *tso)
     // The thread goes at the *end* of the run-queue, to avoid possible
     // starvation of any threads already on the queue.
     appendToRunQueue(cap,tso);
+#if !defined(THREADED_RTS)
+    fprintf (stderr, "Notification sent.\n");
+    broadcastCondition (&ioport_cond);
+#endif
 }
 
 void
