@@ -20,6 +20,8 @@ module GHC.Event.Windows.FFI (
     LPOVERLAPPED,
     OVERLAPPED_ENTRY(..),
     LPOVERLAPPED_ENTRY,
+    HASKELL_OVERLAPPED,
+    LPHASKELL_OVERLAPPED,
     allocOverlapped,
     zeroOverlapped,
     pokeOffsetOverlapped,
@@ -39,19 +41,19 @@ module GHC.Event.Windows.FFI (
     queryPerformanceCounter,
     queryPerformanceFrequency,
 
-    -- ** miscellaneous
+    -- ** Miscellaneous
     throwWinErr,
     setLastError
 ) where
 
 #include <ntstatus.h>
 #include <windows.h>
+#include "winio_structs.h"
 
 ##include "windows_cconv.h"
 
 import Data.Maybe
 import Foreign
-import Foreign.C.Types
 import GHC.Base
 import GHC.Num ((*))
 import GHC.Real (fromIntegral)
@@ -204,9 +206,16 @@ postQueuedCompletionStatus iocp numBytes completionKey lpol =
 -- | Tag type for @LPOVERLAPPED@.
 data OVERLAPPED
 
+-- | Tag type for the extended version of @OVERLAPPED@ containg some book
+--   keeping information.
+data HASKELL_OVERLAPPED
+
 -- | Identifies an I/O operation.  Used as the @LPOVERLAPPED@ parameter
 -- for overlapped I/O functions (e.g. @ReadFile@, @WSASend@).
 type LPOVERLAPPED = Ptr OVERLAPPED
+
+-- | Pointer to the extended HASKELL_OVERLAPPED function.
+type LPHASKELL_OVERLAPPED = Ptr HASKELL_OVERLAPPED
 
 -- | An array of these is passed to GetQueuedCompletionStatusEx as an output
 -- argument.
@@ -220,7 +229,7 @@ type LPOVERLAPPED_ENTRY = Ptr OVERLAPPED_ENTRY
 
 instance Storable OVERLAPPED_ENTRY where
     sizeOf _    = #{size OVERLAPPED_ENTRY}
-    alignment _ = alignment (undefined :: CInt)
+    alignment _ = #{alignment OVERLAPPED_ENTRY}
 
     peek ptr = do
       lpCompletionKey <- #{peek OVERLAPPED_ENTRY, lpCompletionKey} ptr
@@ -241,18 +250,21 @@ instance Storable OVERLAPPED_ENTRY where
 -- OVERLAPPED> structure on the unmanaged heap. This also zeros the memory to
 -- prevent the values inside the struct to be incorrectlt interpreted as data
 -- payload.
+--
+-- We extend the overlapped structure with some extra book keeping information
+-- such that we don't have to do a lookup on the Haskell side.
 allocOverlapped :: Word64 -- ^ Offset/OffsetHigh
-                -> IO (ForeignPtr OVERLAPPED)
+                -> IO (ForeignPtr HASKELL_OVERLAPPED)
 allocOverlapped offset = do
-  fptr <- mallocForeignPtrBytes #{size OVERLAPPED}
+  fptr <- mallocForeignPtrBytes #{size HASKELL_OVERLAPPED}
   withForeignPtr fptr $ \lpol ->
       do zeroOverlapped lpol
-         pokeOffsetOverlapped lpol offset
+         pokeOffsetOverlapped (castPtr lpol) offset
   return fptr
 
--- | Zero-fill an OVERLAPPED structure.
-zeroOverlapped :: LPOVERLAPPED -> IO ()
-zeroOverlapped lpol = fillBytes lpol 0 #{size OVERLAPPED}
+-- | Zero-fill an HASKELL_OVERLAPPED structure.
+zeroOverlapped :: LPHASKELL_OVERLAPPED -> IO ()
+zeroOverlapped lpol = fillBytes lpol 0 #{size HASKELL_OVERLAPPED}
 {-# INLINE zeroOverlapped #-}
 
 -- | Set the offset field in an OVERLAPPED structure.

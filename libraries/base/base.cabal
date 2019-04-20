@@ -37,6 +37,7 @@ extra-source-files:
     include/ieee-flpt.h
     include/md5.h
     include/fs.h
+    include/winio_structs.h
     install-sh
 
 source-repository head

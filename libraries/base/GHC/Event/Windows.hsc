@@ -66,13 +66,16 @@ module GHC.Event.Windows (
     module GHC.Event.Windows.ConsoleEvent
 ) where
 
+-- define DEBUG 1
+
 ##include "windows_cconv.h"
 #include <windows.h>
 #include <ntstatus.h>
 #include <Rts.h>
+#include "winio_structs.h"
 
 import GHC.Event.Windows.Clock   (Clock, Seconds, getClock, getTime)
-import GHC.Event.Windows.FFI     (OVERLAPPED, LPOVERLAPPED, OVERLAPPED_ENTRY(..))
+import GHC.Event.Windows.FFI     (LPOVERLAPPED, OVERLAPPED_ENTRY(..))
 import GHC.Event.Internal.Types
 import qualified GHC.Event.Windows.FFI    as FFI
 import qualified GHC.Event.PSQ            as Q
@@ -88,8 +91,9 @@ import Data.Maybe
 import Data.Word
 import Data.Semigroup.Internal (stimesMonoid)
 import Data.OldList (deleteBy)
-import Foreign       hiding (new)
+import Foreign
 import Foreign.ForeignPtr.Unsafe
+import Foreign.Marshal.Alloc (finalizerFree)
 import qualified GHC.Event.Array    as A
 import GHC.Base
 import GHC.Conc.Sync (forkIO, showThreadId,
@@ -102,6 +106,7 @@ import GHC.IOPort
 import GHC.Num
 import GHC.Real
 import GHC.Windows
+import GHC.Ptr
 import System.IO.Unsafe     (unsafePerformIO)
 import Text.Show
 
@@ -231,6 +236,14 @@ import qualified GHC.Windows as Win32
 -- which case it has skipped the I/O queue and so can be freed immediately after
 -- reading the results from it.
 --
+-- To prevent having to lookup the Haskell payload in a shared state after the
+-- request completes we attach it as part of the I/O request by extending the
+-- `OVERLAPPED` structure.  Instead of passing an `OVERLAPPED` structure to the
+-- Windows API calls we instead pass a `HASKELL_OVERLAPPED` struct which has
+-- as the first element an `OVERLAPPED structure.  This means when a request is
+-- done all we need to do is cast the pointer back to `HASKELL_OVERLAPPED` and
+-- read the accompanying data.  This also means we don't have a global lock and
+-- so can scale much easier.
 
 -- ---------------------------------------------------------------------------
 -- I/O manager resume/suspend code
@@ -265,11 +278,40 @@ foreign import ccall safe "servicedIOEntries"
 -- | Callback type that will be called when an I/O operation completes.
 type IOCallback = CompletionCallback ()
 
+-- | Wrap the IOCallback type into a FunPtr.
+foreign import ccall "wrapper"
+  wrapIOCallback :: IOCallback -> IO (FunPtr IOCallback)
+
+-- | Unwrap a FunPtr IOCallback to a normal Haskell function.
+foreign import ccall "dynamic"
+  mkIOCallback :: FunPtr IOCallback -> IOCallback
+
 -- | Structure that the I/O managed uses to to associate callbacks with
 -- it's additional payload such as it's OVERLAPPED structure and Win32 handle
--- etc.
-data CompletionData = CompletionData {-# UNPACK #-} !(ForeignPtr OVERLAPPED)
-                                     !HANDLE !IOCallback
+-- etc.  Must be kept in sync with that in `winio_structs.h` or horrible things
+-- happen.
+data CompletionData = CompletionData { cdHandle   :: !HANDLE
+                                     , cdCallback :: !IOCallback
+                                     }
+
+instance Storable CompletionData where
+    sizeOf _    = #{size CompletionData}
+    alignment _ = #{alignment CompletionData}
+
+    peek ptr = do
+      cdHandle   <- #{peek CompletionData, cdHandle} ptr
+      cdCallback <- mkIOCallback `fmap` #{peek CompletionData, cdCallback} ptr
+      let !cd = CompletionData{..}
+      return cd
+
+    poke ptr CompletionData{..} = do
+      #{poke CompletionData, cdHandle} ptr cdHandle
+      cb <- wrapIOCallback cdCallback
+      #{poke CompletionData, cdCallback} ptr cb
+
+-- | Pointer offset in bytes to the location of hoData in HASKELL_OVERLAPPPED
+cdOffset :: Int
+cdOffset = #{const __builtin_offsetof (HASKELL_OVERLAPPED, hoData)}
 
 -- I don't expect a lot of events, so a simple linked lists should be enough.
 type EventElements = [(Event, HandleData)]
@@ -295,8 +337,6 @@ data Manager = Manager
     , mgrClock        ::                !Clock
     , mgrUniqueSource :: {-# UNPACK #-} !UniqueSource
     , mgrTimeouts     :: {-# UNPACK #-} !(IORef TimeoutQueue)
-    , mgrCallbacks    :: {-# UNPACK #-}
-                         !(MVar (IT.IntTable CompletionData))
     , mgrEvntHandlers :: {-# UNPACK #-}
                          !(MVar (IT.IntTable EventData))
     , mgrOverlappedEntries
@@ -311,8 +351,8 @@ data Manager = Manager
 -- NOTE: This needs to finish without making any calls to anything requiring the
 -- I/O manager otherwise we'll get into some weird synchronization issues.
 -- Essentially this means avoid using long running operations here.
-new :: IO Manager
-new = do
+newManager :: IO Manager
+newManager = do
     debugIO "Starting io-manager..."
     mgrIOCP         <- FFI.newIOCP
     when (not threaded) $
@@ -321,7 +361,6 @@ new = do
     mgrClock        <- getClock
     mgrUniqueSource <- newSource
     mgrTimeouts     <- newIORef Q.empty
-    mgrCallbacks    <- newMVar =<< IT.new callbackArraySize
     mgrOverlappedEntries <- A.new 64
     mgrEvntHandlers <- newMVar =<< IT.new callbackArraySize
     let !mgr = Manager{..}
@@ -407,7 +446,7 @@ getSystemManager = readMVar managerRef
 
 -- | Mutable reference to the IO manager
 managerRef :: MVar Manager
-managerRef = unsafePerformIO $ new >>= newMVar
+managerRef = unsafePerformIO $ newManager >>= newMVar
 {-# NOINLINE managerRef #-}
 
 -- | Interrupts an I/O manager Wait.  This will force the I/O manager to process
@@ -431,28 +470,6 @@ interruptSystemManager = do
 -- saturated.
 callbackArraySize :: Int
 callbackArraySize = 32
-
--- | Convert an OVERLAPPED* to an Int representing a intptr_t
-lpoverlappedToInt :: LPOVERLAPPED -> Int
-lpoverlappedToInt lpol = fromIntegral (ptrToIntPtr lpol)
-{-# INLINE lpoverlappedToInt #-}
-
-#if defined(DEBUG)
--- | Convert an Int representing a intptr_t to an OVERLAPPED*.
-intToLpoverlapped :: Int -> LPOVERLAPPED
-intToLpoverlapped lpol = intPtrToPtr (fromIntegral lpol)
-{-# INLINE intToLpoverlapped #-}
-#endif
-
--- hashOverlapped :: LPOVERLAPPED -> Int
--- hashOverlapped lpol = (lpoverlappedToInt lpol) .&. (callbackArraySize - 1)
--- {-# INLINE hashOverlapped #-}
-
--- | Accessor for the callback structure inside the I/O Manager
-callbackTableVar :: Manager -> MVar (IT.IntTable CompletionData)
-callbackTableVar = mgrCallbacks
-{-# INLINE callbackTableVar #-}
-
 
 -----------------------------------------------------------------------
 -- Time utilities
@@ -534,7 +551,23 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                                     IOSuccess val -> signalReturn val
                                     IOFailed  err -> signalThrow err
         fptr <- FFI.allocOverlapped offset
-        let lpol = unsafeForeignPtrToPtr fptr
+        let hs_lpol = unsafeForeignPtrToPtr fptr
+        -- Create the completion record and store it.
+        -- We only need the record when we enqueue a request, however if we
+        -- delay creating it then we will run into a race condition where the
+        -- driver may have finished servicing the request before we were ready
+        -- and so the request won't have the book keeping information to know
+        -- what to do.  So because of that we always create the payload,  If we
+        -- need it ok, if we don't that's no problem.  This approach prevents
+        -- expensive lookups in hashtables.
+        cdDataPtr <- newForeignPtr finalizerFree =<< new (CompletionData h completionCB')
+        let cdData = unsafeForeignPtrToPtr cdDataPtr
+        let ptr_lpol = hs_lpol `plusPtr` cdOffset
+        poke ptr_lpol cdData
+        let lpol = castPtr hs_lpol
+        debugIO $ "hs_lpol:" ++ show hs_lpol
+                ++ " cdData:" ++ show cdData
+                ++ " ptr_lpol:" ++ show ptr_lpol
 
         execute <- startCB lpol `onException`
                         (CbError `fmap` Win32.getLastError) >>= \result -> do
@@ -591,9 +624,6 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
               debugIO $ "== >*< " ++ show (finished, done_early, h, lpol, lasterr)
               case (finished, done_early, will_finish_sync) of
                 (Nothing, False, False) -> do
-                    _ <- withMVar (callbackTableVar mgr) $
-                            IT.insertWith (flip const) (lpoverlappedToInt lpol)
-                                          (CompletionData fptr h completionCB')
                     reqs <- addRequest
                     debugIO $ "+1.. " ++ show reqs ++ " requests queued. | " ++ show lpol
                     wakeupIOManager
@@ -617,15 +647,14 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                         -- the pointer.
                         debugIO $ "## Waiting for cancellation record... "
                         _ <- FFI.getOverlappedResult h lpol True
-                        mCD <- withMVar (callbackTableVar mgr) $
-                                IT.delete (lpoverlappedToInt lpol)
-                        case mCD of
-                          Nothing                              -> return ()
-                          Just (CompletionData _fptr _hwnd cb) -> do
-                            reqs <- removeRequest
-                            debugIO $ "-1.. " ++ show reqs ++ " requests queued after error."
-                            status <- fmap fromIntegral getLastError
-                            cb status 0
+                        let oldDataPtr = exchangePtr ptr_lpol nullPtr
+                        -- Check if we have to free and cleanup pointer
+                        when (oldDataPtr == cdData) $
+                          do free oldDataPtr
+                             reqs <- removeRequest
+                             debugIO $ "-1.. " ++ show reqs ++ " requests queued after error."
+                             status <- fmap fromIntegral getLastError
+                             completionCB' status 0
                         when (not threaded) $
                           do num_remaining <- outstandingRequests
                              servicedIOEntries num_remaining
@@ -642,6 +671,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
         case execute of
           CbPending    -> runner
           CbDone rdata -> do
+            free cdData
             debugIO $ dbg $ ":: done " ++ show lpol ++ " - " ++ show rdata
             bytes <- if isJust rdata
                         then return rdata
@@ -655,9 +685,13 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                              -- of re-interpret here. But for now, don't care.
                              let err' = fromIntegral err
                              completionCB err' (fromIntegral numBytes)
-          CbError err  -> do let err' = fromIntegral err
-                             completionCB err' 0
-          _            -> do error "unexpected case in `execute'"
+          CbError err  -> do
+            free cdData
+            let err' = fromIntegral err
+            completionCB err' 0
+          _            -> do
+            free cdData
+            error "unexpected case in `execute'"
       where spinWaitComplete fhndl lpol = do
               -- Wait for the request to finish as it was running before and
               -- The I/O manager won't enqueue it due to our optimizations to
@@ -882,35 +916,34 @@ step maxDelay mgr@Manager{..} = do
 -- for orphaned callback instances that the calling thread is supposed to check
 -- before adding something to the work queue.
 processCompletion :: Manager -> Int -> Maybe Seconds -> IO (Bool, Maybe Seconds)
-processCompletion mgr@Manager{..} n delay = do
-    debugIO $ "completed completions: " ++ show n
-
-    -- Print some debug info
-    dumpCompletions mgr
-
+processCompletion Manager{..} n delay = do
     -- If some completions are done, we need to process them and call their
     -- callbacks.  We then remove the callbacks from the bookkeeping and resize
     -- the index if required.
     when (n > 0) $ do
       forM_ [0..(n-1)] $ \idx -> do
         oe <- A.unsafeRead mgrOverlappedEntries idx
-        debugIO $ " $ checking " ++ show (lpOverlapped oe)
+        let lpol     = lpOverlapped oe
+        let hs_lpol  = castPtr lpol :: Ptr FFI.HASKELL_OVERLAPPED
+        let ptr_lpol = castPtr (hs_lpol `plusPtr` cdOffset) :: Ptr (Ptr CompletionData)
+        cdDataCheck <- peek ptr_lpol
+        debugIO $ " $ checking " ++ show lpol
+                  ++ " -en ptr_lpol: " ++ show ptr_lpol
+                  ++ " offset: " ++ show cdOffset
+                  ++ " cdData: " ++ show cdDataCheck
                   ++ " at idx " ++ show idx
-        mCD <- withMVar (callbackTableVar mgr) $ \tbl ->
-                 IT.delete (lpoverlappedToInt (lpOverlapped oe)) tbl
-        case mCD of
-          Nothing                        -> return ()
-          Just (CompletionData _fptr _hwnd cb) -> do
-            reqs <- removeRequest
-            debugIO $ "-1.. " ++ show reqs ++ " requests queued."
-            -- It's safe to block here since the operation completed it will
-            -- return immediately in most cases.
-            -- _ <- FFI.getOverlappedResult _hwnd (lpOverlapped oe) True
-            status <- FFI.overlappedIOStatus (lpOverlapped oe)
-            -- TODO: Remap between STATUS_ and ERROR_ instead
-            -- of re-interpret here. But for now, don't care.
-            let status' = fromIntegral status
-            cb status' (dwNumberOfBytesTransferred oe)
+        let oldDataPtr = exchangePtr ptr_lpol nullPtr
+        when (oldDataPtr /= nullPtr) $
+          do payload <- peek oldDataPtr
+             let (CompletionData _hwnd cb) = payload
+             free oldDataPtr
+             reqs <- removeRequest
+             debugIO $ "-1.. " ++ show reqs ++ " requests queued."
+             status <- FFI.overlappedIOStatus (lpOverlapped oe)
+             -- TODO: Remap between STATUS_ and ERROR_ instead
+             -- of re-interpret here. But for now, don't care.
+             let status' = fromIntegral status
+             cb status' (dwNumberOfBytesTransferred oe)
 
       -- clear the array so we don't erroneously interpret the output, in
       -- certain circumstances like lockFileEx the code could return 1 entry
@@ -928,8 +961,6 @@ processCompletion mgr@Manager{..} n delay = do
     -- if we have a pending delay.
     reqs <- outstandingRequests
     debugIO $ "outstanding requests: " ++ show reqs
-    -- Print some debug info
-    dumpCompletions mgr
     let more = reqs > 0
     debugIO $ "has more: " ++ show more ++ " - removed: " ++  show n
     return (more || (isJust delay && threaded), delay)
@@ -949,8 +980,6 @@ processRemoteCompletion = do
     mngr <- getSystemManager
     let arr = mgrOverlappedEntries mngr
     A.unsafeSplat arr entries n
-    -- Debug line to see if we loaded the ARR correctly.
-    dumpCompletions mngr
     _ <- processCompletion mngr n Nothing
     num_left <- outstandingRequests
     -- This call will unblock the non-threaded I/O manager.  After this it is no
@@ -1094,23 +1123,4 @@ debugIO s
           else do return ()
 #else
 debugIO _ = return ()
-#endif
-
--- | Debug code to print out the state of all non-finished handles.
-dumpCompletions :: Manager -> IO ()
-#if defined(DEBUG)
-dumpCompletions mgr = c_DEBUG_DUMP >>= \debug -> when debug $
-  do len <- withMVar (callbackTableVar mgr) IT.size
-     debugIO $ ">> dumping " ++ show len ++ " outstanding completions.. "
-     _ <- withMVar (callbackTableVar mgr) $ \cb ->
-        IT.iterate cb $ \key (CompletionData _ _hwnd _) -> (do
-            finish <- FFI.getOverlappedResult _hwnd (intToLpoverlapped key) False
-            err    <- getLastError
-            debugIO $ " >    "  ++ show finish
-                      ++ "\t["  ++ show (intToLpoverlapped key) ++ "]"
-                      ++ "\t" ++ show _hwnd
-                      ++ "\t"   ++ show err)
-     debugIO $ ">> dumping done. "
-#else
-dumpCompletions _ = return ()
 #endif

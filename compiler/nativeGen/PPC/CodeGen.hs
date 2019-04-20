@@ -1593,7 +1593,7 @@ genCCall'
     -> [CmmActual]        -- arguments (of mixed type)
     -> NatM InstrBlock
 
-{- 
+{-
     PowerPC Linux uses the System V Release 4 Calling Convention
     for PowerPC. It is described in the
     "System V Application Binary Interface PowerPC Processor Supplement".
@@ -2014,6 +2014,7 @@ genCCall' dflags gcp target dest_regs args
                     MO_Ctz _     -> unsupported
                     MO_AtomicRMW {} -> unsupported
                     MO_Cmpxchg w -> (fsLit $ cmpxchgLabel w, False)
+                    MO_Xchg      -> (fsLit $ xchgLabel, False)
                     MO_AtomicRead _  -> unsupported
                     MO_AtomicWrite _ -> unsupported
 
