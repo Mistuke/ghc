@@ -93,7 +93,6 @@ import Data.Semigroup.Internal (stimesMonoid)
 import Data.OldList (deleteBy)
 import Foreign
 import Foreign.ForeignPtr.Unsafe
-import Foreign.Marshal.Alloc (finalizerFree)
 import qualified GHC.Event.Array    as A
 import GHC.Base
 import GHC.Conc.Sync (forkIO, showThreadId,
