@@ -108,11 +108,11 @@ import GHC.Windows
 import GHC.Ptr
 import System.IO.Unsafe     (unsafePerformIO)
 import Text.Show
+import GHC.RTS.Flags
 
 #if defined(DEBUG)
 import Foreign.C
 import System.Posix.Internals (c_write)
-import GHC.RTS.Flags
 import GHC.Conc.Sync (myThreadId)
 #endif
 
@@ -344,6 +344,7 @@ data Manager = Manager
                          !(MVar (IT.IntTable EventData))
     , mgrOverlappedEntries
                       :: {-#UNPACK #-} !(A.Array OVERLAPPED_ENTRY)
+    , mgrNumWorkers   :: Int
     }
 
 -- | Create a new I/O manager. In the Threaded I/O manager this call doesn't
@@ -366,23 +367,23 @@ newManager = do
     mgrTimeouts     <- newIORef Q.empty
     mgrOverlappedEntries <- A.new 64
     mgrEvntHandlers <- newMVar =<< IT.new callbackArraySize
+    mgrNumWorkers   <- (fromIntegral . numIoWorkerThreads) `fmap` getMiscFlags
+
     let !mgr = Manager{..}
     return mgr
 
 {-# INLINE startIOManagerThread #-}
 -- | Starts a new I/O manager thread.
--- For the threaded runtime it creates a new OS thread which stays alive until
--- it is instructed to die. For the non-threaded runtime it creates a Haskell
--- thread which only does one step and terminates.
+-- For the threaded runtime it creates a pool of OS threads which stays alive
+-- until they are instructed to die. For the non-threaded runtime we have a
+-- single worker thread in the C runtime.
 startIOManagerThread :: IO () -> IO ()
 startIOManagerThread loop = do
   modifyMVar_ ioManagerThread $ \old -> do
-    let create = do debugIO "spawning thread.."
-                    t <- if threaded
-                            then forkOS loop
-                            else forkIO loop
+    let create = do debugIO "spawning worker threads.."
+                    t <- forkOS loop
                     setStatus WinIORunning
-                    debugIO $ "created io-manager thread."
+                    debugIO $ "created io-manager threads."
                     return (Just t)
     case old of
       Nothing -> create

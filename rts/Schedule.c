@@ -106,15 +106,6 @@ volatile StgWord sched_state = SCHED_RUNNING;
 Mutex sched_mutex;
 #endif
 
-/*
- * This mutex blocks the scheduler in the !THREADED_RTS runtime when no work
- * can be done and one of the capabilities are blocked on an IOPort.
- */
-#if !defined(THREADED_RTS)
-Mutex ioport_mutex;
-CONDITION_VARIABLE ioport_cond;
-#endif
-
 #if !defined(mingw32_HOST_OS)
 #define FORKPROCESS_PRIMOP_SUPPORTED
 #endif
@@ -306,7 +297,6 @@ schedule (Capability *initialCapability, Task *task)
 #endif
 
 #if !defined(THREADED_RTS)
-    OS_ACQUIRE_LOCK (&ioport_mutex);
     if ( emptyRunQueue(cap) ) {
   /* On the non-threaded RTS if the queue is empty and the last action was
      blocked on an I/O completion port, then just wait till we're woken up by
@@ -315,17 +305,15 @@ schedule (Capability *initialCapability, Task *task)
     {
       // SwitchToThread ();
       // Sleep (0);
-      fprintf (stderr, "Nothing to do, sleeping...\n");
-      waitCondition (&ioport_cond, &ioport_mutex);
-      fprintf (stderr, "Awoken...\n");
-      OS_RELEASE_LOCK (&ioport_mutex);
+#if defined(i386_TARGET_ARCH) || defined(x86_64_TARGET_ARCH)
+      __asm__ __volatile__ ("rep; nop");
+#endif
       continue;
     }
 #if !defined(mingw32_HOST_OS)
         ASSERT(sched_state >= SCHED_INTERRUPTING);
 #endif
     }
-    OS_RELEASE_LOCK (&ioport_mutex);
 #endif
 
     //
@@ -854,9 +842,6 @@ schedulePushWork(Capability *cap USED_IF_THREADS,
             setTSOLink(cap, prev, t);
         }
         cap->n_run_queue = n;
-#if !defined(THREADED_RTS)
-        signalCondition (&ioport_cond);
-#endif
 
         IF_DEBUG(sanity, checkRunQueue(cap));
 
@@ -2016,8 +2001,6 @@ forkProcess(HsStablePtr *entry
 
 #if defined(THREADED_RTS)
     ACQUIRE_LOCK(&all_tasks_mutex);
-#else
-    OS_ACQUIRE_LOCK(&ioport_mutex);
 #endif
 
     stopTimer(); // See #4074
@@ -2041,8 +2024,6 @@ forkProcess(HsStablePtr *entry
 #if defined(THREADED_RTS)
         /* N.B. releaseCapability_ below may need to take all_tasks_mutex */
         RELEASE_LOCK(&all_tasks_mutex);
-#else
-        OS_RELEASE_LOCK(&ioport_mutex);
 #endif
 
         for (i=0; i < n_capabilities; i++) {
@@ -2073,8 +2054,6 @@ forkProcess(HsStablePtr *entry
         }
 
         initMutex(&all_tasks_mutex);
-#else
-        initMutex(&ioport_mutex);
 #endif
 
 #if defined(TRACING)
@@ -2540,10 +2519,6 @@ scheduleThread(Capability *cap, StgTSO *tso)
     // The thread goes at the *end* of the run-queue, to avoid possible
     // starvation of any threads already on the queue.
     appendToRunQueue(cap,tso);
-#if !defined(THREADED_RTS)
-    fprintf (stderr, "Notification sent.\n");
-    broadcastCondition (&ioport_cond);
-#endif
 }
 
 void
@@ -2673,9 +2648,6 @@ initScheduler(void)
    * the scheduler. */
 #if defined(THREADED_RTS)
   initMutex(&sched_mutex);
-#else
-  initMutex(&ioport_mutex);
-  initCondition(&ioport_cond);
 #endif
 
   ACQUIRE_LOCK(&sched_mutex);
@@ -2746,9 +2718,6 @@ freeScheduler( void )
     RELEASE_LOCK(&sched_mutex);
 #if defined(THREADED_RTS)
     closeMutex(&sched_mutex);
-#else
-    closeCondition(&ioport_cond);
-    closeMutex(&ioport_mutex);
 #endif
 }
 

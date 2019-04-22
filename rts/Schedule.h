@@ -98,11 +98,6 @@ extern volatile StgWord recent_activity;
 #if !defined(THREADED_RTS)
 extern  StgTSO *blocked_queue_hd, *blocked_queue_tl;
 extern  StgTSO *sleeping_queue;
-
-/* IO Port activity mutex and conditional variable.  Used to wait for new work
-   from an external source if no work can be done in the RTS.  */
-extern Mutex ioport_mutex;
-extern CONDITION_VARIABLE ioport_cond;
 #endif
 
 extern bool heap_overflow;
@@ -134,9 +129,6 @@ appendToRunQueue (Capability *cap, StgTSO *tso);
 EXTERN_INLINE void
 appendToRunQueue (Capability *cap, StgTSO *tso)
 {
-#if !defined(THREADED_RTS)
-    OS_ACQUIRE_LOCK (&ioport_mutex);
-#endif
     ASSERT(tso->_link == END_TSO_QUEUE);
     if (cap->run_queue_hd == END_TSO_QUEUE) {
         cap->run_queue_hd = tso;
@@ -146,16 +138,7 @@ appendToRunQueue (Capability *cap, StgTSO *tso)
         setTSOPrev(cap, tso, cap->run_queue_tl);
     }
     cap->run_queue_tl = tso;
-    uint32_t n = cap->n_run_queue++;
-
-    /* Signal any conditional variable if required.  */
-#if !defined(THREADED_RTS)
-    if (n == 0)
-      signalCondition (&ioport_cond);
-    OS_RELEASE_LOCK (&ioport_mutex);
-#else
-    (void)n;
-#endif
+    cap->n_run_queue++;
 }
 
 /* Push a thread on the beginning of the run queue.
@@ -167,9 +150,6 @@ pushOnRunQueue (Capability *cap, StgTSO *tso);
 EXTERN_INLINE void
 pushOnRunQueue (Capability *cap, StgTSO *tso)
 {
-#if !defined(THREADED_RTS)
-    OS_ACQUIRE_LOCK (&ioport_mutex);
-#endif
     setTSOLink(cap, tso, cap->run_queue_hd);
     tso->block_info.prev = END_TSO_QUEUE;
     if (cap->run_queue_hd != END_TSO_QUEUE) {
@@ -179,16 +159,7 @@ pushOnRunQueue (Capability *cap, StgTSO *tso)
     if (cap->run_queue_tl == END_TSO_QUEUE) {
         cap->run_queue_tl = tso;
     }
-    uint32_t n = cap->n_run_queue++;
-
-    /* Signal any conditional variable if required.  */
-#if !defined(THREADED_RTS)
-    if (n == 0)
-      signalCondition (&ioport_cond);
-    OS_RELEASE_LOCK (&ioport_mutex);
-#else
-    (void)n;
-#endif
+    cap->n_run_queue++;
 }
 
 /* Pop the first thread off the runnable queue.
