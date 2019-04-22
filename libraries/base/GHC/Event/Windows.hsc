@@ -701,10 +701,13 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
               -- The I/O manager won't enqueue it due to our optimizations to
               -- prevent context switches in such cases.
               res <- FFI.getOverlappedResult fhndl lpol False
+              status <- FFI.overlappedIOStatus lpol
               case res of
                 -- Uses an inline definition of threadDelay to prevent an import
                 -- cycle.
-                Nothing ->
+                Nothing | status == #{const STATUS_END_OF_FILE} ->
+                  return $ CbDone res
+                        | otherwise ->
                   do m <- newEmptyIOPort
                      let secs = 100 / 1000000.0
                      reg <- registerTimeout mgr secs $
