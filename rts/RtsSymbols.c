@@ -25,6 +25,7 @@
 #include <io.h>
 #include <windows.h>
 #include <shfolder.h> /* SHGetFolderPathW */
+#include "win32/AsyncWinIO.h"
 #endif
 
 #if defined(openbsd_HOST_OS)
@@ -306,6 +307,10 @@
    SymI_HasProto(unblockUserSignals)
 #else
 #define RTS_USER_SIGNALS_SYMBOLS        \
+   SymI_HasProto(registerNewIOCPHandle) \
+   SymI_HasProto(getOverlappedEntries)  \
+   SymI_HasProto(servicedIOEntries)     \
+   SymI_HasProto(registerAlertableWait) \
    SymI_HasProto(ioManagerWakeup)       \
    SymI_HasProto(sendIOManagerEvent)    \
    SymI_HasProto(readIOManagerEvent)    \
@@ -673,6 +678,9 @@
       SymI_HasProto(stg_newMVarzh)                                      \
       SymI_HasProto(stg_newMutVarzh)                                    \
       SymI_HasProto(stg_newTVarzh)                                      \
+      SymI_HasProto(stg_readIOPortzh)                                   \
+      SymI_HasProto(stg_writeIOPortzh)                                  \
+      SymI_HasProto(stg_newIOPortzh)                                    \
       SymI_HasProto(stg_noDuplicatezh)                                  \
       SymI_HasProto(stg_atomicModifyMutVar2zh)                          \
       SymI_HasProto(stg_atomicModifyMutVarzuzh)                         \

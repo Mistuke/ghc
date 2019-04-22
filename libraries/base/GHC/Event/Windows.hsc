@@ -313,6 +313,10 @@ instance Storable CompletionData where
 cdOffset :: Int
 cdOffset = #{const __builtin_offsetof (HASKELL_OVERLAPPED, hoData)}
 
+-- | Terminator symbol for IOCP request
+nullReq :: Ptr (Ptr a)
+nullReq = castPtr $ unsafePerformIO $ new $ (nullPtr :: Ptr ())
+
 -- I don't expect a lot of events, so a simple linked lists should be enough.
 type EventElements = [(Event, HandleData)]
 data EventData = EventData { evtTopLevel :: !Event, evtElems :: !EventElements }
@@ -647,7 +651,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                         -- the pointer.
                         debugIO $ "## Waiting for cancellation record... "
                         _ <- FFI.getOverlappedResult h lpol True
-                        let oldDataPtr = exchangePtr ptr_lpol nullPtr
+                        let oldDataPtr = exchangePtr ptr_lpol nullReq
                         -- Check if we have to free and cleanup pointer
                         when (oldDataPtr == cdData) $
                           do free oldDataPtr
@@ -924,26 +928,27 @@ processCompletion Manager{..} n delay = do
       forM_ [0..(n-1)] $ \idx -> do
         oe <- A.unsafeRead mgrOverlappedEntries idx
         let lpol     = lpOverlapped oe
-        let hs_lpol  = castPtr lpol :: Ptr FFI.HASKELL_OVERLAPPED
-        let ptr_lpol = castPtr (hs_lpol `plusPtr` cdOffset) :: Ptr (Ptr CompletionData)
-        cdDataCheck <- peek ptr_lpol
-        debugIO $ " $ checking " ++ show lpol
-                  ++ " -en ptr_lpol: " ++ show ptr_lpol
-                  ++ " offset: " ++ show cdOffset
-                  ++ " cdData: " ++ show cdDataCheck
-                  ++ " at idx " ++ show idx
-        let oldDataPtr = exchangePtr ptr_lpol nullPtr
-        when (oldDataPtr /= nullPtr) $
-          do payload <- peek oldDataPtr
-             let (CompletionData _hwnd cb) = payload
-             free oldDataPtr
-             reqs <- removeRequest
-             debugIO $ "-1.. " ++ show reqs ++ " requests queued."
-             status <- FFI.overlappedIOStatus (lpOverlapped oe)
-             -- TODO: Remap between STATUS_ and ERROR_ instead
-             -- of re-interpret here. But for now, don't care.
-             let status' = fromIntegral status
-             cb status' (dwNumberOfBytesTransferred oe)
+        when (lpol /= nullPtr) $ do
+          let hs_lpol  = castPtr lpol :: Ptr FFI.HASKELL_OVERLAPPED
+          let ptr_lpol = castPtr (hs_lpol `plusPtr` cdOffset) :: Ptr (Ptr CompletionData)
+          cdDataCheck <- peek ptr_lpol
+          debugIO $ " $ checking " ++ show lpol
+                    ++ " -en ptr_lpol: " ++ show ptr_lpol
+                    ++ " offset: " ++ show cdOffset
+                    ++ " cdData: " ++ show cdDataCheck
+                    ++ " at idx " ++ show idx
+          let oldDataPtr = exchangePtr ptr_lpol nullReq
+          when (oldDataPtr /= nullReq) $
+            do payload <- peek oldDataPtr
+               let (CompletionData _hwnd cb) = payload
+               free oldDataPtr
+               reqs <- removeRequest
+               debugIO $ "-1.. " ++ show reqs ++ " requests queued."
+               status <- FFI.overlappedIOStatus (lpOverlapped oe)
+               -- TODO: Remap between STATUS_ and ERROR_ instead
+               -- of re-interpret here. But for now, don't care.
+               let status' = fromIntegral status
+               cb status' (dwNumberOfBytesTransferred oe)
 
       -- clear the array so we don't erroneously interpret the output, in
       -- certain circumstances like lockFileEx the code could return 1 entry
