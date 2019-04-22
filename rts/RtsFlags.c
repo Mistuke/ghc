@@ -239,7 +239,11 @@ void initRtsFlagsDefaults(void)
     RtsFlags.MiscFlags.internalCounters        = false;
     RtsFlags.MiscFlags.linkerAlwaysPic         = DEFAULT_LINKER_ALWAYS_PIC;
     RtsFlags.MiscFlags.linkerMemBase           = 0;
+#if defined(DEFAULT_NATIVE_IO_MANAGER)
+    RtsFlags.MiscFlags.ioManager               = IO_MNGR_NATIVE;
+#else
     RtsFlags.MiscFlags.ioManager               = IO_MNGR_POSIX;
+#endif
 #if defined(THREADED_RTS) && defined(mingw32_HOST_OS)
     RtsFlags.MiscFlags.numIoWorkerThreads      = getNumberOfProcessors();
 #else
