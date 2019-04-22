@@ -114,6 +114,21 @@ devel2WerrorFlavour :: Flavour
 devel2WerrorFlavour = werror (developmentFlavour Stage2)
 ```
 
+### Linking GHC against the debugged RTS
+
+What was previously achieved by having `GhcDebugged=YES` in `mk/build.mk` can
+be done by defining a custom flavour in the user settings file, one that
+sets the `ghcDebugged` field of `Flavour` to `True`, e.g:
+
+``` haskell
+quickDebug :: Flavour
+quickDebug = quickFlavour { name = "dbg", ghcDebugged = True }
+```
+
+Running `build --flavour=dbg` will build a `quick`-flavoured GHC and link
+GHC, iserv, iserv-proxy and remote-iserv against the debugged RTS, by passing
+`-debug` to the commands that link those executables.
+
 ## Packages
 
 Users can add and remove packages from particular build stages. As an example,
@@ -271,6 +286,32 @@ all of the documentation targets:
 You can pass several `--docs=...` flags, Hadrian will combine
 their effects.
 
+## Split sections
+
+You can build all or just a few packages with
+[`-split-sections`][split-sections] by tweaking an existing
+flavour (whichever matches your needs) using
+`splitSections` or `splitSectionsIf`:
+
+``` haskell
+splitSections :: Flavour -> Flavour
+splitSectionsIf :: (Package -> Bool) -> Flavour -> Flavour
+```
+
+For example, you can easily start with the `quick` flavour and
+additionally build all Haskell packages with `-split-sections` by defining a new
+flavour as
+`(splitSectionsIf (const True) quickFlavour) { name = "quick-split" }`.
+You can then start a build with this flavour with `build --flavour=quick-split`.
+
+Changing `(const True)` to `(== base)` would only build `base` with
+`-split-sections`, not all Haskell packages as with `quick-split` above.
+
+`splitSections` is simply `splitSectionsIf` applied to the predicate
+`(/=ghc)`, i.e it builds all Haskell packages but the `ghc`
+library with `-split-sections` (it is usually not worth using that
+option with the `ghc` library).
+
 ## Miscellaneous
 
 Hadrian prints various progress info during the build. You can change the colours
@@ -295,3 +336,5 @@ Dull Blue
 Vivid Cyan
 Extended "203"
 ```
+
+[split-sections]: https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/phases.html#ghc-flag--split-sections

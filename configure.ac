@@ -13,7 +13,7 @@ dnl
 # see what flags are available. (Better yet, read the documentation!)
 #
 
-AC_INIT([The Glorious Glasgow Haskell Compilation System], [8.9], [glasgow-haskell-bugs@haskell.org], [ghc-AC_PACKAGE_VERSION])
+AC_INIT([The Glorious Glasgow Haskell Compilation System], [8.9.0], [glasgow-haskell-bugs@haskell.org], [ghc-AC_PACKAGE_VERSION])
 
 # Set this to YES for a released version, otherwise NO
 : ${RELEASE=NO}
@@ -541,6 +541,7 @@ FP_SET_CFLAGS_C99([CC],[CONF_CC_OPTS_STAGE2],[CONF_CPP_OPTS_STAGE2])
 
 dnl ** Which ld to use
 dnl --------------------------------------------------------------
+AC_ARG_VAR(LD,[Use as the path to ld. See also --disable-ld-override.])
 FIND_LD([$target],[GccUseLdOpt])
 CONF_GCC_LINKER_OPTS_STAGE1="$CONF_GCC_LINKER_OPTS_STAGE1 $GccUseLdOpt"
 CONF_GCC_LINKER_OPTS_STAGE2="$CONF_GCC_LINKER_OPTS_STAGE2 $GccUseLdOpt"
@@ -1391,5 +1392,5 @@ To make changes to the default build configuration, copy the file
 mk/build.mk.sample to mk/build.mk, and edit the settings in there.
 
 For more information on how to configure your GHC build, see
-   http://ghc.haskell.org/trac/ghc/wiki/Building
+   https://gitlab.haskell.org/ghc/ghc/wikis/building
 "]

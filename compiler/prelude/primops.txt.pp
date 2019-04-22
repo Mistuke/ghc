@@ -5,7 +5,7 @@
 -- Primitive Operations and Types
 --
 -- For more information on PrimOps, see
---   http://ghc.haskell.org/trac/ghc/wiki/Commentary/PrimOps
+--   https://gitlab.haskell.org/ghc/ghc/wikis/commentary/prim-ops
 --
 -----------------------------------------------------------------------
 
@@ -18,7 +18,7 @@
 -- Information on how PrimOps are implemented and the steps necessary to
 -- add a new one can be found in the Commentary:
 --
---  http://ghc.haskell.org/trac/ghc/wiki/Commentary/PrimOps
+--  https://gitlab.haskell.org/ghc/ghc/wikis/commentary/prim-ops
 --
 -- Note in particular that Haskell block-style comments are not recognized
 -- here, so stick to '--' (even for Notes spanning multiple lines).
@@ -655,6 +655,17 @@ primop   BSwap64Op   "byteSwap64#"   Monadic   WORD64 -> WORD64
 primop   BSwapOp     "byteSwap#"     Monadic   Word# -> Word#
     {Swap bytes in a word.}
 
+primop   BRev8Op    "bitReverse8#"   Monadic   Word# -> Word#
+    {Reverse the order of the bits in a 8-bit word.}
+primop   BRev16Op   "bitReverse16#"   Monadic   Word# -> Word#
+    {Reverse the order of the bits in a 16-bit word.}
+primop   BRev32Op   "bitReverse32#"   Monadic   Word# -> Word#
+    {Reverse the order of the bits in a 32-bit word.}
+primop   BRev64Op   "bitReverse64#"   Monadic   WORD64 -> WORD64
+    {Reverse the order of the bits in a 64-bit word.}
+primop   BRevOp     "bitReverse#"     Monadic   Word# -> Word#
+    {Reverse the order of the bits in a word.}
+
 ------------------------------------------------------------------------
 section "Narrowings"
         {Explicit narrowing of native-sized ints or words.}
@@ -1122,7 +1133,18 @@ primop  ThawArrayOp "thawArray#" GenPrimOp
 
 primop CasArrayOp  "casArray#" GenPrimOp
    MutableArray# s a -> Int# -> a -> a -> State# s -> (# State# s, Int#, a #)
-   {Unsafe, machine-level atomic compare and swap on an element within an Array.}
+   {Given an array, an offset, the expected old value, and
+    the new value, perform an atomic compare and swap (i.e. write the new
+    value if the current value and the old value are the same pointer).
+    Returns 0 if the swap succeeds and 1 if it fails. Additionally, returns
+    the element at the offset after the operation completes. This means that
+    on a success the new value is returned, and on a failure the actual old
+    value (not the expected one) is returned. Implies a full memory barrier.
+    The use of a pointer equality on a lifted value makes this function harder
+    to use correctly than {\tt casIntArray\#}. All of the difficulties
+    of using {\tt reallyUnsafePtrEquality\#} correctly apply to
+    {\tt casArray\#} as well.
+   }
    with
    out_of_line = True
    has_side_effects = True
@@ -1287,7 +1309,8 @@ primop  ThawSmallArrayOp "thawSmallArray#" GenPrimOp
 
 primop CasSmallArrayOp  "casSmallArray#" GenPrimOp
    SmallMutableArray# s a -> Int# -> a -> a -> State# s -> (# State# s, Int#, a #)
-   {Unsafe, machine-level atomic compare and swap on an element within an array.}
+   {Unsafe, machine-level atomic compare and swap on an element within an array.
+    See the documentation of {\tt casArray\#}.}
    with
    out_of_line = True
    has_side_effects = True
@@ -1551,13 +1574,13 @@ primop  ReadByteArrayOp_WideChar "readWideCharArray#" GenPrimOp
 
 primop  ReadByteArrayOp_Int "readIntArray#" GenPrimOp
    MutableByteArray# s -> Int# -> State# s -> (# State# s, Int# #)
-   {Read integer; offset in words.}
+   {Read integer; offset in machine words.}
    with has_side_effects = True
         can_fail = True
 
 primop  ReadByteArrayOp_Word "readWordArray#" GenPrimOp
    MutableByteArray# s -> Int# -> State# s -> (# State# s, Word# #)
-   {Read word; offset in words.}
+   {Read word; offset in machine words.}
    with has_side_effects = True
         can_fail = True
 
@@ -1931,21 +1954,21 @@ primop  SetByteArrayOp "setByteArray#" GenPrimOp
 
 primop  AtomicReadByteArrayOp_Int "atomicReadIntArray#" GenPrimOp
    MutableByteArray# s -> Int# -> State# s -> (# State# s, Int# #)
-   {Given an array and an offset in Int units, read an element. The
+   {Given an array and an offset in machine words, read an element. The
     index is assumed to be in bounds. Implies a full memory barrier.}
    with has_side_effects = True
         can_fail = True
 
 primop  AtomicWriteByteArrayOp_Int "atomicWriteIntArray#" GenPrimOp
    MutableByteArray# s -> Int# -> Int# -> State# s -> State# s
-   {Given an array and an offset in Int units, write an element. The
+   {Given an array and an offset in machine words, write an element. The
     index is assumed to be in bounds. Implies a full memory barrier.}
    with has_side_effects = True
         can_fail = True
 
 primop CasByteArrayOp_Int "casIntArray#" GenPrimOp
    MutableByteArray# s -> Int# -> Int# -> Int# -> State# s -> (# State# s, Int# #)
-   {Given an array, an offset in Int units, the expected old value, and
+   {Given an array, an offset in machine words, the expected old value, and
     the new value, perform an atomic compare and swap i.e. write the new
     value if the current value matches the provided old value. Returns
     the value of the element before the operation. Implies a full memory
@@ -1955,7 +1978,7 @@ primop CasByteArrayOp_Int "casIntArray#" GenPrimOp
 
 primop FetchAddByteArrayOp_Int "fetchAddIntArray#" GenPrimOp
    MutableByteArray# s -> Int# -> Int# -> State# s -> (# State# s, Int# #)
-   {Given an array, and offset in Int units, and a value to add,
+   {Given an array, and offset in machine words, and a value to add,
     atomically add the value to the element. Returns the value of the
     element before the operation. Implies a full memory barrier.}
    with has_side_effects = True
@@ -1963,7 +1986,7 @@ primop FetchAddByteArrayOp_Int "fetchAddIntArray#" GenPrimOp
 
 primop FetchSubByteArrayOp_Int "fetchSubIntArray#" GenPrimOp
    MutableByteArray# s -> Int# -> Int# -> State# s -> (# State# s, Int# #)
-   {Given an array, and offset in Int units, and a value to subtract,
+   {Given an array, and offset in machine words, and a value to subtract,
     atomically substract the value to the element. Returns the value of
     the element before the operation. Implies a full memory barrier.}
    with has_side_effects = True
@@ -1971,7 +1994,7 @@ primop FetchSubByteArrayOp_Int "fetchSubIntArray#" GenPrimOp
 
 primop FetchAndByteArrayOp_Int "fetchAndIntArray#" GenPrimOp
    MutableByteArray# s -> Int# -> Int# -> State# s -> (# State# s, Int# #)
-   {Given an array, and offset in Int units, and a value to AND,
+   {Given an array, and offset in machine words, and a value to AND,
     atomically AND the value to the element. Returns the value of the
     element before the operation. Implies a full memory barrier.}
    with has_side_effects = True
@@ -1979,7 +2002,7 @@ primop FetchAndByteArrayOp_Int "fetchAndIntArray#" GenPrimOp
 
 primop FetchNandByteArrayOp_Int "fetchNandIntArray#" GenPrimOp
    MutableByteArray# s -> Int# -> Int# -> State# s -> (# State# s, Int# #)
-   {Given an array, and offset in Int units, and a value to NAND,
+   {Given an array, and offset in machine words, and a value to NAND,
     atomically NAND the value to the element. Returns the value of the
     element before the operation. Implies a full memory barrier.}
    with has_side_effects = True
@@ -1987,7 +2010,7 @@ primop FetchNandByteArrayOp_Int "fetchNandIntArray#" GenPrimOp
 
 primop FetchOrByteArrayOp_Int "fetchOrIntArray#" GenPrimOp
    MutableByteArray# s -> Int# -> Int# -> State# s -> (# State# s, Int# #)
-   {Given an array, and offset in Int units, and a value to OR,
+   {Given an array, and offset in machine words, and a value to OR,
     atomically OR the value to the element. Returns the value of the
     element before the operation. Implies a full memory barrier.}
    with has_side_effects = True
@@ -1995,7 +2018,7 @@ primop FetchOrByteArrayOp_Int "fetchOrIntArray#" GenPrimOp
 
 primop FetchXorByteArrayOp_Int "fetchXorIntArray#" GenPrimOp
    MutableByteArray# s -> Int# -> Int# -> State# s -> (# State# s, Int# #)
-   {Given an array, and offset in Int units, and a value to XOR,
+   {Given an array, and offset in machine words, and a value to XOR,
     atomically XOR the value to the element. Returns the value of the
     element before the operation. Implies a full memory barrier.}
    with has_side_effects = True

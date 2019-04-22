@@ -27,6 +27,7 @@ import Hoopl.Label
 
 import BlockId
 import CLabel
+import PprCmmExpr ()
 
 import Unique                ( pprUniqueAlways, getUnique )
 import Platform
@@ -119,6 +120,16 @@ pprBasicBlock info_env (BasicBlock blockid instrs)
 
 
 pprDatas :: CmmStatics -> SDoc
+-- See note [emit-time elimination of static indirections] in CLabel.
+pprDatas (Statics alias [CmmStaticLit (CmmLabel lbl), CmmStaticLit ind, _, _])
+  | lbl == mkIndStaticInfoLabel
+  , let labelInd (CmmLabelOff l _) = Just l
+        labelInd (CmmLabel l) = Just l
+        labelInd _ = Nothing
+  , Just ind' <- labelInd ind
+  , alias `mayRedirectTo` ind'
+  = pprGloblDecl alias
+    $$ text ".equiv" <+> ppr alias <> comma <> ppr (CmmLabel ind')
 pprDatas (Statics lbl dats) = vcat (pprLabel lbl : map pprData dats)
 
 pprData :: CmmStatic -> SDoc
@@ -161,7 +172,7 @@ pprReg r
       RegVirtual (VirtualRegHi u)  -> text "%vHi_"  <> pprUniqueAlways u
       RegVirtual (VirtualRegF  u)  -> text "%vF_"   <> pprUniqueAlways u
       RegVirtual (VirtualRegD  u)  -> text "%vD_"   <> pprUniqueAlways u
-      RegVirtual (VirtualRegSSE u) -> text "%vSSE_" <> pprUniqueAlways u
+
   where
     ppr_reg_no :: Int -> SDoc
     ppr_reg_no i
@@ -179,8 +190,7 @@ pprFormat x
                 II32 -> sLit "w"
                 II64 -> sLit "d"
                 FF32 -> sLit "fs"
-                FF64 -> sLit "fd"
-                _    -> panic "PPC.Ppr.pprFormat: no match")
+                FF64 -> sLit "fd")
 
 
 pprCond :: Cond -> SDoc
@@ -365,7 +375,6 @@ pprInstr (LD fmt reg addr) = hcat [
             II64 -> sLit "d"
             FF32 -> sLit "fs"
             FF64 -> sLit "fd"
-            _         -> panic "PPC.Ppr.pprInstr: no match"
             ),
         case addr of AddrRegImm _ _ -> empty
                      AddrRegReg _ _ -> char 'x',
@@ -405,7 +414,6 @@ pprInstr (LA fmt reg addr) = hcat [
             II64 -> sLit "d"
             FF32 -> sLit "fs"
             FF64 -> sLit "fd"
-            _         -> panic "PPC.Ppr.pprInstr: no match"
             ),
         case addr of AddrRegImm _ _ -> empty
                      AddrRegReg _ _ -> char 'x',

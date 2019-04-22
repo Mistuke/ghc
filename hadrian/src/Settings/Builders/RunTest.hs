@@ -68,8 +68,13 @@ runTestBuilderArgs = builder RunTest ? do
     withInterpreter     <- getBooleanSetting TestGhcWithInterpreter
     unregisterised      <- getBooleanSetting TestGhcUnregisterised
     withSMP             <- getBooleanSetting TestGhcWithSMP
-    debugged            <- read <$> getTestSetting TestGhcDebugged
+    debugged            <- readBool <$> getTestSetting TestGhcDebugged
     keepFiles           <- expr (testKeepFiles <$> userSetting defaultTestArgs)
+
+    accept <- expr (testAccept <$> userSetting defaultTestArgs)
+    (acceptPlatform, acceptOS) <- expr . liftIO $
+        (,) <$> (maybe False (=="YES") <$> lookupEnv "PLATFORM")
+            <*> (maybe False (=="YES") <$> lookupEnv "OS")
 
     windows     <- expr windowsHost
     darwin      <- expr osxHost
@@ -95,9 +100,12 @@ runTestBuilderArgs = builder RunTest ? do
             , arg "-e", arg $ "darwin=" ++ show darwin
             , arg "-e", arg $ "config.local=False"
             , arg "-e", arg $ "config.cleanup=" ++ show (not keepFiles)
+            , arg "-e", arg $ "config.accept=" ++ show accept
+            , arg "-e", arg $ "config.accept_platform=" ++ show acceptPlatform
+            , arg "-e", arg $ "config.accept_os=" ++ show acceptOS
             , arg "-e", arg $ "config.exeext=" ++ quote exe
-            , arg "-e", arg $ "config.compiler_debugged=" ++ quote (yesNo debugged)
-            , arg "-e", arg $ "ghc_debugged=" ++ quote (yesNo debugged)
+            , arg "-e", arg $ "config.compiler_debugged=" ++
+              show debugged
             , arg "-e", arg $ asZeroOne "ghc_with_native_codegen=" withNativeCodeGen
 
             , arg "-e", arg $ "config.have_interp=" ++ show withInterpreter
@@ -127,6 +135,8 @@ runTestBuilderArgs = builder RunTest ? do
             , arg $ "--threads=" ++ show threads
             , getTestArgs -- User-provided arguments from command line.
             ]
+
+    where readBool x = read x :: Bool
 
 -- | Command line arguments for running GHC's test script.
 getTestArgs :: Args

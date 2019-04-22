@@ -335,6 +335,8 @@ renameDeriv is_boot inst_infos bagBinds
     -- (See Note [Newtype-deriving instances] in TcGenDeriv)
     unsetXOptM LangExt.RebindableSyntax $
     -- See Note [Avoid RebindableSyntax when deriving]
+    setXOptM LangExt.TemplateHaskellQuotes $
+    -- DeriveLift makes uses of quotes
     do  {
         -- Bring the extra deriving stuff into scope
         -- before renaming the instances themselves
@@ -2064,7 +2066,7 @@ GHC has a notion of deriving strategies, which allow the user to explicitly
 request which approach to use when deriving an instance (enabled with the
 -XDerivingStrategies language extension). For more information, refer to the
 original issue (#10598) or the associated wiki page:
-https://ghc.haskell.org/trac/ghc/wiki/Commentary/Compiler/DerivingStrategies
+https://gitlab.haskell.org/ghc/ghc/wikis/commentary/compiler/deriving-strategies
 
 A deriving strategy can be specified in a deriving clause:
 
@@ -2105,7 +2107,7 @@ instances instead of "reusing" old instances (by way of `coerce`).
 If an explicit deriving strategy is not given, GHC has an algorithm it uses to
 determine which strategy it will actually use. The algorithm is quite long,
 so it lives in the Haskell wiki at
-https://ghc.haskell.org/trac/ghc/wiki/Commentary/Compiler/DerivingStrategies
+https://gitlab.haskell.org/ghc/ghc/wikis/commentary/compiler/deriving-strategies
 ("The deriving strategy resolution algorithm" section).
 
 Internally, GHC uses the DerivStrategy datatype to denote a user-requested

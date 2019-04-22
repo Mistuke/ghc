@@ -41,6 +41,7 @@ module DynFlags (
         whenGeneratingDynamicToo, ifGeneratingDynamicToo,
         whenCannotGenerateDynamicToo,
         dynamicTooMkDynamicDynFlags,
+        dynamicOutputFile,
         DynFlags(..),
         FlagSpec(..),
         HasDynFlags(..), ContainsDynFlags(..),
@@ -58,7 +59,7 @@ module DynFlags (
         fFlags, fLangFlags, xFlags,
         wWarningFlags,
         dynFlagDependencies,
-        tablesNextToCode, mkTablesNextToCode,
+        tablesNextToCode,
         makeDynFlagsConsistent,
         shouldUseColor,
         shouldUseHexWordLiterals,
@@ -92,7 +93,8 @@ module DynFlags (
         extraGccViaCFlags, systemPackageConfig,
         pgm_L, pgm_P, pgm_F, pgm_c, pgm_a, pgm_l, pgm_dll, pgm_T,
         pgm_windres, pgm_libtool, pgm_ar, pgm_ranlib, pgm_lo, pgm_lc,
-        pgm_lcc, pgm_i, opt_L, opt_P, opt_F, opt_c, opt_a, opt_l, opt_i,
+        pgm_lcc, pgm_i,
+        opt_L, opt_P, opt_F, opt_c, opt_cxx, opt_a, opt_l, opt_i,
         opt_P_signature,
         opt_windres, opt_lo, opt_lc, opt_lcc,
 
@@ -146,6 +148,7 @@ module DynFlags (
 #include "GHCConstantsHaskellExports.hs"
         bLOCK_SIZE_W,
         wORD_SIZE_IN_BITS,
+        wordAlignment,
         tAG_MASK,
         mAX_PTR_TAG,
         tARGET_MIN_INT, tARGET_MAX_INT, tARGET_MAX_WORD,
@@ -204,7 +207,7 @@ import Maybes
 import MonadUtils
 import qualified Pretty
 import SrcLoc
-import BasicTypes       ( IntWithInf, treatZeroAsInf )
+import BasicTypes       ( Alignment, alignmentOf, IntWithInf, treatZeroAsInf )
 import FastString
 import Fingerprint
 import Outputable
@@ -322,7 +325,7 @@ import Foreign (Ptr) -- needed for 2nd stage
 --  * Adding the flag to the GHC Wiki
 --
 --    There is a change log tracking language extension additions and removals
---    on the GHC wiki:  https://ghc.haskell.org/trac/ghc/wiki/LanguagePragmaHistory
+--    on the GHC wiki:  https://gitlab.haskell.org/ghc/ghc/wikis/language-pragma-history
 --
 --  See #4437 and #8176.
 
@@ -382,6 +385,7 @@ data DumpFlag
    | Opt_D_dump_spec
    | Opt_D_dump_prep
    | Opt_D_dump_stg
+   | Opt_D_dump_stg_final
    | Opt_D_dump_call_arity
    | Opt_D_dump_exitify
    | Opt_D_dump_stranal
@@ -823,7 +827,7 @@ data WarningFlag =
    | Opt_WarnDeferredTypeErrors
    | Opt_WarnDeferredOutOfScopeVariables
    | Opt_WarnNonCanonicalMonadInstances   -- since 8.0
-   | Opt_WarnNonCanonicalMonadFailInstances -- since 8.0
+   | Opt_WarnNonCanonicalMonadFailInstances   -- since 8.0, removed 8.8
    | Opt_WarnNonCanonicalMonoidInstances  -- since 8.0
    | Opt_WarnMissingPatternSynonymSignatures -- since 8.0
    | Opt_WarnUnrecognisedWarningFlags     -- since 8.0
@@ -1340,6 +1344,7 @@ data Settings = Settings {
                                          -- See Note [Repeated -optP hashing]
   sOpt_F                 :: [String],
   sOpt_c                 :: [String],
+  sOpt_cxx               :: [String],
   sOpt_a                 :: [String],
   sOpt_l                 :: [String],
   sOpt_windres           :: [String],
@@ -1423,6 +1428,8 @@ opt_F dflags = sOpt_F (settings dflags)
 opt_c                 :: DynFlags -> [String]
 opt_c dflags = concatMap (wayOptc (targetPlatform dflags)) (ways dflags)
             ++ sOpt_c (settings dflags)
+opt_cxx               :: DynFlags -> [String]
+opt_cxx dflags = sOpt_cxx (settings dflags)
 opt_a                 :: DynFlags -> [String]
 opt_a dflags = sOpt_a (settings dflags)
 opt_l                 :: DynFlags -> [String]
@@ -1816,6 +1823,12 @@ dynamicTooMkDynamicDynFlags dflags0
           dflags3 = updateWays dflags2
           dflags4 = gopt_unset dflags3 Opt_BuildDynamicToo
       in dflags4
+
+-- | Compute the path of the dynamic object corresponding to an object file.
+dynamicOutputFile :: DynFlags -> FilePath -> FilePath
+dynamicOutputFile dflags outputFile = dynOut outputFile
+  where
+    dynOut = flip addExtension (dynObjectSuf dflags) . dropExtension
 
 -----------------------------------------------------------------------------
 
@@ -2245,7 +2258,6 @@ languageExtensions (Just Haskell98)
     = [LangExt.ImplicitPrelude,
        -- See Note [When is StarIsType enabled]
        LangExt.StarIsType,
-       LangExt.MonadFailDesugaring,
        LangExt.MonomorphismRestriction,
        LangExt.NPlusKPatterns,
        LangExt.DatatypeContexts,
@@ -2262,7 +2274,6 @@ languageExtensions (Just Haskell2010)
     = [LangExt.ImplicitPrelude,
        -- See Note [When is StarIsType enabled]
        LangExt.StarIsType,
-       LangExt.MonadFailDesugaring,
        LangExt.MonomorphismRestriction,
        LangExt.DatatypeContexts,
        LangExt.TraditionalRecordSyntax,
@@ -2522,7 +2533,7 @@ setObjectDir, setHiDir, setHieDir, setStubDir, setDumpDir, setOutputDir,
          setDynObjectSuf, setDynHiSuf,
          setDylibInstallName,
          setObjectSuf, setHiSuf, setHieSuf, setHcSuf, parseDynLibLoaderMode,
-         setPgmP, addOptl, addOptc, addOptP,
+         setPgmP, addOptl, addOptc, addOptcxx, addOptP,
          addCmdlineFramework, addHaddockOpts, addGhciScript,
          setInteractivePrint
    :: String -> DynFlags -> DynFlags
@@ -2638,6 +2649,7 @@ setDumpPrefixForce f d = d { dumpPrefixForce = f}
 setPgmP   f = let (pgm:args) = words f in alterSettings (\s -> s { sPgm_P   = (pgm, map Option args)})
 addOptl   f = alterSettings (\s -> s { sOpt_l   = f : sOpt_l s})
 addOptc   f = alterSettings (\s -> s { sOpt_c   = f : sOpt_c s})
+addOptcxx f = alterSettings (\s -> s { sOpt_cxx = f : sOpt_cxx s})
 addOptP   f = alterSettings (\s -> s { sOpt_P   = f : sOpt_P s
                                      , sOpt_P_fingerprint = fingerprintStrings (f : sOpt_P s)
                                      })
@@ -2767,11 +2779,11 @@ parseDynamicFlagsFull activeFlags cmdline dflags0 args = do
   let chooseOutput
         | isJust (outputFile dflags3)          -- Only iff user specified -o ...
         , not (isJust (dynOutputFile dflags3)) -- but not -dyno
-        = return $ dflags3 { dynOutputFile = Just $ dynOut (fromJust $ outputFile dflags3) }
+        = return $ dflags3 { dynOutputFile = Just $ dynamicOutputFile dflags3 outFile }
         | otherwise
         = return dflags3
         where
-          dynOut = flip addExtension (dynObjectSuf dflags3) . dropExtension
+          outFile = fromJust $ outputFile dflags3
   dflags4 <- ifGeneratingDynamicToo dflags3 chooseOutput (return dflags3)
 
   let (dflags5, consistency_warnings) = makeDynFlagsConsistent dflags4
@@ -3040,6 +3052,8 @@ dynamic_flags_deps = [
       (hasArg (\f -> alterSettings (\s -> s { sOpt_F   = f : sOpt_F s})))
   , make_ord_flag defFlag "optc"
       (hasArg addOptc)
+  , make_ord_flag defFlag "optcxx"
+      (hasArg addOptcxx)
   , make_ord_flag defFlag "opta"
       (hasArg (\f -> alterSettings (\s -> s { sOpt_a   = f : sOpt_a s})))
   , make_ord_flag defFlag "optl"
@@ -3333,6 +3347,8 @@ dynamic_flags_deps = [
         (setDumpFlag Opt_D_dump_prep)
   , make_ord_flag defGhcFlag "ddump-stg"
         (setDumpFlag Opt_D_dump_stg)
+  , make_ord_flag defGhcFlag "ddump-stg-final"
+        (setDumpFlag Opt_D_dump_stg_final)
   , make_ord_flag defGhcFlag "ddump-call-arity"
         (setDumpFlag Opt_D_dump_call_arity)
   , make_ord_flag defGhcFlag "ddump-exitify"
@@ -4007,8 +4023,9 @@ wWarningFlagsDeps = [
   flagSpec "name-shadowing"              Opt_WarnNameShadowing,
   flagSpec "noncanonical-monad-instances"
                                          Opt_WarnNonCanonicalMonadInstances,
-  flagSpec "noncanonical-monadfail-instances"
-                                         Opt_WarnNonCanonicalMonadFailInstances,
+  depFlagSpec "noncanonical-monadfail-instances"
+                                         Opt_WarnNonCanonicalMonadInstances
+    "fail is no longer a method of Monad",
   flagSpec "noncanonical-monoid-instances"
                                          Opt_WarnNonCanonicalMonoidInstances,
   flagSpec "orphans"                     Opt_WarnOrphans,
@@ -4392,7 +4409,8 @@ xFlagsDeps = [
   flagSpec "LiberalTypeSynonyms"              LangExt.LiberalTypeSynonyms,
   flagSpec "MagicHash"                        LangExt.MagicHash,
   flagSpec "MonadComprehensions"              LangExt.MonadComprehensions,
-  flagSpec "MonadFailDesugaring"              LangExt.MonadFailDesugaring,
+  depFlagSpec "MonadFailDesugaring"           LangExt.MonadFailDesugaring
+    "MonadFailDesugaring is now the default behavior",
   flagSpec "MonoLocalBinds"                   LangExt.MonoLocalBinds,
   depFlagSpecCond "MonoPatBinds"              LangExt.MonoPatBinds
     id
@@ -5549,7 +5567,7 @@ picCCOpts dflags = pieOpts ++ picOpts
       -- otherwise things like stub.c files don't get compiled
       -- correctly.  They need to reference data in the Haskell
       -- objects, but can't without -fPIC.  See
-      -- http://ghc.haskell.org/trac/ghc/wiki/Commentary/PositionIndependentCode
+      -- https://gitlab.haskell.org/ghc/ghc/wikis/commentary/position-independent-code
        | gopt Opt_PIC dflags || WayDyn `elem` ways dflags ->
           ["-fPIC", "-U__PIC__", "-D__PIC__"]
       -- gcc may be configured to have PIC on by default, let's be
@@ -5653,6 +5671,9 @@ bLOCK_SIZE_W dflags = bLOCK_SIZE dflags `quot` wORD_SIZE dflags
 
 wORD_SIZE_IN_BITS :: DynFlags -> Int
 wORD_SIZE_IN_BITS dflags = wORD_SIZE dflags * 8
+
+wordAlignment :: DynFlags -> Alignment
+wordAlignment dflags = alignmentOf (wORD_SIZE dflags)
 
 tAG_MASK :: DynFlags -> Int
 tAG_MASK dflags = (1 `shiftL` tAG_BITS dflags) - 1
@@ -5822,19 +5843,23 @@ data SseVersion = SSE1
 isSseEnabled :: DynFlags -> Bool
 isSseEnabled dflags = case platformArch (targetPlatform dflags) of
     ArchX86_64 -> True
-    ArchX86    -> sseVersion dflags >= Just SSE1
+    ArchX86    -> True
     _          -> False
 
 isSse2Enabled :: DynFlags -> Bool
 isSse2Enabled dflags = case platformArch (targetPlatform dflags) of
-    ArchX86_64 -> -- SSE2 is fixed on for x86_64.  It would be
-                  -- possible to make it optional, but we'd need to
-                  -- fix at least the foreign call code where the
-                  -- calling convention specifies the use of xmm regs,
-                  -- and possibly other places.
-                  True
-    ArchX86    -> sseVersion dflags >= Just SSE2
+  -- We Assume  SSE1 and SSE2 operations are available on both
+  -- x86 and x86_64. Historically we didn't default to SSE2 and
+  -- SSE1 on x86, which results in defacto nondeterminism for how
+  -- rounding behaves in the associated x87 floating point instructions
+  -- because variations in the spill/fpu stack placement of arguments for
+  -- operations would change the precision and final result of what
+  -- would otherwise be the same expressions with respect to single or
+  -- double precision IEEE floating point computations.
+    ArchX86_64 -> True
+    ArchX86    -> True
     _          -> False
+
 
 isSse4_2Enabled :: DynFlags -> Bool
 isSse4_2Enabled dflags = sseVersion dflags >= Just SSE42

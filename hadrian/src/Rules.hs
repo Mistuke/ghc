@@ -21,6 +21,7 @@ import qualified Rules.Libffi
 import qualified Rules.Library
 import qualified Rules.Program
 import qualified Rules.Register
+import qualified Rules.Rts
 import qualified Rules.SimpleTargets
 import Settings
 import Target
@@ -82,7 +83,12 @@ topLevelTargets = action $ do
     targets <- concatForM buildStages $ \stage -> do
         packages <- stagePackages stage
         mapM (path stage) packages
-    need targets
+
+    -- Why we need wrappers: https://gitlab.haskell.org/ghc/ghc/issues/16534.
+    root <- buildRoot
+    let wrappers = [ root -/- ("ghc-" ++ stageString s) | s <- [Stage1 ..]
+                                                        , s < finalStage ]
+    need (targets ++ wrappers)
   where
     -- either the package database config file for libraries or
     -- the programPath for programs. However this still does
@@ -158,6 +164,7 @@ buildRules = do
     Rules.Gmp.gmpRules
     Rules.Libffi.libffiRules
     Rules.Library.libraryRules
+    Rules.Rts.rtsRules
     packageRules
 
 oracleRules :: Rules ()

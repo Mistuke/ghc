@@ -3787,7 +3787,7 @@ Haskell 98 allows the programmer to add a deriving clause to a data type
 declaration, to generate a standard instance declaration for specified class.
 GHC extends this mechanism along several axes:
 
-* The derivation mechanism can be used separtely from the data type
+* The derivation mechanism can be used separately from the data type
   declaration, using the `standalone deriving mechanism
   <#stand-alone-deriving>`__.
 
@@ -4531,7 +4531,8 @@ Deriving ``Lift`` instances
 The class ``Lift``, unlike other derivable classes, lives in
 ``template-haskell`` instead of ``base``. Having a data type be an instance of
 ``Lift`` permits its values to be promoted to Template Haskell expressions (of
-type ``ExpQ``), which can then be spliced into Haskell source code.
+type ``ExpQ`` and ``TExpQ a``), which can then be spliced into Haskell source
+code.
 
 Here is an example of how one can derive ``Lift``:
 
@@ -4546,17 +4547,11 @@ Here is an example of how one can derive ``Lift``:
 
     {-
     instance (Lift a) => Lift (Foo a) where
-        lift (Foo a)
-        = appE
-            (conE
-                (mkNameG_d "package-name" "Bar" "Foo"))
-            (lift a)
-        lift (u :^: v)
-        = infixApp
-            (lift u)
-            (conE
-                (mkNameG_d "package-name" "Bar" ":^:"))
-            (lift v)
+        lift (Foo a) = [| Foo a |]
+        lift ((:^:) u v) = [| (:^:) u v |]
+
+        liftTyped (Foo a) = [|| Foo a ||]
+        liftTyped ((:^:) u v) = [|| (:^:) u v ||]
     -}
 
     -----
@@ -4572,8 +4567,9 @@ Here is an example of how one can derive ``Lift``:
     fooExp :: Lift a => Foo a -> Q Exp
     fooExp f = [| f |]
 
-:extension:`DeriveLift` also works for certain unboxed types (``Addr#``, ``Char#``,
-``Double#``, ``Float#``, ``Int#``, and ``Word#``):
+Note that the ``Lift`` typeclass takes advantage of :ref:`runtime-rep` in order
+to support instances involving unboxed types. This means :extension:`DeriveLift`
+also works for these types:
 
 ::
 
@@ -4587,12 +4583,8 @@ Here is an example of how one can derive ``Lift``:
 
     {-
     instance Lift IntHash where
-        lift (IntHash i)
-        = appE
-            (conE
-                (mkNameG_d "package-name" "Unboxed" "IntHash"))
-            (litE
-                (intPrimL (toInteger (I# i))))
+        lift (IntHash i) = [| IntHash i |]
+        liftTyped (IntHash i) = [|| IntHash i ||]
     -}
 
 
@@ -10358,6 +10350,24 @@ function that can *never* be called, such as this one: ::
 
       f :: (Int ~ Bool) => a -> a
 
+Sometimes :extension:`AllowAmbiguousTypes` does not mix well with :extension:`RankNTypes`.
+For example: :: 
+      foo :: forall r. (forall i. (KnownNat i) => r) -> r
+      foo f = f @1
+
+      boo :: forall j. (KnownNat j) => Int
+      boo = ....
+          
+      h :: Int
+      h = foo boo
+
+This program will be rejected as ambiguous because GHC will not unify
+the type variables `j` and `i`.
+
+Unlike the previous examples, it is not currently possible
+to resolve the ambiguity manually by using :extension:`TypeApplications`.
+
+       
 .. note::
     *A historical note.* GHC used to impose some more restrictive and less
     principled conditions on type signatures. For type
@@ -10872,7 +10882,7 @@ We say that the type variables in ``f`` are *specified*, while those in
 a type variable in the source program, it is *specified*; if not, it is
 *inferred*.
 
-Thus rule applies in datatype declarations, too. For example, if we have
+This rule applies in datatype declarations, too. For example, if we have
 ``data Proxy a = Proxy`` (and :extension:`PolyKinds` is enabled), then
 ``a`` will be assigned kind ``k``, where ``k`` is a fresh kind variable.
 Because ``k`` was not written by the user, it will be unavailable for

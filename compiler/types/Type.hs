@@ -1044,7 +1044,7 @@ piResultTys ty orig_args@(arg:args)
     init_subst = mkEmptyTCvSubst $ mkInScopeSet (tyCoVarsOfTypes (ty:orig_args))
 
     go :: TCvSubst -> Type -> [Type] -> Type
-    go subst ty [] = substTy subst ty
+    go subst ty [] = substTyUnchecked subst ty
 
     go subst ty all_args@(arg:args)
       | Just ty' <- coreView ty
@@ -1698,6 +1698,21 @@ fun_kind_arg_flags = go emptyTCvSubst
         subst' = extendTvSubst subst tv arg_ty
     go subst (TyVarTy tv) arg_tys
       | Just ki <- lookupTyVar subst tv = go subst ki arg_tys
+    -- This FunTy case is important to handle kinds with nested foralls, such
+    -- as this kind (inspired by #16518):
+    --
+    --   forall {k1} k2. k1 -> k2 -> forall k3. k3 -> Type
+    --
+    -- Here, we want to get the following ArgFlags:
+    --
+    -- [Inferred,   Specified, Required, Required, Specified, Required]
+    -- forall {k1}. forall k2. k1 ->     k2 ->     forall k3. k3 ->     Type
+    go subst (FunTy{ft_af = af, ft_res = res_ki}) (_:arg_tys)
+      = argf : go subst res_ki arg_tys
+      where
+        argf = case af of
+                 VisArg   -> Required
+                 InvisArg -> Inferred
     go _ _ arg_tys = map (const Required) arg_tys
                         -- something is ill-kinded. But this can happen
                         -- when printing errors. Assume everything is Required.
