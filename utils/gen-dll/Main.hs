@@ -44,7 +44,7 @@
      which is also the partitioning scheme used for all other files including
      the resulting dlls.
 
-     From the .def file we use libtool or genlib (when available) to generate
+     From the .def file we use dlltool or genlib (when available) to generate
      an import library. In this case we generate a GNU style import library
      See Note [BFD import library].
 
@@ -71,7 +71,7 @@
      only 1 symbol and the dll in which to find this symbol.
 
      A proper linker processes all the object files in this AR file (lld, ld and
-     ghci do this.) and so while genlib and libtool don't allow you to create
+     ghci do this.) and so while genlib and dlltool don't allow you to create
      import libraries with multiple dll pointers, it is trivial to do.
 
      We use ar to merge together the import libraries into a large complete one.
@@ -139,8 +139,8 @@ import Foreign.Marshal.Alloc (alloca)
 nm :: FilePath
 nm = NM_TOOL_BIN
 
-libexe :: FilePath
-libexe = LIB_TOOL_BIN
+dlltool :: FilePath
+dlltool = DLL_TOOL_BIN
 
 genlib :: FilePath
 genlib = GENLIB_TOOL_BIN
@@ -152,7 +152,7 @@ ar = AR_TOOL_BIN
 -- dll is 2^16-1, however Microsoft's lib.exe for some reason refuses to link
 -- up to this amount. The reason is likely that it adds some extra symbols in
 -- the generated dll, such as dllmain etc. So we reserve some space in the
--- symbol table to accomodate this. This number is just purely randomly chosen.
+-- symbol table to accommodate this. This number is just purely randomly chosen.
 #define SYMBOL_PADDING 10
 
 usage :: IO ()
@@ -440,20 +440,20 @@ execProg prog m_stdin args =
          length results `seq` return $ lines results)
 
 -- | Mingw-w64's genlib.exe is generally a few order of magnitudes faster than
--- libtool which is BFD based. So we prefer it, but it's not standard so
+-- dlltool which is BFD based. So we prefer it, but it's not standard so
 -- support both. We're talking a difference of 45 minutes in build time here.
 execLibTool :: String -> String -> IO [String]
 execLibTool input_def output_lib =
   do if HAS_GENLIB
         then execProg genlib Nothing [input_def, "-o", output_lib]
-        else execProg libexe Nothing ["-d", input_def, "-l", output_lib]
+        else execProg dlltool Nothing ["-d", input_def, "-l", output_lib]
 
 -- Builds a delay import lib at the very end which is used to
 -- be able to delay the picking of a DLL on Windows.
 -- This function is called always and decided internally
 -- what to do.
 build_delay_import_lib :: String -- ^ input def file
-                       -> String -- ^ ouput import delayed import lib
+                       -> String -- ^ output import delayed import lib
                        -> String -- ^ flag to indicate if delay import
                                  --   lib should be created
                        -> IO ()
@@ -472,7 +472,7 @@ build_import_lib base dll_name defFile objs
        -- This split is important because for DATA entries the compiler should not generate
        -- a trampoline since CONTS DATA is directly referenced and not executed. This is not very
        -- important for mingw-w64 which would generate both the trampoline and direct referecne
-       -- by default, but for libtool is it and even for mingw-w64 we can trim the output.
+       -- by default, but for dlltool is it and even for mingw-w64 we can trim the output.
        _ <- withFile defFile WriteMode $ \hDef -> do
               hPutStrLn hDef $ unlines $ ["LIBRARY " ++ show dll_name
                                          ,"EXPORTS"

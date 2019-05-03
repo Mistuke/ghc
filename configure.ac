@@ -622,7 +622,22 @@ else
     AC_CHECK_TARGET_TOOL([LIBTOOL], [libtool])
     LibtoolCmd="$LIBTOOL"
 fi
-AC_SUBST([LibtoolCmd])
+
+AC_SUBST([DlltoolCmd])
+dnl ** which dlltool to use?
+dnl --------------------------------------------------------------
+# The host normalization on Windows breaks autoconf, it no longer
+# thinks that target == host so it never checks the unqualified
+# tools for Windows. See #14274.
+if test "$HostOS" = "mingw32"
+then
+    AC_PATH_PROG([DLLTOOL],[dlltool])
+    DlltoolCmd="$(cygpath -m $DLLTOOL)"
+else
+    AC_CHECK_TARGET_TOOL([DLLTOOL], [dlltool])
+    DlltoolCmd="$DLLTOOL"
+fi
+AC_SUBST([DlltoolCmd])
 
 # Here is where we re-target which specific version of the LLVM
 # tools we are looking for. In the past, GHC supported a number of
@@ -1341,6 +1356,7 @@ echo "\
    ld           : $LdCmd
    nm           : $NmCmd
    libtool      : $LibtoolCmd
+   dlltool      : $DlltoolCmd
    objdump      : $ObjdumpCmd
    ranlib       : $RanlibCmd
    windres      : $WindresCmd

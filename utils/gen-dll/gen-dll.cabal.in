@@ -32,6 +32,6 @@ Executable gen-dll
     ghc-options: -UGEN_SXS
                  -DHAS_GENLIB=@HAVE_GENLIB@
                  -DNM_TOOL_BIN="\"@NmCmd@\""
-                 -DLIB_TOOL_BIN="\"@LibtoolCmd@\""
+                 -DDLL_TOOL_BIN="\"@DlltoolCmd@\""
                  -DGENLIB_TOOL_BIN="\"@GenlibCmd@\""
                  -DAR_TOOL_BIN="\"@ArCmd@\""

@@ -688,11 +688,6 @@ endif
 # Mingwex Library
 #
 HaveLibMingwEx	= @HaveLibMingwEx@
-ifeq "$(TARGETPLATFORM)" "i386-unknown-mingw32"
-DLLTOOL			= inplace/mingw/bin/dlltool.exe
-else ifeq "$(TARGETPLATFORM)" "x86_64-unknown-mingw32"
-DLLTOOL			= inplace/mingw/bin/dlltool.exe
-endif
 
 #-----------------------------------------------------------------------------
 # Other standard (ha!) Unix utilities
