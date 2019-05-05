@@ -62,6 +62,10 @@ TEST_HC_OPTS += -dno-debug-output
 
 TEST_HC_OPTS_INTERACTIVE = $(TEST_HC_OPTS) --interactive -v0 -ignore-dot-ghci -fno-ghci-history
 
+ifeq "$(WINDOWS)" "YES"
+# We want to use the in-tree binaries, so disable SxS for the tests.
+TEST_HC_OPTS += -fno-gen-sxs-assembly
+endif
 
 RUNTEST_OPTS =
 

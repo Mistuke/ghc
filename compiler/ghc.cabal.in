@@ -403,6 +403,7 @@ Library
         SysTools.Info
         SysTools.Process
         SysTools.Tasks
+        Manifest
         Elf
         TidyPgm
         Ctype

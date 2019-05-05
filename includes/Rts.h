@@ -220,10 +220,10 @@ DLL_IMPORT_RTS extern char **prog_argv; /* so we can get at these from Haskell *
 DLL_IMPORT_RTS extern int    prog_argc;
 DLL_IMPORT_RTS extern char  *prog_name;
 
-void reportStackOverflow(StgTSO* tso);
-void reportHeapOverflow(void);
+DLL_IMPORT_RTS void reportStackOverflow(StgTSO* tso);
+DLL_IMPORT_RTS void reportHeapOverflow(void);
 
-void stg_exit(int n) GNU_ATTRIBUTE(__noreturn__);
+DLL_IMPORT_RTS void stg_exit(int n) GNU_ATTRIBUTE(__noreturn__);
 
 #if !defined(mingw32_HOST_OS)
 int stg_sig_install (int, int, void *);
@@ -234,10 +234,10 @@ int stg_sig_install (int, int, void *);
    -------------------------------------------------------------------------- */
 
 // Returns non-zero if the RTS is a profiling version
-int rts_isProfiled(void);
+DLL_IMPORT_RTS int rts_isProfiled(void);
 
 // Returns non-zero if the RTS is a dynamically-linked version
-int rts_isDynamic(void);
+DLL_IMPORT_RTS int rts_isDynamic(void);
 
 /* -----------------------------------------------------------------------------
    RTS Exit codes

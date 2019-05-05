@@ -67,8 +67,20 @@ Compiler
   `copyByteArray#` calls that were not optimized before, now will
   be. See :ghc-ticket:`16052`.
 
+- ``mkManifest`` can now generate Side-By-Side assemblies for inclusion in the
+  Windows SxS Cache. (see :ghc-ticket:`10352`).
+
+- Dynamic Compilation is now supported again on Windows. Use the ``-dynamic`` flag
+  to compile a dynamic version of a Windows executable. In order for this program
+  to run on other machines you will need to install the GHC 8.2.1 Redistributables.
+  (see :ghc-ticket:`5987`).
+
 Runtime system
 ~~~~~~~~~~~~~~
+
+- On Windows core dynamic libraries now contain SxS manifest entried and can be installed in
+  the side-by-side assembly cache. This allows multiple versions of the runtime to co-exist.
+  (see :ghc-ticket:`10352`).
 
 Template Haskell
 ~~~~~~~~~~~~~~~~

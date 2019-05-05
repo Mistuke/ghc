@@ -226,3 +226,43 @@ You can override this with the :ghc-flag:`-dylib-install-name ⟨path⟩` option
 (which passes ``-install_name`` to the Apple linker). Cabal does this for you.
 It automatically sets the install name for dynamic libraries to the absolute
 path of the ultimate install location.
+
+.. _finding-shared-libs-windows:
+
+Windows
+~~~~~~~~
+
+On Windows GHC will by default look for GHC's core dynamic libraries in
+the side-by-side assembly cache. This means that you will need the GHC
+redistributable runtime installed for the version of the compiler your
+program was compiled for.
+
+By default any user libraries will be searched for on the standard search
+locations (same folder as exe, PATH, System32 folder etc. See MSDN.).
+This behavior can be tweaked by the :ghc-flag:`-fgen-sxs-assembly`. You can
+also completely turn off SxS by using :ghc-flag:`-fno-gen-sxs-assembly`. This
+will make GHC search exclusively using the normal Windows library search behavior.
+
+Note: This options are mutually exclusive. When an assembly is using SxS search behavior
+the standard Windows search behavior is ignored.
+
+User libraries can also be marked as SxS assemblies, for which the flags
+:ghc-flag:`-dylib-abi-name` and :ghc-flag:`-dylib-abi-version` are required.
+
+If user libraries are marked as an SxS assembly, you can place them in any location relative
+the compiled executable. Windows by default will also search the same folder that the
+application is in. You can add up to nine new locations for it to search using an application
+configuration file.
+
+.. code-block:xml
+    <configuration>
+      <windows>
+        <assemblyBinding xmlns="urn:schemas-microsoft-com:asm.v1">
+          <probing privatePath="bin;..\bin" />
+        </assemblyBinding>
+      </windows>
+    </configuration>
+
+Application config files work similarly to application manifests, except that they cannot be
+embedded as resources: Create a file, in the same folder as the exe, with the exe's full name
+(including exe extension) and append ``.config``.

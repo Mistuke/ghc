@@ -208,7 +208,7 @@ def format_path(path):
             # field separator. So convert to /cygdrive/c/foo instead.
             # Other pythons use ; as the separator, so no problem.
             path = re.sub('([a-zA-Z]):', '/cygdrive/\\1', path)
-            path = re.sub('\\\\', '/', path)
+        path = re.sub('\\\\', '/', path)
     return path
 
 # On Windows we need to set $PATH to include the paths to all the DLLs

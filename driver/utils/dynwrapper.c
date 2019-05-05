@@ -1,18 +1,30 @@
 
 /*
 Need to concatenate this file with something that defines:
-LPTSTR path_dirs[];
-LPTSTR progDll;
-LPTSTR rtsDll;
+LPWSTR path_dirs[];
+LPWSTR progDll;
+LPWSTR rtsDll;
 int rtsOpts;
 */
+
+/* Define a minimum level of support needed for this file.  */
+#ifndef WINVER
+#define WINVER 0x06000100
+#define UNICODE 1
+#endif
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <Windows.h>
 #include <Shlwapi.h>
+#include <wchar.h>
+#include <stdbool.h>
 
 #include "Rts.h"
+
+// MingW-w64 is missing these from the implementation. So we have to look them up
+typedef DLL_DIRECTORY_COOKIE(WINAPI *LPAddDLLDirectory)(PCWSTR NewDirectory);
+typedef WINBOOL(WINAPI *LPRemoveDLLDirectory)(DLL_DIRECTORY_COOKIE Cookie);
 
 void die(char *fmt, ...) {
     va_list argp;
@@ -26,94 +38,96 @@ void die(char *fmt, ...) {
     exit(1);
 }
 
-LPTSTR getModuleFileName(void) {
-    HMODULE hExe;
-    LPTSTR exePath;
-    DWORD exePathSize;
-    DWORD res;
+static void *GetNonNullProcAddress(HINSTANCE h, char *sym) {
+    void *p;
 
-    hExe = GetModuleHandle(NULL);
-    if (hExe == NULL) {
-        die("GetModuleHandle failed");
+    p = GetProcAddress(h, sym);
+    if (p == NULL) {
+        die("Failed to find address for %s", sym);
     }
-
-    // 300 chars ought to be enough, but there are various cases where
-    // it might not be (e.g. unicode paths, or \\server\foo\... paths.
-    // So we start off with 300 and grow if necessary.
-    exePathSize = 300;
-    exePath = malloc(exePathSize);
-    if (exePath == NULL) {
-        die("Mallocing %d for GetModuleFileName failed", exePathSize);
-    }
-
-    while ((res = GetModuleFileName(hExe, exePath, exePathSize)) &&
-           (GetLastError() == ERROR_INSUFFICIENT_BUFFER)) {
-        exePathSize *= 2;
-        exePath = realloc(exePath, exePathSize);
-        if (exePath == NULL) {
-            die("Reallocing %d for GetModuleFileName failed", exePathSize);
-        }
-    }
-
-    if (!res) {
-        die("GetModuleFileName failed");
-    }
-    return exePath;
+    return p;
 }
 
-void setPath(void) {
-    LPTSTR *dir;
-    LPTSTR path;
+DLL_DIRECTORY_COOKIE* setSearchPath (int *len) {
+    HMODULE hDLL = (HMODULE)LoadLibraryW(L"Kernel32.DLL");
+    LPAddDLLDirectory AddDllDirectory = (LPAddDLLDirectory)GetNonNullProcAddress(hDLL, "AddDllDirectory");
+
+    LPWSTR *dir;
+    LPWSTR exePath;
+
+    exePath = malloc(sizeof(WCHAR) * MAX_PATH);
+
+    /* Get the location of the exe to use as a base. */
+    int lenPath = GetModuleFileName(NULL, exePath, MAX_PATH);
+
     int n;
-    int len = 0;
-    LPTSTR exePath, s;
+    int entries = 0;
 
-    exePath = getModuleFileName();
-    for(s = exePath; *s != '\0'; s++) {
-        if (*s == '\\') {
-            *s = '/';
+    DLL_DIRECTORY_COOKIE* cookies;
+
+    /* Count the amount of entries we have;.  */
+    for (dir = path_dirs; *dir != NULL; dir++) {
+        entries++;
+    }
+
+    cookies = malloc(sizeof(DLL_DIRECTORY_COOKIE) * entries);
+
+    const unsigned int init_buf_size = 4096;
+    n = 0;
+
+    for (dir = path_dirs; *dir != NULL; dir++) {
+        /* Make sure the path is an absolute path.  */
+        WCHAR* abs_path = malloc(sizeof(WCHAR) * init_buf_size);
+        int len = wcsnlen_s(*dir, MAX_PATH) + lenPath + 5;
+        LPWSTR path = malloc(sizeof(WCHAR) * len);
+        wcscpy(path, exePath);
+        wcscat(path, L"\\..\\"); /* exePath still contains filename, remove it.  */
+        wcscat(path, *dir);
+
+        DWORD wResult = GetFullPathNameW(path, init_buf_size, abs_path, NULL);
+        if (!wResult){
+            die("setSearchPath[GetFullPathNameW]: %" PATH_FMT " (Win32 error %lu)", path, GetLastError());
         }
-    }
-    s = StrRChr(exePath, NULL, '/');
-    if (s == NULL) {
-        die("No directory separator in executable path: %s", exePath);
-    }
-    s[0] = '\0';
-    n = s - exePath;
+        else if (wResult > init_buf_size) {
+            abs_path = realloc(abs_path, sizeof(WCHAR) * wResult);
+            if (!GetFullPathNameW(path, wResult, abs_path, NULL)) {
+                die("setSearchPath[GetFullPathNameW]: %" PATH_FMT " (Win32 error %lu)", path, GetLastError());
+            }
+        }
 
-    for (dir = path_dirs; *dir != NULL; dir++) {
-        len += n + lstrlen(*dir) + 1/* semicolon */;
+        cookies[n++] = AddDllDirectory(abs_path);
+        free(abs_path);
+        free(path);
     }
-    len++; // NUL
 
-    path = malloc(len);
-    if (path == NULL) {
-        die("Mallocing %d for PATH failed", len);
-    }
-    s = path;
-    for (dir = path_dirs; *dir != NULL; dir++) {
-        StrCpy(s, exePath);
-        s += n;
-        StrCpy(s, *dir);
-        s += lstrlen(*dir);
-        s[0] = ';';
-        s++;
-    }
-    s[0] = '\0';
-    free(exePath);
-
-    if (! SetEnvironmentVariable(TEXT("PATH"), path)) {
-        printf("SetEnvironmentVariable failed (%d)\n", GetLastError());
-    }
-    free(path);
+    *len = entries;
+    return cookies;
 }
 
-HINSTANCE loadDll(LPTSTR dll) {
+void cleanSearchPath (DLL_DIRECTORY_COOKIE* cookies, int len) {
+    if (cookies){
+        HMODULE hDLL = (HMODULE)LoadLibraryW(L"Kernel32.DLL");
+        LPAddDLLDirectory RemoveDllDirectory = (LPAddDLLDirectory)GetNonNullProcAddress(hDLL, "RemoveDllDirectory");
+
+        for (int x = 0; x < len; x++) {
+            if (cookies[x]) {
+                RemoveDllDirectory(cookies[x]);
+                cookies[x] = NULL;
+            }
+        }
+
+        free(cookies);
+    }
+}
+
+HINSTANCE loadDll(LPWSTR dll) {
     HINSTANCE h;
     DWORD dw;
     LPVOID lpMsgBuf;
 
-    h = LoadLibrary(dll);
+    const DWORD flags = LOAD_LIBRARY_SEARCH_USER_DIRS | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+
+    h = LoadLibraryExW(dll, NULL, flags);
 
     if (h == NULL) {
         dw = GetLastError();
@@ -126,71 +140,50 @@ HINSTANCE loadDll(LPTSTR dll) {
             MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
             (LPTSTR) &lpMsgBuf,
             0, NULL );
-        die("loadDll %s failed: %d: %s\n", dll, dw, lpMsgBuf);
+        die("loadDll %ls failed: %d: %ls\n", dll, dw, lpMsgBuf);
     }
 
-    return h;
-}
-
-void *GetNonNullProcAddress(HINSTANCE h, char *sym) {
-    void *p;
-
-    p = GetProcAddress(h, sym);
-    if (p == NULL) {
-        die("Failed to find address for %s", sym);
-    }
-    return p;
-}
-
-HINSTANCE GetNonNullModuleHandle(LPTSTR dll) {
-    HINSTANCE h;
-
-    h = GetModuleHandle(dll);
-    if (h == NULL) {
-        die("Failed to get module handle for %s", dll);
-    }
     return h;
 }
 
 typedef int (*hs_main_t)(int , char **, StgClosure *, RtsConfig);
+typedef void (*hs_init_t)(int *argc, char **argv[]);
 
 int main(int argc, char *argv[]) {
     HINSTANCE hRtsDll, hProgDll;
-    LPTSTR oldPath;
 
     StgClosure *main_p;
     RtsConfig rts_config;
     hs_main_t hs_main_p;
+    hs_init_t hs_init_p;
 
-    // MSDN says: An environment variable has a maximum size limit of
-    // 32,767 characters, including the null-terminating character.
-    oldPath = malloc(32767);
-    if (oldPath == NULL) {
-        die("Mallocing 32767 for oldPath failed");
-    }
+    int count = 0;
+    DLL_DIRECTORY_COOKIE* cookies = setSearchPath(&count);
 
-    if (!GetEnvironmentVariable(TEXT("PATH"), oldPath, 32767)) {
-        if (GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
-            oldPath[0] = '\0';
-        }
-        else {
-            die("Looking up PATH env var failed");
-        }
-    }
-    setPath();
+    /* RTS must be loaded first and initialized before any other haskell
+       library, so the static constructors are properly initialized.  */
+    hRtsDll = loadDll(rtsDll);
+    hs_init_p = GetNonNullProcAddress(hRtsDll, "hs_init");
+    hs_init_p(&argc, &argv);
+
+    /* Now load the program Dll, this will trigger loading of all dependencies
+       and initialize all static constructors.  */
     hProgDll = loadDll(progDll);
-    if (! SetEnvironmentVariable(TEXT("PATH"), oldPath)) {
-        printf("SetEnvironmentVariable failed (%d)\n", GetLastError());
-    }
-    free(oldPath);
 
-    hRtsDll = GetNonNullModuleHandle(rtsDll);
-
-    hs_main_p    = GetNonNullProcAddress(hRtsDll,  "hs_main");
+    /* Do some default initializations.
+       These should mirror those done for mkExtraObjToLinkIntoBinary
+       in compiler/main/DriverPipeline.hs or bad things will happen.  */
+    hs_main_p    = GetNonNullProcAddress(hRtsDll , "hs_main");
     main_p       = GetNonNullProcAddress(hProgDll, "ZCMain_main_closure");
-    rts_config.rts_opts_enabled = rtsOpts;
-    rts_config.rts_opts = NULL;
+    rts_config   = *(RtsConfig*)GetNonNullProcAddress(hRtsDll, "defaultRtsConfig");
+    rts_config.rts_opts_enabled     = rtsOpts;
+    rts_config.rts_opts_suggestions = false;
+    rts_config.rts_hs_main          = true;
 
-    return hs_main_p(argc, argv, main_p, rts_config);
+    int hs_exit_code = hs_main_p(argc, argv, main_p, rts_config);
+
+    cleanSearchPath(cookies, count);
+
+    return hs_exit_code;
 }
 

@@ -528,7 +528,7 @@ utils/runghc/dist-install/package-data.mk: $(fixed_pkg_prev)
 utils/iserv/stage2/package-data.mk: $(fixed_pkg_prev)
 utils/iserv/stage2_p/package-data.mk: $(fixed_pkg_prev)
 utils/iserv/stage2_dyn/package-data.mk: $(fixed_pkg_prev)
-ifeq "$(Windows_Host)" "YES"
+ifeq "$(Windows_Target)" "YES"
 utils/gen-dll/dist-install/package-data.mk: $(fixed_pkg_prev)
 endif
 
@@ -632,7 +632,7 @@ BUILD_DIRS += includes
 BUILD_DIRS += rts
 BUILD_DIRS += bindisttest
 BUILD_DIRS += utils/genapply
-ifeq "$(Windows_Host)" "YES"
+ifeq "$(Windows_Target)" "YES"
 BUILD_DIRS += utils/gen-dll
 endif
 

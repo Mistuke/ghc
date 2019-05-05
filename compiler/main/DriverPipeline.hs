@@ -46,6 +46,7 @@ import HscMain
 import Finder
 import HscTypes hiding ( Hsc )
 import Outputable
+import Manifest ( mkManifest )
 import Module
 import ErrUtils
 import DynFlags
@@ -1589,6 +1590,7 @@ linkBinary' staticLink dflags o_files dep_packages = do
                       else do d <- getCurrentDirectory
                               return $ normalise (d </> output_fn)
     pkg_lib_paths <- getPackageLibraryPath dflags dep_packages
+    pkgs <- getPreloadPackagesAnd dflags dep_packages
     let pkg_lib_path_opts = concatMap get_pkg_lib_path_opts pkg_lib_paths
         get_pkg_lib_path_opts l
          | osElfTarget (platformOS platform) &&
@@ -1701,7 +1703,7 @@ linkBinary' staticLink dflags o_files dep_packages = do
                         ]
                     | otherwise                      = []
 
-    rc_objs <- maybeCreateManifest dflags output_fn
+    resource_objs <- mkManifest dflags pkgs output_fn
 
     let link = if staticLink
                    then SysTools.runLibtool
@@ -1765,7 +1767,7 @@ linkBinary' staticLink dflags o_files dep_packages = do
                       ++ lib_path_opts)
                       ++ extra_ld_inputs
                       ++ map SysTools.Option (
-                         rc_objs
+                         resource_objs
                       ++ framework_opts
                       ++ pkg_lib_path_opts
                       ++ extraLinkObj:noteLinkObjs
@@ -1794,59 +1796,6 @@ exeFileName staticLink dflags
            else "a.out"
  where s <?.> ext | null (takeExtension s) = s <.> ext
                   | otherwise              = s
-
-maybeCreateManifest
-   :: DynFlags
-   -> FilePath                          -- filename of executable
-   -> IO [FilePath]                     -- extra objects to embed, maybe
-maybeCreateManifest dflags exe_filename
- | platformOS (targetPlatform dflags) == OSMinGW32 &&
-   gopt Opt_GenManifest dflags
-    = do let manifest_filename = exe_filename <.> "manifest"
-
-         writeFile manifest_filename $
-             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"++
-             "  <assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">\n"++
-             "  <assemblyIdentity version=\"1.0.0.0\"\n"++
-             "     processorArchitecture=\"X86\"\n"++
-             "     name=\"" ++ dropExtension exe_filename ++ "\"\n"++
-             "     type=\"win32\"/>\n\n"++
-             "  <trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n"++
-             "    <security>\n"++
-             "      <requestedPrivileges>\n"++
-             "        <requestedExecutionLevel level=\"asInvoker\" uiAccess=\"false\"/>\n"++
-             "        </requestedPrivileges>\n"++
-             "       </security>\n"++
-             "  </trustInfo>\n"++
-             "</assembly>\n"
-
-         -- Windows will find the manifest file if it is named
-         -- foo.exe.manifest. However, for extra robustness, and so that
-         -- we can move the binary around, we can embed the manifest in
-         -- the binary itself using windres:
-         if not (gopt Opt_EmbedManifest dflags) then return [] else do
-
-         rc_filename <- newTempName dflags TFL_CurrentModule "rc"
-         rc_obj_filename <-
-           newTempName dflags TFL_GhcSession (objectSuf dflags)
-
-         writeFile rc_filename $
-             "1 24 MOVEABLE PURE " ++ show manifest_filename ++ "\n"
-               -- magic numbers :-)
-               -- show is a bit hackish above, but we need to escape the
-               -- backslashes in the path.
-
-         runWindres dflags $ map SysTools.Option $
-               ["--input="++rc_filename,
-                "--output="++rc_obj_filename,
-                "--output-format=coff"]
-               -- no FileOptions here: windres doesn't like seeing
-               -- backslashes, apparently
-
-         removeFile manifest_filename
-
-         return [rc_obj_filename]
- | otherwise = return []
 
 
 linkDynLibCheck :: DynFlags -> [String] -> [InstalledUnitId] -> IO ()

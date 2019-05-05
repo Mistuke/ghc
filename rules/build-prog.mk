@@ -230,27 +230,31 @@ endif
 
 $1/$2/build/tmp/$$($1_$2_PROG)-inplace-wrapper.c: driver/utils/dynwrapper.c | $$$$(dir $$$$@)/.
 	$$(call removeFiles,$$@)
+	echo '#define WINVER 0x06000100' >> $$@
+	echo '#define UNICODE 1' >> $$@
 	echo '#include <Windows.h>' >> $$@
 	echo '#include "Rts.h"' >> $$@
-	echo 'LPTSTR path_dirs[] = {' >> $$@
-	$$(foreach d,$$($1_$2_DEP_LIB_REL_DIRS),$$(call make-command,echo '    TEXT("/../../$$d")$$(comma)' >> $$@))
-	echo '    TEXT("/../../$1/$2/build/tmp/"),' >> $$@
+	echo 'LPWSTR path_dirs[] = {' >> $$@
+	$$(foreach d,$$($1_$2_DEP_LIB_REL_DIRS),$$(call make-command,echo '    TEXT("../../$$d")$$(comma)' >> $$@))
+	echo '    TEXT("../../$1/$2/build/tmp/"),' >> $$@
 	echo '    NULL};' >> $$@
-	echo 'LPTSTR progDll = TEXT("../../$1/$2/build/tmp/$$($1_$2_PROG).dll");' >> $$@
-	echo 'LPTSTR rtsDll = TEXT("$$($$(WINDOWS_DYN_PROG_RTS))");' >> $$@
+  echo 'LPWSTR progDll = TEXT("$$($1_$2_PROG).dll");' >> $$@
+  echo 'LPWSTR rtsDll = TEXT("$$($$(WINDOWS_DYN_PROG_RTS))");' >> $$@
 	echo 'int rtsOpts = $$($1_$2_RTS_OPTS);' >> $$@
 	cat driver/utils/dynwrapper.c >> $$@
 
 $1/$2/build/tmp/$$($1_$2_PROG)-wrapper.c: driver/utils/dynwrapper.c | $$$$(dir $$$$@)/.
 	$$(call removeFiles,$$@)
+  echo '#define WINVER 0x06000100' >> $$@
+	echo '#define UNICODE 1' >> $$@
 	echo '#include <Windows.h>' >> $$@
 	echo '#include "Rts.h"' >> $$@
-	echo 'LPTSTR path_dirs[] = {' >> $$@
-	$$(foreach p,$$($1_$2_TRANSITIVE_DEP_COMPONENT_IDS),$$(call make-command,echo '    TEXT("/../lib/$$p")$$(comma)' >> $$@))
-	echo '    TEXT("/../lib/"),' >> $$@
+	echo 'LPWSTR path_dirs[] = {' >> $$@
+	$$(foreach p,$$($1_$2_TRANSITIVE_DEP_COMPONENT_IDS),$$(call make-command,echo '    TEXT("../lib/$$p")$$(comma)' >> $$@))
+	echo '    TEXT("../lib/"),' >> $$@
 	echo '    NULL};' >> $$@
-	echo 'LPTSTR progDll = TEXT("../lib/$$($1_$2_PROG).dll");' >> $$@
-	echo 'LPTSTR rtsDll = TEXT("$$($$(WINDOWS_DYN_PROG_RTS))");' >> $$@
+	echo 'LPWSTR progDll = TEXT("../lib/$$($1_$2_PROG).dll");' >> $$@
+	echo 'LPWSTR rtsDll = TEXT("$$($$(WINDOWS_DYN_PROG_RTS))");' >> $$@
 	echo 'int rtsOpts = $$($1_$2_RTS_OPTS);' >> $$@
 	cat driver/utils/dynwrapper.c >> $$@
 
@@ -261,7 +265,7 @@ $1/$2/build/tmp/$$($1_$2_PROG) : $1/$2/build/tmp/$$($1_$2_PROG)-wrapper.c $1/$2/
 	$$(call cmd,$1_$2_HC) -no-hs-main -no-auto-link-packages -optc-g -optc-O0 -Iincludes $$< -o $$@
 
 $1/$2/build/tmp/$$($1_$2_PROG).dll : $$($1_$2_$$($1_$2_PROGRAM_WAY)_HS_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_C_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_S_OBJS) $$($1_$2_OTHER_OBJS) | $$$$(dir $$$$@)/.
-	$$(call build-dll,$1,$2,$$($1_$2_PROGRAM_WAY),,$$($1_$2_$$($1_$2_PROGRAM_WAY)_HS_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_C_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_S_OBJS) $$($1_$2_OTHER_OBJS),$$@)
+	$$(call build-dll,$1,$2,$$($1_$2_PROGRAM_WAY),,,$$($1_$2_$$($1_$2_PROGRAM_WAY)_HS_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_C_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_S_OBJS) $$($1_$2_OTHER_OBJS),$$@,"NO","$$($1_PACKAGE)","$$($1_$2_VERSION)")
 else # $1_$2_PROG_NEEDS_C_WRAPPER=NO
 ifeq "$$($1_$2_LINK_WITH_GCC)" "NO"
 $1/$2/build/tmp/$$($1_$2_PROG) : $$($1_$2_$$($1_$2_PROGRAM_WAY)_HS_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_C_OBJS) $$($1_$2_$$($1_$2_PROGRAM_WAY)_S_OBJS) $$($1_$2_OTHER_OBJS) | $$$$(dir $$$$@)/.

@@ -45,7 +45,7 @@ module DynFlags (
         DynFlags(..),
         FlagSpec(..),
         HasDynFlags(..), ContainsDynFlags(..),
-        RtsOptsEnabled(..),
+        RtsOptsEnabled(..), SxSResolveMode(..),
         HscTarget(..), isObjectTarget, defaultObjectTarget,
         targetRetainsAllBindings,
         GhcMode(..), isOneShot,
@@ -542,6 +542,7 @@ data GeneralFlag
    | Opt_PrintEvldWithShow
    | Opt_PrintBindContents
    | Opt_GenManifest
+   | Opt_GenSxSManifest
    | Opt_EmbedManifest
    | Opt_SharedImplib
    | Opt_BuildingCabalPackage
@@ -988,7 +989,14 @@ data DynFlags = DynFlags {
   libraryPaths          :: [String],
   frameworkPaths        :: [String],    -- used on darwin only
   cmdlineFrameworks     :: [String],    -- ditto
+  -- | Windows SxS settings
+  sxsResolveMode        :: SxSResolveMode,
 
+  -- | Shared Lib ABI settings
+  sharedLibABIName      :: Maybe String,
+  sharedLibABIVersion   :: Maybe String,
+
+  -- | Runtime system options
   rtsOpts               :: Maybe String,
   rtsOptsEnabled        :: RtsOptsEnabled,
   rtsOptsSuggestions    :: Bool,
@@ -1646,6 +1654,15 @@ data RtsOptsEnabled
 shouldUseColor :: DynFlags -> Bool
 shouldUseColor dflags = overrideWith (canUseColor dflags) (useColor dflags)
 
+-- | Windows Side By Side Assembly configuration modes.
+data SxSResolveMode = SxSDefault   -- ^ Default mode means load boot libraries from
+                                   --   SxS Cache and user libs via normal search path
+                    | SxSRelative  -- ^ Relative mode uses SxS activations but with an added
+                                   --   probing entry to search for activations elsewhere.
+                                   --   Windows limits this to 9 extra directories currently.
+                    | SxSCache     -- ^ Use activation context and load everything from Cache.
+  deriving (Show)
+
 shouldUseHexWordLiterals :: DynFlags -> Bool
 shouldUseHexWordLiterals dflags =
   Opt_HexWordLiterals `EnumSet.member` generalFlags dflags
@@ -1835,12 +1852,7 @@ dynamicOutputFile dflags outputFile = dynOut outputFile
 -- | Used by 'GHC.runGhc' to partially initialize a new 'DynFlags' value
 initDynFlags :: DynFlags -> IO DynFlags
 initDynFlags dflags = do
- let -- We can't build with dynamic-too on Windows, as labels before
-     -- the fork point are different depending on whether we are
-     -- building dynamically or not.
-     platformCanGenerateDynamicToo
-         = platformOS (targetPlatform dflags) /= OSMinGW32
- refCanGenerateDynamicToo <- newIORef platformCanGenerateDynamicToo
+ refCanGenerateDynamicToo <- newIORef True
  refNextTempSuffix <- newIORef 0
  refFilesToClean <- newIORef emptyFilesToClean
  refDirsToClean <- newIORef Map.empty
@@ -1967,6 +1979,10 @@ defaultDynFlags mySettings (myLlvmTargets, myLlvmPasses) =
         rtsOpts                 = Nothing,
         rtsOptsEnabled          = RtsOptsSafeOnly,
         rtsOptsSuggestions      = True,
+
+        sxsResolveMode          = SxSDefault,
+        sharedLibABIName        = Nothing,
+        sharedLibABIVersion     = Nothing,
 
         hpcDir                  = ".hpc",
 
@@ -3190,6 +3206,18 @@ dynamic_flags_deps = [
         (NoArg (setRtsOptsEnabled RtsOptsNone))
   , make_ord_flag defGhcFlag "no-rtsopts-suggestions"
       (noArg (\d -> d {rtsOptsSuggestions = False}))
+  , make_ord_flag defGhcFlag "fgen-sxs-assembly"
+        (NoArg (setSxSResolveMode SxSDefault))
+  , make_ord_flag defGhcFlag "fgen-sxs-assembly=cache"
+        (NoArg (setSxSResolveMode SxSCache))
+  , make_ord_flag defGhcFlag "fgen-sxs-assembly=default"
+        (NoArg (setSxSResolveMode SxSDefault))
+  , make_ord_flag defGhcFlag "fgen-sxs-assembly=relative"
+        (NoArg (setSxSResolveMode SxSRelative))
+  , make_ord_flag defGhcFlag "dylib-abi-name"
+        (SepArg setSharedABIName)
+  , make_ord_flag defGhcFlag "dylib-abi-version"
+        (SepArg setSharedABIVersion)
   , make_ord_flag defGhcFlag "dhex-word-literals"
         (NoArg (setGeneralFlag Opt_HexWordLiterals))
 
@@ -4150,6 +4178,7 @@ fFlagsDeps = [
   flagSpec "full-laziness"                    Opt_FullLaziness,
   flagSpec "fun-to-thunk"                     Opt_FunToThunk,
   flagSpec "gen-manifest"                     Opt_GenManifest,
+  flagSpec "gen-sxs-assembly"                 Opt_GenSxSManifest,
   flagSpec "ghci-history"                     Opt_GhciHistory,
   flagSpec "ghci-leak-check"                  Opt_GhciLeakCheck,
   flagSpec "validate-ide-info"                Opt_ValidateHie,
@@ -4491,6 +4520,7 @@ defaultFlags settings
   = [ Opt_AutoLinkPackages,
       Opt_DiagnosticsShowCaret,
       Opt_EmbedManifest,
+      Opt_GenSxSManifest,
       Opt_FlatCache,
       Opt_GenManifest,
       Opt_GhciHistory,
@@ -5524,6 +5554,21 @@ setRtsOptsEnabled :: RtsOptsEnabled -> DynP ()
 setRtsOptsEnabled arg  = upd $ \ d -> d {rtsOptsEnabled = arg}
 
 -----------------------------------------------------------------------------
+-- Windows SxS opts
+
+setSxSResolveMode :: SxSResolveMode -> DynP ()
+setSxSResolveMode arg  = upd $ \ d -> d {sxsResolveMode = arg}
+
+-----------------------------------------------------------------------------
+-- Shared ABI opts
+
+setSharedABIName :: String -> DynP ()
+setSharedABIName arg  = upd $ \ d -> d {sharedLibABIName = Just arg}
+
+setSharedABIVersion :: String -> DynP ()
+setSharedABIVersion arg  = upd $ \ d -> d {sharedLibABIVersion = Just arg}
+
+-----------------------------------------------------------------------------
 -- Hpc stuff
 
 setOptHpcDir :: String -> DynP ()
@@ -5625,7 +5670,7 @@ compilerInfo dflags
        ("RTS ways",                    cGhcRTSWays),
        ("RTS expects libdw",           showBool cGhcRtsWithLibdw),
        -- Whether or not we support @-dynamic-too@
-       ("Support dynamic-too",         showBool $ not isWindows),
+       ("Support dynamic-too",         "YES"),
        -- Whether or not we support the @-j@ flag with @--make@.
        ("Support parallel --make",     "YES"),
        -- Whether or not we support "Foo from foo-0.1-XXX:Foo" syntax in
@@ -5659,7 +5704,6 @@ compilerInfo dflags
   where
     showBool True  = "YES"
     showBool False = "NO"
-    isWindows = platformOS (targetPlatform dflags) == OSMinGW32
     expandDirectories :: FilePath -> Maybe FilePath -> String -> String
     expandDirectories topd mtoold = expandToolDir mtoold . expandTopDir topd
 

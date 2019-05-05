@@ -1084,6 +1084,37 @@ for example).
     :ghc-flag:`-fno-shared-implib` flag to disable the creation of the import
     library entirely.
 
+.. ghc-flag:: -fgen-sxs-assembly,-fgen-sxs-assembly={default,relative,cache}
+    :shortdesc: Generate a Windows Side By Side assembly (Windows only)
+    :type: dynamic
+    :category: linking
+
+    Using ``default`` will only use sxs for core libraries in the manifest.
+    ``relative`` means put a path relative to other libraries of the
+    assembly being compiled in the sxs case and ``cache`` means rely on the SxS
+    global cache for every library.
+
+.. ghc-flag:: -dylib-abi-name ⟨name⟩
+    :shortdesc: Specify dynamic shared library ABI name.
+    :type: dynamic
+    :category: linking
+
+    Requires :ghc-flag:`-shared` to have an effect. When compiling shared
+    libraries on Linux this option sets the ``SONAME`` of the library if
+    specified. On Windows, when used with :ghc-flag:`-fgen-sxs-assembly` this
+    sets the SxS assembly name.
+
+.. ghc-flag:: -dylib-abi-version ⟨version⟩
+    :shortdesc: Specify dynamic shared library ABI version.
+    :type: dynamic
+    :category: linking
+
+    Requires :ghc-flag:`-shared` to have an effect. When compiling shared
+    libraries on Linux this option gets combined with the value of
+    :ghc-flag:`-dylib-abi-name` to produce the full ``SONAME``. On Windows, when
+    used with :ghc-flag:`-fgen-sxs-assembly` this sets the SxS assembly version.
+    Value defaults to ``1.0.0`` if required but not specified.
+
 .. ghc-flag:: -dylib-install-name ⟨path⟩
     :shortdesc: Set the install name (via ``-install_name`` passed to Apple's
         linker), specifying the full install path of the library file.

@@ -243,27 +243,27 @@ typedef struct _RTSStats {
   uint64_t scav_find_work;
 } RTSStats;
 
-void getRTSStats (RTSStats *s);
-int getRTSStatsEnabled (void);
+DLL_IMPORT_RTS void getRTSStats (RTSStats *s);
+DLL_IMPORT_RTS int getRTSStatsEnabled (void);
 
 // Returns the total number of bytes allocated since the start of the program.
 // TODO: can we remove this?
-uint64_t getAllocations (void);
+DLL_IMPORT_RTS uint64_t getAllocations (void);
 
 /* ----------------------------------------------------------------------------
    Starting up and shutting down the Haskell RTS.
    ------------------------------------------------------------------------- */
 
 /* DEPRECATED, use hs_init() or hs_init_ghc() instead  */
-extern void startupHaskell         ( int argc, char *argv[],
-                                     void (*init_root)(void) );
+DLL_IMPORT_RTS extern void startupHaskell  ( int argc, char *argv[],
+                                             void (*init_root)(void) );
 
 /* DEPRECATED, use hs_exit() instead  */
-extern void shutdownHaskell        ( void );
+DLL_IMPORT_RTS extern void shutdownHaskell ( void );
 
 /* Like hs_init(), but allows rtsopts. For more complicated usage,
  * use hs_init_ghc. */
-extern void hs_init_with_rtsopts (int *argc, char **argv[]);
+DLL_IMPORT_RTS extern void hs_init_with_rtsopts (int *argc, char **argv[]);
 
 /*
  * GHC-specific version of hs_init() that allows specifying whether
@@ -271,10 +271,10 @@ extern void hs_init_with_rtsopts (int *argc, char **argv[]);
  * options are allowed), and allows passing an option string that is
  * to be interpreted by the RTS only, not passed to the program.
  */
-extern void hs_init_ghc (int *argc, char **argv[],   // program arguments
-                         RtsConfig rts_config);      // RTS configuration
+DLL_IMPORT_RTS extern void hs_init_ghc (int *argc, char **argv[],   // program arguments
+                                        RtsConfig rts_config);      // RTS configuration
 
-extern void shutdownHaskellAndExit (int exitCode, int fastExit)
+DLL_IMPORT_RTS extern void shutdownHaskellAndExit (int exitCode, int fastExit)
     GNUC3_ATTRIBUTE(__noreturn__);
 
 #if !defined(mingw32_HOST_OS)
@@ -282,14 +282,14 @@ extern void shutdownHaskellAndSignal (int sig, int fastExit)
      GNUC3_ATTRIBUTE(__noreturn__);
 #endif
 
-extern void getProgArgv            ( int *argc, char **argv[] );
-extern void setProgArgv            ( int argc, char *argv[] );
-extern void getFullProgArgv        ( int *argc, char **argv[] );
-extern void setFullProgArgv        ( int argc, char *argv[] );
-extern void freeFullProgArgv       ( void ) ;
+DLL_IMPORT_RTS extern void getProgArgv            ( int *argc, char **argv[] );
+DLL_IMPORT_RTS extern void setProgArgv            ( int argc, char *argv[] );
+DLL_IMPORT_RTS extern void getFullProgArgv        ( int *argc, char **argv[] );
+DLL_IMPORT_RTS extern void setFullProgArgv        ( int argc, char *argv[] );
+DLL_IMPORT_RTS extern void freeFullProgArgv       ( void ) ;
 
 /* exit() override */
-extern void (*exitFn)(int);
+DLL_IMPORT_RTS extern void (*exitFn)(int);
 
 /* ----------------------------------------------------------------------------
    Locking.
@@ -299,10 +299,10 @@ extern void (*exitFn)(int);
 
 // acquires a token which may be used to create new objects and
 // evaluate them.
-Capability *rts_lock (void);
+DLL_IMPORT_RTS Capability *rts_lock (void);
 
 // releases the token acquired with rts_lock().
-void rts_unlock (Capability *token);
+DLL_IMPORT_RTS void rts_unlock (Capability *token);
 
 // If you are in a context where you know you have a current capability but
 // do not know what it is, then use this to get it. Basically this only
@@ -311,7 +311,7 @@ void rts_unlock (Capability *token);
 //
 // WARNING: There is *no* guarantee this returns anything sensible (eg NULL)
 // when there is no current capability.
-Capability *rts_unsafeGetMyCapability (void);
+DLL_IMPORT_RTS Capability *rts_unsafeGetMyCapability (void);
 
 /* ----------------------------------------------------------------------------
    Which cpu should the OS thread and Haskell thread run on?
@@ -342,58 +342,58 @@ Capability *rts_unsafeGetMyCapability (void);
 // If affinity is non-zero, the current thread will be bound to
 // specific CPUs according to the prevailing affinity policy for the
 // specified capability, set by either +RTS -qa or +RTS --numa.
-void rts_setInCallCapability (int preferred_capability, int affinity);
+DLL_IMPORT_RTS void rts_setInCallCapability (int preferred_capability, int affinity);
 
 // Specify the CPU Node that the current OS thread should run on when it calls
 // into Haskell. The argument can be either a node number or capability number.
 // The actual node will be calculated as the supplied value modulo the number
 // of numa nodes.
-void rts_pinThreadToNumaNode (int node);
+DLL_IMPORT_RTS void rts_pinThreadToNumaNode (int node);
 
 /* ----------------------------------------------------------------------------
    Building Haskell objects from C datatypes.
    ------------------------------------------------------------------------- */
-HaskellObj   rts_mkChar       ( Capability *, HsChar   c );
-HaskellObj   rts_mkInt        ( Capability *, HsInt    i );
-HaskellObj   rts_mkInt8       ( Capability *, HsInt8   i );
-HaskellObj   rts_mkInt16      ( Capability *, HsInt16  i );
-HaskellObj   rts_mkInt32      ( Capability *, HsInt32  i );
-HaskellObj   rts_mkInt64      ( Capability *, HsInt64  i );
-HaskellObj   rts_mkWord       ( Capability *, HsWord   w );
-HaskellObj   rts_mkWord8      ( Capability *, HsWord8  w );
-HaskellObj   rts_mkWord16     ( Capability *, HsWord16 w );
-HaskellObj   rts_mkWord32     ( Capability *, HsWord32 w );
-HaskellObj   rts_mkWord64     ( Capability *, HsWord64 w );
-HaskellObj   rts_mkPtr        ( Capability *, HsPtr    a );
-HaskellObj   rts_mkFunPtr     ( Capability *, HsFunPtr a );
-HaskellObj   rts_mkFloat      ( Capability *, HsFloat  f );
-HaskellObj   rts_mkDouble     ( Capability *, HsDouble f );
-HaskellObj   rts_mkStablePtr  ( Capability *, HsStablePtr s );
-HaskellObj   rts_mkBool       ( Capability *, HsBool   b );
-HaskellObj   rts_mkString     ( Capability *, char    *s );
+DLL_IMPORT_RTS HaskellObj   rts_mkChar       ( Capability *, HsChar   c );
+DLL_IMPORT_RTS HaskellObj   rts_mkInt        ( Capability *, HsInt    i );
+DLL_IMPORT_RTS HaskellObj   rts_mkInt8       ( Capability *, HsInt8   i );
+DLL_IMPORT_RTS HaskellObj   rts_mkInt16      ( Capability *, HsInt16  i );
+DLL_IMPORT_RTS HaskellObj   rts_mkInt32      ( Capability *, HsInt32  i );
+DLL_IMPORT_RTS HaskellObj   rts_mkInt64      ( Capability *, HsInt64  i );
+DLL_IMPORT_RTS HaskellObj   rts_mkWord       ( Capability *, HsWord   w );
+DLL_IMPORT_RTS HaskellObj   rts_mkWord8      ( Capability *, HsWord8  w );
+DLL_IMPORT_RTS HaskellObj   rts_mkWord16     ( Capability *, HsWord16 w );
+DLL_IMPORT_RTS HaskellObj   rts_mkWord32     ( Capability *, HsWord32 w );
+DLL_IMPORT_RTS HaskellObj   rts_mkWord64     ( Capability *, HsWord64 w );
+DLL_IMPORT_RTS HaskellObj   rts_mkPtr        ( Capability *, HsPtr    a );
+DLL_IMPORT_RTS HaskellObj   rts_mkFunPtr     ( Capability *, HsFunPtr a );
+DLL_IMPORT_RTS HaskellObj   rts_mkFloat      ( Capability *, HsFloat  f );
+DLL_IMPORT_RTS HaskellObj   rts_mkDouble     ( Capability *, HsDouble f );
+DLL_IMPORT_RTS HaskellObj   rts_mkStablePtr  ( Capability *, HsStablePtr s );
+DLL_IMPORT_RTS HaskellObj   rts_mkBool       ( Capability *, HsBool   b );
+DLL_IMPORT_RTS HaskellObj   rts_mkString     ( Capability *, char    *s );
 
-HaskellObj   rts_apply        ( Capability *, HaskellObj, HaskellObj );
+DLL_IMPORT_RTS HaskellObj   rts_apply        ( Capability *, HaskellObj, HaskellObj );
 
 /* ----------------------------------------------------------------------------
    Deconstructing Haskell objects
    ------------------------------------------------------------------------- */
-HsChar       rts_getChar      ( HaskellObj );
-HsInt        rts_getInt       ( HaskellObj );
-HsInt8       rts_getInt8      ( HaskellObj );
-HsInt16      rts_getInt16     ( HaskellObj );
-HsInt32      rts_getInt32     ( HaskellObj );
-HsInt64      rts_getInt64     ( HaskellObj );
-HsWord       rts_getWord      ( HaskellObj );
-HsWord8      rts_getWord8     ( HaskellObj );
-HsWord16     rts_getWord16    ( HaskellObj );
-HsWord32     rts_getWord32    ( HaskellObj );
-HsWord64     rts_getWord64    ( HaskellObj );
-HsPtr        rts_getPtr       ( HaskellObj );
-HsFunPtr     rts_getFunPtr    ( HaskellObj );
-HsFloat      rts_getFloat     ( HaskellObj );
-HsDouble     rts_getDouble    ( HaskellObj );
-HsStablePtr  rts_getStablePtr ( HaskellObj );
-HsBool       rts_getBool      ( HaskellObj );
+DLL_IMPORT_RTS HsChar       rts_getChar      ( HaskellObj );
+DLL_IMPORT_RTS HsInt        rts_getInt       ( HaskellObj );
+DLL_IMPORT_RTS HsInt8       rts_getInt8      ( HaskellObj );
+DLL_IMPORT_RTS HsInt16      rts_getInt16     ( HaskellObj );
+DLL_IMPORT_RTS HsInt32      rts_getInt32     ( HaskellObj );
+DLL_IMPORT_RTS HsInt64      rts_getInt64     ( HaskellObj );
+DLL_IMPORT_RTS HsWord       rts_getWord      ( HaskellObj );
+DLL_IMPORT_RTS HsWord8      rts_getWord8     ( HaskellObj );
+DLL_IMPORT_RTS HsWord16     rts_getWord16    ( HaskellObj );
+DLL_IMPORT_RTS HsWord32     rts_getWord32    ( HaskellObj );
+DLL_IMPORT_RTS HsWord64     rts_getWord64    ( HaskellObj );
+DLL_IMPORT_RTS HsPtr        rts_getPtr       ( HaskellObj );
+DLL_IMPORT_RTS HsFunPtr     rts_getFunPtr    ( HaskellObj );
+DLL_IMPORT_RTS HsFloat      rts_getFloat     ( HaskellObj );
+DLL_IMPORT_RTS HsDouble     rts_getDouble    ( HaskellObj );
+DLL_IMPORT_RTS HsStablePtr  rts_getStablePtr ( HaskellObj );
+DLL_IMPORT_RTS HsBool       rts_getBool      ( HaskellObj );
 
 /* ----------------------------------------------------------------------------
    Evaluating Haskell expressions
@@ -410,39 +410,39 @@ HsBool       rts_getBool      ( HaskellObj );
    result in a type error.
    ------------------------------------------------------------------------- */
 
-void rts_eval (/* inout */ Capability **,
-               /* in    */ HaskellObj p,
-               /* out */   HaskellObj *ret);
+DLL_IMPORT_RTS void rts_eval (/* inout */ Capability **,
+                              /* in    */ HaskellObj p,
+                              /* out */   HaskellObj *ret);
 
-void rts_eval_ (/* inout */ Capability **,
-                /* in    */ HaskellObj p,
-                /* in    */ unsigned int stack_size,
-                /* out   */ HaskellObj *ret);
+DLL_IMPORT_RTS void rts_eval_ (/* inout */ Capability **,
+                               /* in    */ HaskellObj p,
+                               /* in    */ unsigned int stack_size,
+                               /* out   */ HaskellObj *ret);
 
-void rts_evalIO (/* inout */ Capability **,
-                 /* in    */ HaskellObj p,
-                 /* out */   HaskellObj *ret);
+DLL_IMPORT_RTS void rts_evalIO (/* inout */ Capability **,
+                                /* in    */ HaskellObj p,
+                                /* out */   HaskellObj *ret);
 
-void rts_evalStableIOMain (/* inout */ Capability **,
-                           /* in    */ HsStablePtr s,
-                           /* out */   HsStablePtr *ret);
+DLL_IMPORT_RTS void rts_evalStableIOMain (/* inout */ Capability **,
+                                          /* in    */ HsStablePtr s,
+                                          /* out */   HsStablePtr *ret);
 
-void rts_evalStableIO (/* inout */ Capability **,
-                       /* in    */ HsStablePtr s,
-                       /* out */   HsStablePtr *ret);
+DLL_IMPORT_RTS void rts_evalStableIO (/* inout */ Capability **,
+                                      /* in    */ HsStablePtr s,
+                                      /* out */   HsStablePtr *ret);
 
-void rts_evalLazyIO (/* inout */ Capability **,
-                     /* in    */ HaskellObj p,
-                     /* out */   HaskellObj *ret);
+DLL_IMPORT_RTS void rts_evalLazyIO (/* inout */ Capability **,
+                                    /* in    */ HaskellObj p,
+                                    /* out */   HaskellObj *ret);
 
-void rts_evalLazyIO_ (/* inout */ Capability **,
-                      /* in    */ HaskellObj p,
-                      /* in    */ unsigned int stack_size,
-                      /* out   */ HaskellObj *ret);
+DLL_IMPORT_RTS void rts_evalLazyIO_ (/* inout */ Capability **,
+                                     /* in    */ HaskellObj p,
+                                     /* in    */ unsigned int stack_size,
+                                     /* out   */ HaskellObj *ret);
 
-void rts_checkSchedStatus (char* site, Capability *);
+DLL_IMPORT_RTS void rts_checkSchedStatus (char* site, Capability *);
 
-SchedulerStatus rts_getSchedStatus (Capability *cap);
+DLL_IMPORT_RTS SchedulerStatus rts_getSchedStatus (Capability *cap);
 
 /*
  * The RTS allocates some thread-local data when you make a call into
@@ -455,7 +455,7 @@ SchedulerStatus rts_getSchedStatus (Capability *cap);
  * but the next one will cause allocation of the thread-local memory
  * again.
  */
-void rts_done (void);
+DLL_IMPORT_RTS void rts_done (void);
 
 /* --------------------------------------------------------------------------
    Wrapper closures
@@ -470,8 +470,8 @@ void rts_done (void);
 //      the base package itself.
 //
 #if defined(COMPILING_WINDOWS_DLL) && !defined(COMPILING_BASE_PACKAGE)
-__declspec(dllimport) extern StgWord base_GHCziTopHandler_runIO_closure[];
-__declspec(dllimport) extern StgWord base_GHCziTopHandler_runNonIO_closure[];
+DLL_IMPORT_RTS extern StgWord base_GHCziTopHandler_runIO_closure[];
+DLL_IMPORT_RTS extern StgWord base_GHCziTopHandler_runNonIO_closure[];
 #else
 extern StgWord base_GHCziTopHandler_runIO_closure[];
 extern StgWord base_GHCziTopHandler_runNonIO_closure[];
