@@ -269,8 +269,11 @@ static void notifyRtsOfFinishedCall (uint32_t num)
   StgTSO * tso = createStrictIOThread (cap, RtsFlags.GcFlags.initialStkSize,
                                        processRemoteCompletion_closure);
   AcquireSRWLockExclusive (&lock);
-  outstanding_service_requests = true;
-  WakeConditionVariable (&threadIOWait);
+  if (num > 0)
+    {
+      outstanding_service_requests = true;
+      WakeConditionVariable (&threadIOWait);
+    }
   ReleaseSRWLockExclusive (&lock);
 
   fprintf (stderr, "I/O done %d.\n", num);

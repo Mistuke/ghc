@@ -301,9 +301,10 @@ schedule (Capability *initialCapability, Task *task)
   /* On the non-threaded RTS if the queue is empty and the last action was
      blocked on an I/O completion port, then just wait till we're woken up by
      the RTS with more work.  */
-  if (t && t->why_blocked == BlockedOnIOCompletion)
+  //if (t && t->why_blocked == BlockedOnIOCompletion)
     {
       awaitEvent (emptyRunQueue(cap));
+      fprintf (stderr, "running.\n");
       continue;
     }
 #if !defined(mingw32_HOST_OS)
