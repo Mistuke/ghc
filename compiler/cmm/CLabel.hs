@@ -438,7 +438,7 @@ data CmmLabelInfo
 
 data DynamicLinkerLabelInfo
   = CodeStub                    -- MachO: Lfoo$stub, ELF: foo@plt
-  | SymbolPtr                   -- MachO: Lfoo$non_lazy_ptr, Windows: __imp_foo
+  | SymbolPtr                   -- MachO: Lfoo$non_lazy_ptr, Windows: foo
   | GotSymbolPtr                -- ELF: foo@got
   | GotSymbolOffset             -- ELF: foo@gotoff
 
@@ -1397,7 +1397,7 @@ pprDynamicLinkerAsmLabel platform dllInfo lbl =
 
       OSMinGW32 ->
           case dllInfo of
-            SymbolPtr -> text "__imp_" <> ppr lbl
+            SymbolPtr -> ppr lbl
             _         -> panic "pprDynamicLinkerAsmLabel"
 
       _ -> panic "pprDynamicLinkerAsmLabel"

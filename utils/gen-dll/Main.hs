@@ -128,7 +128,7 @@ import Foreign.Marshal.Alloc (alloca)
 
 #if defined(i386_HOST_ARCH)
 # define WINDOWS_CCONV stdcall
-# define ARCH "i686"
+# define ARCH "x86"
 #elif defined(x86_64_HOST_ARCH)
 # define WINDOWS_CCONV ccall
 # define ARCH "x86_64"
@@ -445,7 +445,7 @@ execProg prog m_stdin args =
 -- support both. We're talking a difference of 45 minutes in build time here.
 execLibTool :: String -> String -> IO [String]
 execLibTool input_def output_lib =
-  do if HAS_GENLIB
+  do if HAS_GENLIB && False
         then execProg genlib Nothing ["-a", ARCH, input_def, "-o", output_lib]
         else execProg dlltool Nothing ["-d", input_def, "-l", output_lib]
 

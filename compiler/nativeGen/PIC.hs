@@ -18,9 +18,6 @@
   + codeGen & RTS
     - When tablesNextToCode, no absolute addresses are stored in info tables
       any more. Instead, offsets from the info label are used.
-    - For Win32 only, SRTs might contain addresses of __imp_ symbol pointers
-      because Win32 doesn't support external references in data sections.
-      TODO: make sure this still works, it might be bitrotted
   + NCG
     - The cmmToCmm pass in AsmCodeGen calls cmmMakeDynamicReference for all
       labels.
@@ -217,7 +214,7 @@ howToAccessLabel
 
 -- Windows
 -- In Windows speak, a "module" is a set of objects linked into the
--- same Portable Exectuable (PE) file. (both .exe and .dll files are PEs).
+-- same Portable Executable (PE) file. (both .exe and .dll files are PEs).
 --
 -- If we're compiling a multi-module program then symbols from other modules
 -- are accessed by a symbol pointer named __imp_SYMBOL. At runtime we have the
@@ -227,14 +224,18 @@ howToAccessLabel
 --     __imp_SYMBOL: addr of SYMBOL
 --
 --   (in the other module)
---     SYMBOL: the real function / data.
+--     SYMBOL: the real function.
 --
--- To access the function at SYMBOL from our local module, we just need to
--- dereference the local __imp_SYMBOL.
+--   (in import library)
+--     SYMBOL: PLT stub for the function
 --
--- If not compiling with -dynamic we assume that all our code will be linked
--- into the same .exe file. In this case we always access symbols directly,
--- and never use __imp_SYMBOL.
+-- To access the function at SYMBOL from our local module, we still need to
+-- dereference the symbol through its PLT (named SYMBOL) and never directly
+-- through __imp_SYMBOL because this symbol can be add an address that violates
+-- our current code model.
+--
+-- Data does not get an __imp_ symbol and so must always just be accessed via
+-- the SYMBOL directly.
 --
 howToAccessLabel dflags _ OSMinGW32 this_mod _ lbl
 
@@ -243,7 +244,7 @@ howToAccessLabel dflags _ OSMinGW32 this_mod _ lbl
         = AccessDirectly
 
         -- If the target symbol is in another PE we need to access it via the
-        --      appropriate __imp_SYMBOL pointer.
+        -- appropriate SYMBOL PLT entry in the import library.
         | labelDynamic dflags this_mod lbl
         = AccessViaSymbolPtr
 

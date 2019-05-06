@@ -99,7 +99,7 @@ libraries/integer-gmp/include/ghc-gmp.h: libraries/integer-gmp/gmp/gmp.h
 
 gmp_CC_OPTS += -Ilibraries/integer-gmp/gmp
 
-libraries/integer-gmp_dist-install_EXTRA_OBJS += libraries/integer-gmp/gmp/objs/*.o
+libraries/integer-gmp_dist-install_EXTRA_OBJS += $(wildcard libraries/integer-gmp/gmp/objs/*.o)
 else
 $(libraries/integer-gmp_dist-install_depfile_c_asm): libraries/integer-gmp/include/ghc-gmp.h
 
