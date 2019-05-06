@@ -303,11 +303,7 @@ schedule (Capability *initialCapability, Task *task)
      the RTS with more work.  */
   if (t && t->why_blocked == BlockedOnIOCompletion)
     {
-      // SwitchToThread ();
-      // Sleep (0);
-#if defined(i386_TARGET_ARCH) || defined(x86_64_TARGET_ARCH)
-      __asm__ __volatile__ ("rep; nop");
-#endif
+      awaitEvent (emptyRunQueue(cap));
       continue;
     }
 #if !defined(mingw32_HOST_OS)

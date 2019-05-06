@@ -381,7 +381,9 @@ startIOManagerThread :: IO () -> IO ()
 startIOManagerThread loop = do
   modifyMVar_ ioManagerThread $ \old -> do
     let create = do debugIO "spawning worker threads.."
-                    t <- forkOS loop
+                    t <- if threaded
+                            then forkOS loop
+                            else forkIO loop
                     setStatus WinIORunning
                     debugIO $ "created io-manager threads."
                     return (Just t)

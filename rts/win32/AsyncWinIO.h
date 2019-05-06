@@ -16,6 +16,7 @@
 
 extern bool startupAsyncWinIO(void);
 extern void shutdownAsyncWinIO(bool wait_threads);
+extern void awaitAsyncRequests(bool wait);
 extern void registerNewIOCPHandle (HANDLE port);
 extern void registerAlertableWait (HANDLE port, DWORD mssec, uint64_t num_req);
 

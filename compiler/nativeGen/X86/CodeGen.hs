@@ -2266,9 +2266,8 @@ genCCall dflags is32Bit (PrimTarget MO_Xchg) [dst] [addr, value] _ = do
     Amode amode addr_code <- getSimpleAmode dflags is32Bit addr
     newval <- getNewRegNat format
     newval_code <- getAnyReg value
-    use_sse2 <- sse2Enabled
     let platform = targetPlatform dflags
-        dst_r    = getRegisterReg platform use_sse2 (CmmLocal dst)
+        dst_r    = getRegisterReg platform (CmmLocal dst)
         code     = toOL
                    [ MOV format (OpReg newval) (OpReg eax)
                    , LOCK (XCHG format (OpReg eax) (OpAddr amode))

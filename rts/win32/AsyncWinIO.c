@@ -87,6 +87,12 @@
    It works around this by having the Haskell side tell it how much work it
    still has left to do.
 
+   Unlike the Threaded version we use a single worker thread to handle
+   completions and so it won't scale as well.  But if high scalability is needed
+   then use the threaded runtime.  This could would have to become threadsafe
+   in order to use multiple threads, but this is non-trivial as the non-threaded
+   rts has no locks around any of the key parts.
+
    See also Note [WINIO Manager design].  */
 
 /* The IOCP Handle all I/O requests are associated with for this RTS.  */
@@ -117,6 +123,9 @@ SRWLOCK lock;
 /* Conditional variable to wake the I/O manager up from a non-alertable waiting
    state.  */
 CONDITION_VARIABLE wakeEvent;
+/* Conditional variable to force the system thread to wait for a request to
+   complete.  */
+CONDITION_VARIABLE threadIOWait;
 /* The last event that was sent to the I/O manager.  */
 HsWord32 lastEvent = 0;
 
@@ -141,6 +150,7 @@ bool startupAsyncWinIO(void)
 
   InitializeSRWLock (&lock);
   InitializeConditionVariable (&wakeEvent);
+  InitializeConditionVariable (&threadIOWait);
 
   entries = calloc (sizeof (OVERLAPPED_ENTRY), num_callbacks);
 
@@ -173,6 +183,7 @@ void shutdownAsyncWinIO(bool wait_threads)
           ioManagerWakeup ();
           PostQueuedCompletionStatus (completionPortHandle, 0, 0, NULL);
           WakeConditionVariable (&wakeEvent);
+          WakeConditionVariable (&threadIOWait);
 
           ReleaseSRWLockExclusive (&lock);
 
@@ -259,12 +270,32 @@ static void notifyRtsOfFinishedCall (uint32_t num)
                                        processRemoteCompletion_closure);
   AcquireSRWLockExclusive (&lock);
   outstanding_service_requests = true;
+  WakeConditionVariable (&threadIOWait);
   ReleaseSRWLockExclusive (&lock);
 
   fprintf (stderr, "I/O done %d.\n", num);
   scheduleThread (cap, tso);
 #endif
 }
+
+/* Called by the scheduler when we have ran out of work to do and we have at
+   least one thread blocked on an I/O Port.  When WAIT then if this function
+   returns you will have at least one action to service, though this may be a
+   wake-up action.  */
+
+void awaitAsyncRequests (bool wait)
+{
+  AcquireSRWLockExclusive (&lock);
+  /* We don't deal with spurious requests here, that's left up to AwaitEvent.c
+     because in principle we need to check if the capability work queue is now
+     not empty but we can't do that here.  Also these locks don't guarantee
+     fairness, as such a request may have completed without us seeing a
+     timeslice in between.  */
+  if (wait && !outstanding_service_requests)
+    SleepConditionVariableSRW (&threadIOWait, &lock, INFINITE, 0);
+  ReleaseSRWLockExclusive (&lock);
+}
+
 
 /* Exported function that will be called by the RTS in order to indicate that
    the RTS has successfully finished servicing I/O request returned with
