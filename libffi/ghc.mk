@@ -35,12 +35,8 @@ libffi_STATIC_LIB  = libffi/build/inst/lib/libffi.a
 libffi_HEADERS     = rts/dist/build/ffi.h \
                      rts/dist/build/ffitarget.h
 
-ifeq "$(HostOS_CPP)" "mingw32"
-LIBFFI_NAME = ffi-6
-else
 LIBFFI_NAME = ffi
-endif
-LIBFFI_DLL = lib$(LIBFFI_NAME).dll
+LIBFFI_DLL = lib$(LIBFFI_NAME).dll.a
 
 ifneq "$(BINDIST)" "YES"
 $(libffi_STAMP_CONFIGURE): $(TOUCH_DEP)

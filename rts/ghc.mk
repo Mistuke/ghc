@@ -112,7 +112,7 @@ rts/dist/build/win32/libHS$1.def : rts/win32/libHS$1.def
 		> rts/dist/build/win32/libHS$1.def
 
 rts/dist/build/win32/libHS$1.dll.a : rts/dist/build/win32/libHS$1.def
-	"$$(DlltoolCmd)" 	-d rts/dist/build/win32/libHS$1.def \
+	"$$(DLLTOOL)" 	-d rts/dist/build/win32/libHS$1.def \
 			-l rts/dist/build/win32/libHS$1.dll.a
 endef
 $(foreach lib,$(ALL_RTS_DEF_LIBNAMES),$(eval $(call make-importlib-def,$(lib))))
@@ -121,8 +121,9 @@ endif
 ifneq "$(BINDIST)" "YES"
 ifneq "$(UseSystemLibFFI)" "YES"
 ifeq "$(TargetOS_CPP)" "mingw32"
-rts/dist/build/$(LIBFFI_DLL): libffi/build/inst/bin/$(LIBFFI_DLL)
+rts/dist/build/$(LIBFFI_DLL): libffi/build/inst/lib/$(LIBFFI_DLL)
 	cp $< $@
+	cp $(wildcard libffi/build/inst/bin/lib$(LIBFFI_NAME)*.dll) rts/dist/build/
 else
 # This is a little hacky. We don't know the SO version, so we only
 # depend on libffi.so, but copy libffi.so*

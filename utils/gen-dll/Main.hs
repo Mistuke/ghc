@@ -108,14 +108,13 @@ import Control.Monad (when, forM_)
 import Control.Exception (bracket)
 
 import Data.Char (toLower, isSpace)
-import Data.List (isPrefixOf, nub, sort, (\\))
+import Data.List ((\\))
 import qualified Data.Map as M (Map(), alter, empty, toList)
 
 import System.Environment (getArgs)
 import System.Exit (ExitCode(..), exitWith)
-import System.Directory (findFilesWith, getCurrentDirectory)
-import System.FilePath (takeBaseName, takeDirectory, dropExtension, (<.>)
-                       ,takeFileName)
+import System.Directory (getCurrentDirectory)
+import System.FilePath (dropExtension, (<.>) ,takeFileName)
 import System.IO (hClose, hGetContents, withFile, IOMode(..), hPutStrLn, openFile)
 import System.Process (proc, createProcess_, StdStream (..), CreateProcess(..)
                       ,waitForProcess)
@@ -129,8 +128,10 @@ import Foreign.Marshal.Alloc (alloca)
 
 #if defined(i386_HOST_ARCH)
 # define WINDOWS_CCONV stdcall
+# define ARCH "i686"
 #elif defined(x86_64_HOST_ARCH)
 # define WINDOWS_CCONV ccall
+# define ARCH "x86_64"
 #else
 # error Unknown mingw32 arch
 #endif
@@ -204,7 +205,7 @@ process_dll_link :: String -- ^ dir
                  -> String -- ^ SxS version
                  -> IO ()
 process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
-                 link_cmd delay_imp sxs_name sxs_version
+                 link_cmd delay_imp _sxs_name _sxs_version
   = do let base = dropExtension output
        -- We need to know how many symbols came from other static archives
        -- So take the total number of symbols and remove those we know came
@@ -228,9 +229,9 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
        -- get the proper manifests generated.
        let sxs_opts = [ "-fgen-sxs-assembly"
                       , "-dylib-abi-name"
-                      , show sxs_name
+                      , show _sxs_name
                       , "-dylib-abi-version"
-                      , show sxs_version
+                      , show _sxs_version
                       ]
 #else
        let sxs_opts = []
@@ -303,23 +304,23 @@ process_dll_link _dir _distdir _way extra_flags extra_libs objs_files output
                              file    = base_pt <.> "def"
                              dll     = base_pt <.> "dll"
                              lst     = base_pt <.> "lst"
-                             imp_lib = base_pt <.> "dll.a"
+                             -- imp_lib = base_pt <.> "dll.a"
                              indexes = [1..(length spl_objs)]\\[i]
                              libs    = map (\ix -> (base' ++ show ix) <.> "dll.a") indexes
 
                          _ <- execProg link_cmd Nothing
-                                  $ concat [[objs_files
-                                            ,extra_libs
-                                            ,extra_flags
-                                            ,file
-                                            ]
-                                           ,libs
-                                           ,sxs_opts
-                                           ,["-fno-shared-implib"
-                                            ,"-optl-Wl,--retain-symbols-file=" ++ lst
-                                            ,"-o"
-                                            ,dll
-                                            ]
+                                  $ concat [ [ objs_files
+                                             , extra_libs
+                                             , extra_flags
+                                             , file
+                                             ]
+                                           , libs
+                                           , sxs_opts
+                                           , [ "-fno-shared-implib"
+                                             , "-optl-Wl,--retain-symbols-file=" ++ lst
+                                             , "-o"
+                                             , dll
+                                             ]
                                            ]
 
                          -- build_delay_import_lib file imp_lib delay_imp
@@ -445,8 +446,9 @@ execProg prog m_stdin args =
 execLibTool :: String -> String -> IO [String]
 execLibTool input_def output_lib =
   do if HAS_GENLIB
-        then execProg genlib Nothing [input_def, "-o", output_lib]
+        then execProg genlib Nothing ["-a", ARCH, input_def, "-o", output_lib]
         else execProg dlltool Nothing ["-d", input_def, "-l", output_lib]
+
 
 -- Builds a delay import lib at the very end which is used to
 -- be able to delay the picking of a DLL on Windows.

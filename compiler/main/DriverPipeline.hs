@@ -28,7 +28,6 @@ module DriverPipeline (
    phaseOutputFilename, getOutputFilename, getPipeState, getPipeEnv,
    hscPostBackendPhase, getLocation, setModLocation, setDynFlags,
    runPhase, exeFileName,
-   maybeCreateManifest,
    linkingNeeded, checkLinkInfo, writeInterfaceOnlyMode
   ) where
 
@@ -622,16 +621,14 @@ runPipeline stop_phase hsc_env0 (input_fn, mb_phase)
          -- -dynamic-too, but couldn't do the -dynamic-too fast
          -- path, then rerun the pipeline for the dyn way
          let dflags = hsc_dflags hsc_env
-         -- NB: Currently disabled on Windows (ref #7134, #8228, and #5987)
-         when (not $ platformOS (targetPlatform dflags) == OSMinGW32) $ do
-           when isHaskellishFile $ whenCannotGenerateDynamicToo dflags $ do
-               debugTraceMsg dflags 4
-                   (text "Running the pipeline again for -dynamic-too")
-               let dflags' = dynamicTooMkDynamicDynFlags dflags
-               hsc_env' <- newHscEnv dflags'
-               _ <- runPipeline' start_phase hsc_env' env input_fn
-                                 maybe_loc foreign_os
-               return ()
+         when isHaskellishFile $ whenCannotGenerateDynamicToo dflags $ do
+             debugTraceMsg dflags 4
+                 (text "Running the pipeline again for -dynamic-too")
+             let dflags' = dynamicTooMkDynamicDynFlags dflags
+             hsc_env' <- newHscEnv dflags'
+             _ <- runPipeline' start_phase hsc_env' env input_fn
+                               maybe_loc foreign_os
+             return ()
          return r
 
 runPipeline'

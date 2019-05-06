@@ -20,12 +20,19 @@ import Platform
 import SysTools
 import ErrUtils
 import Outputable (text)
+import FileCleanup
 
 
 import Data.Version
 import Data.Maybe
 import Data.List
+import GHC.Base
+import GHC.Show
+import GHC.Num
 
+import Text.Read
+
+import System.IO
 import System.FilePath
 import System.Directory (findFile, removeFile)
 
@@ -186,8 +193,8 @@ mkManifest dflags pkgs assembly
          then return []
          else do
              debugTraceMsg dflags 2 (text $ "Embedding manifest `" ++ manifest_filename ++ "' into `" ++ assembly ++ "'")
-             rc_filename <- newTempName dflags "rc"
-             rc_obj_filename <- newTempName dflags (objectSuf dflags)
+             rc_filename <- newTempName dflags TFL_GhcSession "rc"
+             rc_obj_filename <- newTempName dflags TFL_GhcSession (objectSuf dflags)
 
              writeFile rc_filename $
                  "1 24 MOVEABLE PURE " ++ show manifest_filename ++ "\n"
