@@ -401,6 +401,7 @@ Library
             GHC.Event.Windows
             GHC.Event.Windows.Clock
             GHC.Event.Windows.FFI
+            GHC.Event.Windows.ManagedThreadPool
             GHC.Event.Windows.Thread
             GHC.IO.Windows.Handle
             GHC.IO.Windows.Encoding

@@ -5,6 +5,21 @@
 {-# LANGUAGE EmptyDataDecls #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+
+-------------------------------------------------------------------------------
+-- |
+-- Module      :  GHC.Event.Windows.FFI
+-- Copyright   :  (c) Tamar Christina 2019
+-- License     :  BSD-style (see the file libraries/base/LICENSE)
+--
+-- Maintainer  :  libraries@haskell.org
+-- Stability   :  experimental
+-- Portability :  non-portable
+--
+-- WinIO Windows API Foreign Function imports
+--
+-------------------------------------------------------------------------------
+
 module GHC.Event.Windows.FFI (
     -- * IOCP
     IOCP(..),

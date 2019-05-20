@@ -76,6 +76,7 @@ module GHC.Event.Windows (
 
 import GHC.Event.Windows.Clock   (Clock, Seconds, getClock, getTime)
 import GHC.Event.Windows.FFI     (LPOVERLAPPED, OVERLAPPED_ENTRY(..))
+import GHC.Event.Windows.ManagedThreadPool
 import GHC.Event.Internal.Types
 import qualified GHC.Event.Windows.FFI    as FFI
 import qualified GHC.Event.PSQ            as Q
@@ -344,7 +345,7 @@ data Manager = Manager
                          !(MVar (IT.IntTable EventData))
     , mgrOverlappedEntries
                       :: {-#UNPACK #-} !(A.Array OVERLAPPED_ENTRY)
-    , mgrNumWorkers   :: Int
+    , mgrThreadPool   :: Maybe ThreadPool
     }
 
 -- | Create a new I/O manager. In the Threaded I/O manager this call doesn't
@@ -362,12 +363,12 @@ newManager = do
     when (not threaded) $
       registerNewIOCPHandle mgrIOCP
     debugIO $ "iocp: " ++ show mgrIOCP
-    mgrClock        <- getClock
-    mgrUniqueSource <- newSource
-    mgrTimeouts     <- newIORef Q.empty
+    mgrClock             <- getClock
+    mgrUniqueSource      <- newSource
+    mgrTimeouts          <- newIORef Q.empty
     mgrOverlappedEntries <- A.new 64
-    mgrEvntHandlers <- newMVar =<< IT.new callbackArraySize
-    mgrNumWorkers   <- (fromIntegral . numIoWorkerThreads) `fmap` getMiscFlags
+    mgrEvntHandlers      <- newMVar =<< IT.new callbackArraySize
+    let mgrThreadPool    = Nothing
 
     let !mgr = Manager{..}
     return mgr
@@ -417,7 +418,7 @@ data WinIOStatus
   = WinIORunning  -- ^ I/O manager is running and doing something.
   | WinIOScanning -- ^ The I/O manager has been interrupted without servicing
                   -- a request. Likely due to a timer elapsing.
-  | WinIOWaiting  -- ^ I/O manager is blocked on an alertable wait for I/O
+  | WinIOWaiting  -- ^ I/O manager is blocked on an alert-able wait for I/O
                   -- completions.
   | WinIOBlocked  -- ^ I/O manager is not servicing any I/O requests but the
                   -- thread is still alive.  This is usually the result of
@@ -847,9 +848,9 @@ step :: Bool -> Manager -> IO (Bool, Maybe Seconds)
 step maxDelay mgr@Manager{..} = do
     -- Determine how long to wait the next time we block in an alertable state.
     delay <- runExpiredTimeouts mgr
-    let timer = if maxDelay && delay == Nothing
-                   then #{const INFINITE}
-                   else fromTimeout delay
+    let !timer = if maxDelay && delay == Nothing
+                    then #{const INFINITE}
+                    else fromTimeout delay
     debugIO $ "next timeout: " ++ show delay
     debugIO $ "next timer: " ++ show timer -- todo: print as hex
     -- The getQueuedCompletionStatusEx call will remove entries queued by the OS
@@ -862,6 +863,10 @@ step maxDelay mgr@Manager{..} = do
                              debugIO "I/O manager pausing."
       (True , Nothing) -> do setStatus WinIOBlocked
                              debugIO "I/O manager deep sleep."
+    -- If threaded this call informs the threadpool that a thread is now
+    -- entering a kernel mode wait and this is free to be used.  If non-threaded
+    -- then this is a no-op.
+    notifyWaiting mgrThreadPool
     n <- if threaded
     -- To quote Matt Godbolts:
     -- There are some unusual edge cases you need to deal with. The
@@ -906,6 +911,11 @@ step maxDelay mgr@Manager{..} = do
                     registerAlertableWait mgrIOCP timer num_req
                     return 0
     setStatus WinIORunning
+    -- If threaded this call informs the threadpool manager that a thread is
+    -- busy.  If all threads are busy and we have not reached the maximum amount
+    -- of allowed threads then the threadpool manager will spawn a new thread to
+    -- allow us to scale under load.
+    notifyRunning mgrThreadPool
     processCompletion mgr n delay
 
 -- | Process the results at the end of an evaluation loop.  This function will
