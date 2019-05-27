@@ -212,6 +212,20 @@ void registerNewIOCPHandle (HANDLE port)
   ReleaseSRWLockExclusive (&lock);
 }
 
+/* Callback hook so the Haskell part of the I/O manager can notify this manager
+   that a request someone is waiting on was completed synchronously.  This means
+   we need to wake up the scheduler as there is work to be done.   */
+
+void completeSynchronousRequest (void)
+{
+  AcquireSRWLockExclusive (&lock);
+
+  WakeConditionVariable (&threadIOWait);
+
+  ReleaseSRWLockExclusive (&lock);
+}
+
+
 /* Register a new I/O request that the I/O manager should handle. PORT is the
    completion port handle that the request is associated with, MSSEC is the
    maximum amount of time in milliseconds that an alertable wait should be done
@@ -270,14 +284,12 @@ static void notifyRtsOfFinishedCall (uint32_t num)
                                        processRemoteCompletion_closure);
   AcquireSRWLockExclusive (&lock);
   if (num > 0)
-    {
-      outstanding_service_requests = true;
-      WakeConditionVariable (&threadIOWait);
-    }
-  ReleaseSRWLockExclusive (&lock);
+    outstanding_service_requests = true;
 
-  fprintf (stderr, "I/O done %d.\n", num);
   scheduleThread (cap, tso);
+
+  WakeConditionVariable (&threadIOWait);
+  ReleaseSRWLockExclusive (&lock);
 #endif
 }
 

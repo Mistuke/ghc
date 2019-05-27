@@ -106,6 +106,7 @@ import GHC.IOPort
 import GHC.Num
 import GHC.Real
 import GHC.Windows
+import GHC.List (null)
 import GHC.Ptr
 import System.IO.Unsafe     (unsafePerformIO)
 import Text.Show
@@ -271,6 +272,9 @@ foreign import ccall safe "getOverlappedEntries"
 
 foreign import ccall safe "servicedIOEntries"
   servicedIOEntries :: Word64 -> IO ()
+
+foreign import ccall safe "completeSynchronousRequest"
+  completeSynchronousRequest :: IO ()
 
 ------------------------------------------------------------------------
 -- Manager structures
@@ -708,7 +712,8 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
               case res of
                 -- Uses an inline definition of threadDelay to prevent an import
                 -- cycle.
-                Nothing | status == #{const STATUS_END_OF_FILE} ->
+                Nothing | status == #{const STATUS_END_OF_FILE} -> do
+                  when (not threaded) completeSynchronousRequest
                   return $ CbDone res
                         | otherwise ->
                   do m <- newEmptyIOPort
@@ -717,7 +722,9 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                               writeIOPort m () >> return ()
                      readIOPort m `onException` unregisterTimeout mgr reg
                      spinWaitComplete fhndl lpol
-                _       -> return $ CbDone res
+                _       -> do
+                   when (not threaded) completeSynchronousRequest
+                   return $ CbDone res
 
 -- Safe version of function
 withOverlapped :: String
@@ -806,6 +813,8 @@ runExpiredTimeouts Manager{..} = do
     (expired, delay) <- atomicModifyIORef' mgrTimeouts (mkTimeout now)
     -- Execute timeout callbacks.
     mapM_ Q.value expired
+    when (not threaded && not (null expired))
+      completeSynchronousRequest
     debugIO $ "expired calls: " ++ show (length expired)
     return delay
       where
@@ -853,9 +862,6 @@ step maxDelay mgr@Manager{..} = do
                     else fromTimeout delay
     debugIO $ "next timeout: " ++ show delay
     debugIO $ "next timer: " ++ show timer -- todo: print as hex
-    -- The getQueuedCompletionStatusEx call will remove entries queued by the OS
-    -- and returns the finished ones in mgrOverlappedEntries and the number of
-    -- entries removed.
     case (maxDelay, delay) of
       (_    , Just{} ) -> do setStatus WinIOWaiting
                              debugIO "I/O manager waiting."
@@ -906,6 +912,10 @@ step maxDelay mgr@Manager{..} = do
     --    port, it's up to the user to remember if it was a read or a write
     --    (usually by stashing extra data in the OVERLAPPED structure). The
     --    thread must deallocate the structure as necessary.
+    --
+    -- The getQueuedCompletionStatusEx call will remove entries queued by the OS
+    -- and returns the finished ones in mgrOverlappedEntries and the number of
+    -- entries removed.
             then FFI.getQueuedCompletionStatusEx mgrIOCP mgrOverlappedEntries timer
             else do num_req <- outstandingRequests
                     registerAlertableWait mgrIOCP timer num_req
@@ -1006,6 +1016,18 @@ processRemoteCompletion = do
     -- longer safe to use `entries` nor `completed`.
     servicedIOEntries num_left
     setStatus WinIOBlocked
+    -- We may have been woken up due to a timer timeout.  So check for any
+    -- expired timeouts. If we have processed any completions only check
+    -- timeouts, if we have been woken up only to process timeouts then check if
+    -- we have to change the wait interval.
+    --
+    -- When not the threaded runtime we would not have reset the timer events
+    -- below.  Because of this when the request is done we have an additional
+    -- step here to reset the wait timers so the I/O manager doesn't keep
+    -- polling at the temporary high frequency we entered.
+    if (n == 0)
+       then step True mngr >> return ()
+       else runExpiredTimeouts mngr >> return ()
     debugIO "processRemoteCompletion :: done ()"
     return ()
 

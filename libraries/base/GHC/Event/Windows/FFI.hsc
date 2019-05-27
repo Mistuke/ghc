@@ -268,6 +268,10 @@ instance Storable OVERLAPPED_ENTRY where
 --
 -- We extend the overlapped structure with some extra book keeping information
 -- such that we don't have to do a lookup on the Haskell side.
+--
+-- Future: We can gain some performance here by using a pool instead of calling
+--         malloc for each request. A simple block allocator would be very
+--         useful here, especially when we implement sockets support.
 allocOverlapped :: Word64 -- ^ Offset/OffsetHigh
                 -> IO (ForeignPtr HASKELL_OVERLAPPED)
 allocOverlapped offset = do

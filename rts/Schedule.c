@@ -287,8 +287,13 @@ schedule (Capability *initialCapability, Task *task)
     // Additionally, it is not fatal for the
     // threaded RTS to reach here with no threads to run.
     //
+    // Since IOPorts have no deadlock avoidance guarantees you may also reach
+    // this point when blocked on an IO Port.  If this is the case the only
+    // thing that could unblock it is an I/O event.
+    //
     // win32: might be here due to awaitEvent() being abandoned
-    // as a result of a console event having been delivered.
+    // as a result of a console event having been delivered or as a result of
+    // waiting on an async I/O to complete with WinIO.
 
 #if defined(THREADED_RTS)
     scheduleYield(&cap,task);
@@ -298,15 +303,16 @@ schedule (Capability *initialCapability, Task *task)
 
 #if !defined(THREADED_RTS)
     if ( emptyRunQueue(cap) ) {
-  /* On the non-threaded RTS if the queue is empty and the last action was
-     blocked on an I/O completion port, then just wait till we're woken up by
-     the RTS with more work.  */
-  //if (t && t->why_blocked == BlockedOnIOCompletion)
-    {
-      awaitEvent (emptyRunQueue(cap));
-      fprintf (stderr, "running.\n");
-      continue;
-    }
+        /* On the non-threaded RTS if the queue is empty and the last action was
+            blocked on an I/O completion port, then just wait till we're woken
+            up by the RTS with more work.  */
+        if (t && t->why_blocked == BlockedOnIOCompletion)
+            {
+                awaitEvent (emptyRunQueue(cap));
+                fprintf (stderr, "running: %d.\n", t->why_blocked);
+                continue;
+            }
+
 #if !defined(mingw32_HOST_OS)
         ASSERT(sched_state >= SCHED_INTERRUPTING);
 #endif
