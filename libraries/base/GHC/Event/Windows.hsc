@@ -112,7 +112,8 @@ import System.IO.Unsafe     (unsafePerformIO)
 import Text.Show
 import GHC.RTS.Flags
 
-#if defined(DEBUG)
+-- if defined(DEBUG)
+#if 1
 import Foreign.C
 import System.Posix.Internals (c_write)
 import GHC.Conc.Sync (myThreadId)
@@ -561,8 +562,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                                   case result of
                                     IOSuccess val -> signalReturn val
                                     IOFailed  err -> signalThrow err
-        fptr <- FFI.allocOverlapped offset
-        let hs_lpol = unsafeForeignPtrToPtr fptr
+        hs_lpol <- FFI.allocOverlapped offset
         -- Create the completion record and store it.
         -- We only need the record when we enqueue a request, however if we
         -- delay creating it then we will run into a race condition where the
@@ -570,9 +570,11 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
         -- and so the request won't have the book keeping information to know
         -- what to do.  So because of that we always create the payload,  If we
         -- need it ok, if we don't that's no problem.  This approach prevents
-        -- expensive lookups in hashtables.
-        cdDataPtr <- newForeignPtr finalizerFree =<< new (CompletionData h completionCB')
-        let cdData = unsafeForeignPtrToPtr cdDataPtr
+        -- expensive lookups in hash-tables.
+        --
+        -- Todo: Use a memory pool for this so we don't have to hit malloc every
+        --       time.  This would allow us to scale better.
+        cdData <- new (CompletionData h completionCB')
         let ptr_lpol = hs_lpol `plusPtr` cdOffset
         poke ptr_lpol cdData
         let lpol = castPtr hs_lpol
@@ -624,15 +626,18 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
               status <- FFI.overlappedIOStatus lpol
               debugIO $ "== >< " ++ show (status)
               lasterr <- fmap fromIntegral getLastError :: IO Int
-              -- TODO: In cases where we do finish early, the value of
-              -- getOverlappedResult may not be correct.  Verify this.
-              let done_early =  status == #{const STATUS_SUCCESS}
-                             || status == #{const STATUS_END_OF_FILE}
-                             || lasterr == #{const ERROR_HANDLE_EOF}
-                             || lasterr == #{const ERROR_SUCCESS}
+              -- This status indicated that we have finished early and so we
+              -- won't have a request enqueued.  Handle it inline.
+              let done_early = status == #{const STATUS_SUCCESS}
+                               || status == #{const STATUS_END_OF_FILE}
+                               || lasterr == #{const ERROR_HANDLE_EOF}
+                               || lasterr == #{const ERROR_SUCCESS}
+              -- This status indicates that the request hasn't finished early,
+              -- but it will finish shortly.  The I/O manager will not be
+              -- enqueuing this either.  Also needs to be handled inline.
               let will_finish_sync = lasterr == #{const ERROR_IO_INCOMPLETE}
 
-              debugIO $ "== >*< " ++ show (finished, done_early, h, lpol, lasterr)
+              debugIO $ "== >*< " ++ show (finished, done_early, will_finish_sync, h, lpol, lasterr)
               case (finished, done_early, will_finish_sync) of
                 (Nothing, False, False) -> do
                     reqs <- addRequest
@@ -648,7 +653,8 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                   debugIO "request handled immediately (o/b), not queued."
                   return $ CbDone finished
             CbError err' -> signalThrow (Just err') >> return result'
-            CbDone  _   -> debugIO "request handled immediately (o), not queued." >> return result'
+            CbDone  _   -> do
+              debugIO "request handled immediately (o), not queued." >> return result'
 
         let cancel e = do
                         debugIO $ "## Exception occurred. Cancelling request... "
@@ -662,6 +668,7 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
                         -- Check if we have to free and cleanup pointer
                         when (oldDataPtr == cdData) $
                           do free oldDataPtr
+                             free hs_lpol
                              reqs <- removeRequest
                              debugIO $ "-1.. " ++ show reqs ++ " requests queued after error."
                              status <- fmap fromIntegral getLastError
@@ -682,26 +689,29 @@ withOverlappedEx mgr fname h offset startCB completionCB = do
         case execute of
           CbPending    -> runner
           CbDone rdata -> do
-            free cdData
+            -- free cdData
             debugIO $ dbg $ ":: done " ++ show lpol ++ " - " ++ show rdata
             bytes <- if isJust rdata
                         then return rdata
                         -- Make sure it's safe to free the OVERLAPPED buffer
                         else FFI.getOverlappedResult h lpol False
             case bytes of
-              Just res -> completionCB 0 res
+              Just res ->  completionCB 0 res -- free hs_lpol >> completionCB 0 res
               Nothing  -> do err <- FFI.overlappedIOStatus lpol
                              numBytes <- FFI.overlappedIONumBytes lpol
                              -- TODO: Remap between STATUS_ and ERROR_ instead
                              -- of re-interpret here. But for now, don't care.
                              let err' = fromIntegral err
+                             -- free hs_lpol
                              completionCB err' (fromIntegral numBytes)
           CbError err  -> do
             free cdData
+            free hs_lpol
             let err' = fromIntegral err
             completionCB err' 0
           _            -> do
             free cdData
+            free hs_lpol
             error "unexpected case in `execute'"
       where spinWaitComplete fhndl lpol = do
               -- Wait for the request to finish as it was running before and
@@ -965,8 +975,9 @@ processCompletion Manager{..} n delay = do
           let oldDataPtr = exchangePtr ptr_lpol nullReq
           when (oldDataPtr /= nullReq) $
             do payload <- peek oldDataPtr
-               let (CompletionData _hwnd cb) = payload
-               free oldDataPtr
+               debugIO $ "exchanged: " ++ show oldDataPtr
+               let !(CompletionData _hwnd cb) = payload
+               -- free oldDataPtr
                reqs <- removeRequest
                debugIO $ "-1.. " ++ show reqs ++ " requests queued."
                status <- FFI.overlappedIOStatus (lpOverlapped oe)
@@ -974,6 +985,7 @@ processCompletion Manager{..} n delay = do
                -- of re-interpret here. But for now, don't care.
                let status' = fromIntegral status
                cb status' (dwNumberOfBytesTransferred oe)
+               -- free hs_lpol
 
       -- clear the array so we don't erroneously interpret the output, in
       -- certain circumstances like lockFileEx the code could return 1 entry
@@ -1166,3 +1178,11 @@ debugIO s
 #else
 debugIO _ = return ()
 #endif
+
+dbxIO :: String -> IO ()
+dbxIO s = do tid <- myThreadId
+             let pref = if threaded then "\t" else ""
+             _   <- withCStringLen (pref ++ "winio: " ++ s ++ " (" ++
+                                   showThreadId tid ++ ")\n") $
+                   \(p, len) -> c_write 2 (castPtr p) (fromIntegral len)
+             return ()

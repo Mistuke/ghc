@@ -308,10 +308,12 @@ schedule (Capability *initialCapability, Task *task)
             up by the RTS with more work.  */
         if (t && t->why_blocked == BlockedOnIOCompletion)
             {
+                fprintf (stderr, "waiting: %d.\n", t->why_blocked);
                 awaitEvent (emptyRunQueue(cap));
                 fprintf (stderr, "running: %d.\n", t->why_blocked);
                 continue;
             }
+        continue;
 
 #if !defined(mingw32_HOST_OS)
         ASSERT(sched_state >= SCHED_INTERRUPTING);

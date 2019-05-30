@@ -273,13 +273,12 @@ instance Storable OVERLAPPED_ENTRY where
 --         malloc for each request. A simple block allocator would be very
 --         useful here, especially when we implement sockets support.
 allocOverlapped :: Word64 -- ^ Offset/OffsetHigh
-                -> IO (ForeignPtr HASKELL_OVERLAPPED)
+                -> IO (Ptr HASKELL_OVERLAPPED)
 allocOverlapped offset = do
-  fptr <- mallocForeignPtrBytes #{size HASKELL_OVERLAPPED}
-  withForeignPtr fptr $ \lpol ->
-      do zeroOverlapped lpol
-         pokeOffsetOverlapped (castPtr lpol) offset
-  return fptr
+  lpol <- mallocBytes #{size HASKELL_OVERLAPPED}
+  zeroOverlapped lpol
+  pokeOffsetOverlapped (castPtr lpol) offset
+  return lpol
 
 -- | Zero-fill an HASKELL_OVERLAPPED structure.
 zeroOverlapped :: LPHASKELL_OVERLAPPED -> IO ()
