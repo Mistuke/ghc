@@ -101,26 +101,22 @@ download_tarballs() {
     local package_prefix="mingw-w64"
     local format_url="/${mingw_arch}/${package_prefix}-${mingw_arch}"
 
-    download_mingw "${format_url}-crt-git-5.0.0.4795.e3d96cb1-1-any.pkg.tar.xz"
-    download_mingw "${format_url}-winpthreads-git-5.0.0.4850.d1662dc7-1-any.pkg.tar.xz"
-    download_mingw "${format_url}-headers-git-5.0.0.4966.1eee2140-1-any.pkg.tar.xz"
-    download_mingw "${format_url}-libwinpthread-git-5.0.0.4850.d1662dc7-1-any.pkg.tar.xz"
+    download_mingw "${format_url}-crt-git-7.0.0.5449.a0647123-1-any.pkg.tar.xz"
+    download_mingw "${format_url}-winpthreads-git-7.0.0.5447.a2d94c81-1-any.pkg.tar.xz"
+    download_mingw "${format_url}-headers-git-7.0.0.5449.a0647123-1-any.pkg.tar.xz"
+    download_mingw "${format_url}-libwinpthread-git-7.0.0.5447.a2d94c81-1-any.pkg.tar.xz"
     download_mingw "${format_url}-zlib-1.2.8-9-any.pkg.tar.xz"
-    download_mingw "${format_url}-isl-0.18-1-any.pkg.tar.xz"
-    download_mingw "${format_url}-mpfr-3.1.6-1-any.pkg.tar.xz"
+    download_mingw "${format_url}-isl-0.21-1-any.pkg.tar.xz"
+    download_mingw "${format_url}-mpfr-4.0.2-2-any.pkg.tar.xz"
     download_mingw "${format_url}-gmp-6.1.2-1-any.pkg.tar.xz"
-    download_mingw "${format_url}-binutils-2.29.1-1-any.pkg.tar.xz"
-    download_mingw "${format_url}-libidn2-2.0.4-1-any.pkg.tar.xz"
+    download_mingw "${format_url}-binutils-2.31.1-2-any.pkg.tar.xz"
+    download_mingw "${format_url}-libidn2-2.1.1a-1-any.pkg.tar.xz"
     download_mingw "${format_url}-gcc-7.2.0-1-any.pkg.tar.xz"
+    download_mingw "${format_url}-mpc-1.1.0-1-any.pkg.tar.xz"
 
     # Upstream is unfortunately quite inconsistent in naming
     if test "$mingw_arch" != "sources"; then
-        download_mingw "${format_url}-mpc-1.0.3-2-any.pkg.tar.xz"
         download_mingw "${format_url}-gcc-libs-7.2.0-1-any.pkg.tar.xz"
-    else
-        local format_url="${mingw_base_url}/${mingw_arch}/${package_prefix}"
-        download_mingw "${format_url}-i686-mpc-1.0.3-2.src.tar.gz"
-        download_mingw "${format_url}-x86_64-mpc-1.0.3-2.src.tar.gz"
     fi
 
     if ! test "$missing_files" = "0"
